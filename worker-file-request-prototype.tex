@@ -1,0 +1,23 @@
+\input{test/preamble.tex}
+\newcount\snippetcount
+\newcount\maxsnippets
+\maxsnippets=5
+\pagestyle{empty}
+\begin{document}
+\typeout{WORKER_READY}
+\loop
+  \ifnum\snippetcount<\maxsnippets
+    \advance\snippetcount by 1
+    \typeout{WORKER_WAIT:\the\snippetcount}
+    \read16 to\requestfile
+    \shipout\vbox{%
+      \hsize=360pt
+      \parindent=0pt
+      \begingroup
+        \input\requestfile
+        \par
+      \endgroup
+    }%
+    \typeout{WORKER_DONE:\the\snippetcount}
+\repeat
+\end{document}

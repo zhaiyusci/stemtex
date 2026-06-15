@@ -1,0 +1,15 @@
+runtime/
+out/
+.build-tools/
+ptx/
+ktx/
+qtx/
+texlive-source/
+*.aux
+*.fls
+*.fmt
+*.log
+*.pdf
+*.xdv
+*.synctex.gz
+node_modules/
