@@ -12,6 +12,10 @@ explicit XeTeX command-line option:
 With `-no-pdf`, XeTeX flushes the XDV file after each `\shipout`, while keeping
 the process alive.
 
+This is not the same as enabling legacy Web2C IPC. The patch uses `ipcon == 3`
+as a new file-flush mode: it writes and flushes the DVI/XDV buffer, then skips
+the old `ipcpage()` socket notification.
+
 `w32tex-2025-runtime-switches.md`
 
 Records the changes used in the W32TeX-style Windows source tree used by the
@@ -31,3 +35,14 @@ FONTCONFIG_NO_CACHE_REFRESH=1
 
 and makes fontconfig use existing cache files without writing or rescanning
 cache data during normal snippet rendering.
+
+## Relation To Legacy IPC
+
+The old Web2C IPC feature was for incremental DVI previewing with TeXView. It
+can launch/connect to a previewer and notify it as the DVI file grows. The live
+worker here needs a narrower primitive: make partial XDV bytes visible on disk
+after each page, so an external controller can add a temporary postamble and run
+`xdvipdfmx`.
+
+Therefore the project adds a new explicit switch instead of relying on `-ipc` or
+`-ipc-start`.
