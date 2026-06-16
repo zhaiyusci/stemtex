@@ -1,23 +1,34 @@
 \input{test/preamble.tex}
 \newcount\snippetcount
-\newcount\maxsnippets
-\maxsnippets=5
+\def\workerstopline{\workerstop}
+\ifx\snippetHsize\undefined
+  \def\snippetHsize{360pt}
+\fi
 \pagestyle{empty}
 \begin{document}
 \typeout{WORKER_READY}
-\loop
-  \ifnum\snippetcount<\maxsnippets
-    \advance\snippetcount by 1
-    \typeout{WORKER_WAIT:\the\snippetcount}
-    \read16 to\requestfile
+\def\workerloop{%
+  \advance\snippetcount by 1
+  \typeout{WORKER_WAIT:\the\snippetcount}%
+  \read16 to\requestfile
+  \ifx\requestfile\workerstopline
+    \typeout{WORKER_STOPPED}%
+  \else
     \shipout\vbox{%
-      \hsize=360pt
+      \hsize=\snippetHsize
       \parindent=0pt
       \begingroup
+        \setcounter{page}{1}%
+        \setcounter{equation}{0}%
+        \setcounter{footnote}{0}%
+        \normalfont\normalsize\normalcolor
         \input\requestfile
         \par
       \endgroup
     }%
-    \typeout{WORKER_DONE:\the\snippetcount}
-\repeat
+    \typeout{WORKER_DONE:\the\snippetcount}%
+    \workerloop
+  \fi
+}
+\workerloop
 \end{document}

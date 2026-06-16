@@ -16,9 +16,15 @@ The live PDF path requires a patched XeTeX with:
 --flush-output-on-shipout
 ```
 
-The controller starts XeTeX with `-no-pdf`, copies the live partial XDV after
-each `\shipout`, appends a temporary postamble with warmup font definitions,
-and calls `xdvipdfmx -s N-N` so each emitted PDF contains only the newest page.
+The controller starts XeTeX with `-no-pdf`, copies the currently flushed
+cumulative live XDV after each `\shipout`, appends a temporary postamble with
+warmup font definitions, and calls `xdvipdfmx -s N-N` to return only the newest
+page.
+
+The worker no longer has a hard-coded request count. Warmup sends `\workerstop`
+after the selected request files so XeTeX can write a complete XDV postamble for
+fontdef extraction. The live worker is terminated by the controller after all
+requested PDFs are produced.
 
 Default output:
 
@@ -32,6 +38,9 @@ Useful options:
 node .\worker-prototype\run-single-worker-live-pdf.js --runtime .\runtime --out .\out\live
 node .\worker-prototype\run-single-worker-live-pdf.js --cumulative
 ```
+
+`--cumulative` is a debug mode that emits pages `1..N`. The default mode is
+`latest-page`.
 
 ## Older Experiments
 

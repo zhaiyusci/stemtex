@@ -4,6 +4,7 @@ const cp = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
 const args = process.argv.slice(2);
+const WORKER_STOP = '\\workerstop';
 
 function readOption(name, fallback) {
   const index = args.indexOf(name);
@@ -25,8 +26,12 @@ function be16(value) {
   return b;
 }
 
-function extractFontdefs(xdvPath) {
+function readXdvParts(xdvPath) {
   const xdv = fs.readFileSync(xdvPath);
+  const firstBop = xdv.indexOf(Buffer.from([139]));
+  if (firstBop < 0) {
+    throw new Error(`No BOP found in ${xdvPath}`);
+  }
   const postOffset = xdv.lastIndexOf(Buffer.from([248]));
   if (postOffset < 0) {
     throw new Error(`No postamble found in ${xdvPath}`);
@@ -35,26 +40,37 @@ function extractFontdefs(xdvPath) {
   if (postPostOffset < 0) {
     throw new Error(`No post_post found in ${xdvPath}`);
   }
-  return xdv.subarray(postOffset + 29, postPostOffset);
+  return {
+    preamble: xdv.subarray(0, firstBop),
+    fontdefs: xdv.subarray(postOffset + 29, postPostOffset),
+  };
 }
 
-function finalizePartialXdv(partialPath, finalizedPath, fontdefs, pageCount) {
-  const body = fs.readFileSync(partialPath);
-  let lastBop = -1;
-  for (let i = 0; i < body.length; i += 1) {
-    if (body[i] === 139) {
-      lastBop = i;
-    }
+function findFirstBop(buffer, label) {
+  const offset = buffer.indexOf(Buffer.from([139]));
+  if (offset < 0) {
+    throw new Error(`No BOP found in ${label}`);
   }
-  if (lastBop < 0) {
-    throw new Error(`No BOP found in ${partialPath}`);
+  return offset;
+}
+
+function finalizeXdvBody(xdvBody, finalizedPath, { fontdefs, pageCount, lastBop }) {
+  if (xdvBody[0] !== 247) {
+    throw new Error(`Expected complete XDV body for ${finalizedPath}`);
+  }
+  let finalLastBop = lastBop;
+  if (finalLastBop === undefined) {
+    finalLastBop = findFirstBop(xdvBody, finalizedPath);
+  }
+  if (finalLastBop < 0 || finalLastBop >= xdvBody.length || xdvBody[finalLastBop] !== 139) {
+    throw new Error(`No BOP found in XDV body for ${finalizedPath}`);
   }
 
-  const postOffset = body.length;
+  const postOffset = xdvBody.length;
   const chunks = [
-    body,
+    xdvBody,
     Buffer.from([248]),
-    be32(lastBop),
+    be32(finalLastBop),
     be32(25400000),
     be32(473628672),
     be32(1000),
@@ -72,6 +88,31 @@ function finalizePartialXdv(partialPath, finalizedPath, fontdefs, pageCount) {
     out = Buffer.concat([out, Buffer.from([223])]);
   }
   fs.writeFileSync(finalizedPath, out);
+  return out.length;
+}
+
+function finalizePartialXdv(partialPath, finalizedPath, parts, pageCount, lastBop) {
+  const body = fs.readFileSync(partialPath);
+  return finalizeXdvBody(body, finalizedPath, { fontdefs: parts.fontdefs, pageCount, lastBop });
+}
+
+function readFileRange(filePath, start, end) {
+  const length = end - start;
+  if (length <= 0) {
+    throw new Error(`No new XDV bytes available in ${filePath}`);
+  }
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(length);
+    fs.readSync(fd, buffer, 0, length, start);
+    return buffer;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function xdvJobBaseName(workerTex) {
+  return path.basename(workerTex).replace(/\.tex$/i, '');
 }
 
 function runWarmup({ launcher, outDir, workerTex, requests }) {
@@ -96,6 +137,8 @@ function runWarmup({ launcher, outDir, workerTex, requests }) {
     function sendNext() {
       if (sent < requests.length) {
         child.stdin.write(`${requests[sent++]}\n`);
+      } else {
+        child.stdin.write(`${WORKER_STOP}\n`);
       }
     }
 
@@ -132,8 +175,10 @@ async function main() {
   const requestsDir = path.resolve(repoRoot, readOption('--requests', 'worker-prototype/requests'));
   const workerTex = readOption('--worker', 'worker-file-request-prototype.tex');
   const cumulativePdf = args.includes('--cumulative');
+  const pdfMode = cumulativePdf ? 'cumulative' : 'latest-page';
   const launcher = path.join(runtimeRoot, 'run-xelatex.bat');
   const xdvipdfmx = path.join(runtimeRoot, 'bin', 'windows', 'xdvipdfmx.exe');
+  const jobBaseName = xdvJobBaseName(workerTex);
   const requestFiles = fs.readdirSync(requestsDir)
     .filter((name) => /^req\d+\.tex$/.test(name))
     .sort((a, b) => Number(a.match(/\d+/)[0]) - Number(b.match(/\d+/)[0]))
@@ -146,8 +191,9 @@ async function main() {
   const warmupStart = performance.now();
   await runWarmup({ launcher, outDir: warmupDir, workerTex, requests: requestFiles });
   const warmupMs = +(performance.now() - warmupStart).toFixed(1);
-  const fontdefs = extractFontdefs(path.join(warmupDir, 'worker-file-request-prototype.xdv'));
-  fs.writeFileSync(path.join(outRoot, 'fontdefs.bin'), fontdefs);
+  const xdvParts = readXdvParts(path.join(warmupDir, `${jobBaseName}.xdv`));
+  fs.writeFileSync(path.join(outRoot, 'preamble.bin'), xdvParts.preamble);
+  fs.writeFileSync(path.join(outRoot, 'fontdefs.bin'), xdvParts.fontdefs);
 
   const liveDir = path.join(outRoot, 'live');
   fs.mkdirSync(liveDir, { recursive: true });
@@ -168,6 +214,7 @@ async function main() {
   let done = 0;
   let readyTime = null;
   let pending = null;
+  let lastXdvOffset = 0;
   const liveStart = performance.now();
   const results = [];
 
@@ -196,13 +243,22 @@ async function main() {
 
       if (line.match(/WORKER_DONE:(\d+)/) && pending) {
         done += 1;
-        const xdvPath = path.join(liveDir, 'worker-file-request-prototype.xdv');
+        const doneTime = performance.now();
+        const xdvPath = path.join(liveDir, `${jobBaseName}.xdv`);
         const snapshotPath = path.join(liveDir, `snippet-${done}.xdv`);
         const finalizedPath = path.join(liveDir, `snippet-${done}-final.xdv`);
         const pdfPath = path.join(liveDir, `snippet-${done}.pdf`);
-        const copyStart = performance.now();
+        const readStart = performance.now();
+        const currentXdvSize = fs.statSync(xdvPath).size;
+        const delta = readFileRange(xdvPath, lastXdvOffset, currentXdvSize);
+        const deltaBop = findFirstBop(delta, `${xdvPath} new bytes`);
         fs.copyFileSync(xdvPath, snapshotPath);
-        finalizePartialXdv(snapshotPath, finalizedPath, fontdefs, done);
+        const readEnd = performance.now();
+        const newXdvBytes = currentXdvSize - lastXdvOffset;
+        const finalizeStart = performance.now();
+        const finalXdvBytes = finalizePartialXdv(snapshotPath, finalizedPath, xdvParts, done, lastXdvOffset + deltaBop);
+        const finalizeEnd = performance.now();
+        lastXdvOffset = currentXdvSize;
         const convertStart = performance.now();
         const convertArgs = ['-q'];
         if (!cumulativePdf) {
@@ -218,12 +274,16 @@ async function main() {
         results.push({
           index: pending.index,
           file: pending.file,
+          typesetToDoneMs: +(doneTime - pending.start).toFixed(1),
+          readDeltaMs: +(readEnd - readStart).toFixed(1),
+          finalizeXdvMs: +(finalizeEnd - finalizeStart).toFixed(1),
           requestToPdfMs: +(end - pending.start).toFixed(1),
-          copyAndFinalizeMs: +(convertStart - copyStart).toFixed(1),
           xdvipdfmxMs: +(end - convertStart).toFixed(1),
+          newXdvBytes,
+          finalXdvBytes,
           convertCode: convert.status,
           pdfBytes: fs.existsSync(pdfPath) ? fs.statSync(pdfPath).size : 0,
-          stderr: (convert.stderr || '').trim().slice(-500),
+          stderrTail: (convert.stderr || '').trim().slice(-500),
         });
         pending = null;
         sendNext();
@@ -234,20 +294,23 @@ async function main() {
   child.stdout.on('data', (chunk) => handleText(chunk.toString('utf8')));
   child.stderr.on('data', (chunk) => handleText(chunk.toString('utf8')));
 
-  const exitPromise = new Promise((resolve) => child.on('exit', resolve));
   while (results.length < requestFiles.length) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   const liveDoneMs = +(performance.now() - liveStart).toFixed(1);
-  await exitPromise;
+  child.kill();
+  await new Promise((resolve) => child.on('exit', resolve));
 
   const summary = {
     warmupMs,
-    fontdefsBytes: fontdefs.length,
+    preambleBytes: xdvParts.preamble.length,
+    fontdefsBytes: xdvParts.fontdefs.length,
     startupMs: readyTime === null ? null : +(readyTime - liveStart).toFixed(1),
     liveDoneMs,
-    pdfMode: cumulativePdf ? 'cumulative' : 'latest-page',
+    pdfMode,
     avgRequestToPdfMs: +(results.reduce((sum, item) => sum + item.requestToPdfMs, 0) / results.length).toFixed(1),
+    avgXdvipdfmxMs: +(results.reduce((sum, item) => sum + item.xdvipdfmxMs, 0) / results.length).toFixed(1),
+    avgFinalizeXdvMs: +(results.reduce((sum, item) => sum + item.finalizeXdvMs, 0) / results.length).toFixed(1),
     results,
   };
   fs.writeFileSync(path.join(outRoot, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);

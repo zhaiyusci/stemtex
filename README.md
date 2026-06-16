@@ -9,7 +9,8 @@ The core idea is:
 - treat fontconfig cache as runtime data;
 - keep one XeTeX process hot with a fixed preamble;
 - patch XeTeX so `-no-pdf` output is flushed after each `\shipout`;
-- convert only the newest XDV page with `xdvipdfmx -s N-N`.
+- finalize the cumulative live XDV and convert only the newest page with
+  `xdvipdfmx -s N-N`.
 
 This repository intentionally does not vendor a full TeX Live source tree or a
 full runtime tree. The scripts expect either an installed TeX Live or local
@@ -43,14 +44,8 @@ without calling `ipcpage()`.
 
 That matters because stock XeTeX normally leaves a live worker's XDV unusable
 until the job exits and writes the final postamble. With this patch, the worker
-can copy the partial XDV after each request, synthesize a temporary postamble
-with warmup font definitions, and call:
-
-```text
-xdvipdfmx -s N-N
-```
-
-to convert only the newest page.
+can copy the currently flushed live XDV, synthesize the missing postamble with
+warmup font definitions, and ask `xdvipdfmx -s N-N` for only the newest page.
 
 ## IPC Archeology
 
@@ -147,15 +142,53 @@ Output goes to:
 out\single-worker-live-pdf
 ```
 
-Each request emits a latest-page PDF by default. Add `--cumulative` to emit
-pages `1..N`.
+Each request emits a single-page PDF by default. Add `--cumulative` to emit a
+cumulative debug PDF containing pages `1..N`.
+
+The request protocol is intentionally narrow: stdin carries UTF-8-safe request
+file paths, and each request file is treated as a small body snippet under the
+fixed preamble. The worker resets visible counters and visual state for each
+snippet (`page`, `equation`, `footnote`, normal font/size/color), but it is not
+a general LaTeX sandbox. Warmup workers stop by receiving a literal
+`\workerstop` line; live workers are killed by the controller after the requested
+PDFs have been emitted, because the live path does not need a final full XDV
+postamble.
+
+## Run The Web Preview
+
+The web preview wraps the same worker path behind a local HTTP server. It lets
+you edit one snippet, adjust the text block width in points, render, and preview
+the generated PDF on the right. The width control is clamped to `180-430pt` in
+both the browser and the server.
+
+The web preview uses the same latest-page path: it finalizes the cumulative live
+XDV and calls `xdvipdfmx -s N-N` for the newest page.
+
+```powershell
+node .\webapp\server.js
+```
+
+If the runtime is not under `.\runtime`, point the server at it:
+
+```powershell
+$env:XETEX_RUNTIME="..\mini-rebuild-test"
+node .\webapp\server.js
+```
+
+Then open:
+
+```text
+http://localhost:5177
+```
 
 ## Current Status
 
 This is a research prototype. The fastest working path is the patched single
-worker. In local profiling, the request-to-latest-page-PDF path was roughly
+worker. In local profiling, the earlier whole-XDV latest-page path was roughly
 50-170 ms after the worker was warm, depending on snippet content and
-`xdvipdfmx` time.
+`xdvipdfmx` time. The abandoned independent-XDV experiment was removed from the
+runtime path because standalone deltas must reconstruct too much XDV driver
+state to be worth it here.
 
 See:
 

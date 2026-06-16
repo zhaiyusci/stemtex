@@ -720,21 +720,22 @@ profile-single-worker-live-pdf\summary.json
 The generated PDFs were rendered and visually checked.  Chinese text,
 chemistry, color, and unicode math output looked normal.
 
-The controller can ask `xdvipdfmx` to convert only the newest physical page
+At this stage, the controller could ask `xdvipdfmx` to convert only the newest physical page
 using:
 
 ```text
 -s N-N
 ```
 
-This is now the default in:
+That prototype lived in:
 
 ```text
 worker-prototype\run-single-worker-live-pdf.js
 ```
 
-Use `--cumulative` to keep the older behavior where the PDF after request `N`
-contains pages `1..N`.
+This remains the selected prototype path.  A later independent-XDV experiment
+was removed because standalone deltas have to reconstruct too much XDV driver
+state.
 
 Latest-page timing result:
 
@@ -770,7 +771,63 @@ profile-single-worker-live-pdf-cumulative-compare\summary.json
 The latest-page PDFs were checked with `pypdfium2`; each output contains one
 page.  Rendered outputs for chemistry/color and unicode math looked normal.
 
-Takeaway: this is now the best low-latency path.  It keeps only one hot XeLaTeX
-worker in memory, avoids per-request cold start, and can produce single-page
-PDF output around 50-170 ms in the current sample.  The remaining engineering
-work is to make fontdef generation robust for the fixed preamble.
+Takeaway: this is the selected low-latency path.  It keeps one hot XeLaTeX
+worker in memory, avoids per-request cold start, and produces single-page PDF
+output around 50-170 ms in the current sample.
+
+## Latest-Page Controller
+
+The current controller path is:
+
+```text
+WORKER_DONE:N
+copy cumulative live XDV
+append synthesized postamble with warmup font definitions
+write snippet-N-final.xdv
+xdvipdfmx -s N-N -o snippet-N.pdf snippet-N-final.xdv
+```
+
+The cumulative debug mode is available:
+
+```text
+node worker-prototype\run-single-worker-live-pdf.js --cumulative
+```
+
+The summary JSON now records the timing stages needed to see where latency is
+spent:
+
+```text
+typesetToDoneMs
+readDeltaMs
+finalizeXdvMs
+xdvipdfmxMs
+requestToPdfMs
+newXdvBytes
+finalXdvBytes
+pdfBytes
+```
+
+The original prototype used a hard-coded `\maxsnippets=5` loop because the
+profiling request set had five files.  That limit is removed.  Warmup now sends
+`\workerstop` after the selected request list so XeTeX exits normally and writes
+the postamble needed for fontdef extraction.  The live worker is killed after
+all requested PDFs are produced because each requested PDF has already been
+converted.
+
+The worker template also exposes `\snippetHsize`, defaulting to `360pt`, so
+callers can change the text block width without editing the template.  The web
+preview uses that hook for its width control.
+
+An experimental independent-XDV path was tried and then removed.  The prototype
+now keeps only the cumulative latest-page path.
+
+The controller still needs a real page-boundary pointer when synthesizing the
+postamble.  A raw byte scan for the last `139` opcode is not reliable because
+that byte value can also occur inside XDV payload data.  The controller now
+records the byte offset before each request, finds the first BOP in the newly
+flushed delta, and uses that absolute offset as the postamble's last-page
+pointer.  This fixed failures such as:
+
+```text
+DVI: Invalid argument
+```
