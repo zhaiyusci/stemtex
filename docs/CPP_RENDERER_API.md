@@ -23,20 +23,42 @@ cpp-daemon/stemtex_renderer.h
 
 ## Runtime Model
 
-`stemtex-renderer.dll` owns one live XeTeX worker process.
+`stemtex-renderer.dll` owns two live XeTeX worker processes:
+
+- `primary`: handles normal render requests.
+- `spare`: stays hot as an immediate failover target.
 
 On create, it:
 
 1. Reads the configured StemTeX runtime.
-2. Runs a warmup worker using `cache-warmup/warmup.tex`.
-3. Extracts XDV font definitions from the warmup output.
-4. Starts a live `xetexdaemon.exe` worker with the fixed web worker template.
-5. Primes the live worker once so later requests are hot.
+2. Loads XDV font definitions from the installation-time warmup output under
+   `texmf-var/cache-warmup`.
+3. Falls back to running a warmup worker with `cache-warmup/warmup.tex` only if
+   that cached XDV is missing or unreadable.
+4. Starts and primes a primary live worker.
+5. Starts building a spare live worker in the background.
+
+The primary and spare workers are initialized serially for now. `create` returns
+after the primary worker is ready; the spare is then built asynchronously. This
+avoids parallel XeTeX font/loading contention while also avoiding a longer
+foreground create path.
+
+The fixed preamble currently uses native/OpenType fonts through `fontspec`,
+`xeCJK`, and `unicode-math`. XeTeX refuses to dump a format after native fonts or
+font mappings have been selected:
+
+```text
+! Can't \dump a format with native fonts or font-mappings.
+```
+
+So the product path does not try to bake the full preamble into a custom fmt.
+Instead, installation-time warmup owns fontconfig cache generation and XDV
+font-definition extraction.
 
 On render, it:
 
 1. Writes the snippet body to a request file.
-2. Sends width and request path to the live worker.
+2. Sends width and request path to the primary live worker.
 3. Waits for `WORKER_DONE:N`.
 4. Reads the current cumulative live XDV.
 5. Synthesizes a valid final XDV postamble.
@@ -171,7 +193,10 @@ If `width_pt <= 0`, the renderer uses `360pt`.
   "newXdvBytes": 1153,
   "finalXdvBytes": 12352,
   "pdfBytes": 26111,
-  "workerRequest": 2
+  "workerRequest": 2,
+  "workerSlot": "primary",
+  "spareReady": true,
+  "spareRebuilding": false
 }
 ```
 
@@ -193,12 +218,14 @@ If a snippet contains a TeX error, XeTeX exits. The renderer detects that it did
 not receive `WORKER_DONE:N`, returns failure from `stemtex_renderer_render`, and
 includes the recent TeX output tail in `error_utf8`.
 
-After a worker failure or request timeout, the renderer schedules a background
-restart. A request that arrives while restart is in progress may fail with:
+After a primary worker failure or request timeout, the renderer immediately
+promotes the hot spare to primary and schedules a new spare in the background.
+The failing request still fails, but the next request can use the promoted worker
+without paying cold-start cost.
 
-```text
-Renderer is restarting after a previous TeX error
-```
+If both primary and spare are unavailable, the renderer falls back to creating a
+new primary synchronously. That is the degraded path and can pay cold-start
+latency.
 
 If `xdvipdfmx` fails after TeX has already produced XDV, the renderer returns
 failure and includes the converter stdout/stderr tail in `error_utf8`. This path
@@ -238,10 +265,15 @@ stemtex-renderer-smoke.exe <repo-root> <runtime-root> 1 --physics
 stemtex-renderer-smoke.exe <repo-root> <runtime-root> 1 --fonts
 stemtex-renderer-smoke.exe <repo-root> <runtime-root> 1 --chem-text
 stemtex-renderer-smoke.exe <repo-root> <runtime-root> 1 --bad
+stemtex-renderer-smoke.exe <repo-root> <runtime-root> 2 --bad-then-good
 ```
 
 `--bad` is expected to fail quickly. It verifies the TeX-error path instead of
 PDF output.
+
+`--bad-then-good` first sends a bad snippet and then immediately sends a good
+snippet. The second render should succeed through the promoted spare worker
+without cold-start latency.
 
 ## Timing Report
 
@@ -265,4 +297,5 @@ The report covers:
 - cold create/warmup/live-worker startup;
 - five hot default renders;
 - physics, font, and chemistry representative snippets;
-- the expected bad-snippet error path.
+- the expected bad-snippet error path;
+- the hot-spare failover path.

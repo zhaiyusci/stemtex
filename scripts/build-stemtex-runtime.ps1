@@ -323,10 +323,15 @@ try {
   if (-not $cacheFiles) {
     throw "Font cache refresh completed but no cache files were written to $cacheDir."
   }
+  $warmupXdv = Join-Path $OutputDirectory "warmup.xdv"
+  if (-not (Test-Path -LiteralPath $warmupXdv)) {
+    throw "Warmup completed but XDV fontdefs cache was not written: $warmupXdv"
+  }
 
   $totalBytes = ($cacheFiles | Measure-Object -Property Length -Sum).Sum
   Write-Host "Font cache refreshed: $cacheDir"
   Write-Host ("Cache files: {0}, bytes: {1}" -f $cacheFiles.Count, $totalBytes)
+  Write-Host "XDV fontdefs cache: $warmupXdv"
 } finally {
   foreach ($name in $savedEnv.Keys) {
     if ($null -ne $savedEnv[$name]) {

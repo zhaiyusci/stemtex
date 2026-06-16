@@ -69,6 +69,7 @@ run_case physics 1 --physics
 run_case fonts 1 --fonts
 run_case chem_text 1 --chem-text
 run_case bad_error 1 --bad
+run_case bad_then_good 2 --bad-then-good-wait
 
 log "generating report"
 NODE_JS="$(find_node)"
@@ -127,7 +128,7 @@ function max(xs) {
   return xs.length ? Math.max(...xs) : null;
 }
 
-const cases = ['default_hot', 'physics', 'fonts', 'chem_text', 'bad_error'].map(parseCase);
+const cases = ['default_hot', 'physics', 'fonts', 'chem_text', 'bad_error', 'bad_then_good'].map(parseCase);
 const defaultCase = cases.find(c => c.name === 'default_hot');
 const hot = defaultCase.summaries;
 const summary = {
@@ -208,6 +209,7 @@ lines.push('');
 lines.push('- `default_hot` keeps one renderer process alive and sends 5 render requests after the initial warmup.');
 lines.push('- `physics`, `fonts`, and `chem_text` each measure a fresh renderer startup plus one render, so their create time is cold-path cost.');
 lines.push('- `bad_error` is expected to fail; it verifies that a TeX error returns quickly with a useful error path instead of hanging.');
+lines.push('- `bad_then_good` first sends a bad snippet, then immediately sends a good one to verify hot-spare failover.');
 lines.push('- Current PDF conversion path is conservative: cumulative XDV plus `xdvipdfmx -s N-N` for the latest page.');
 lines.push('');
 lines.push('Raw logs are under `raw/` next to this report.');

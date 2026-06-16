@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <thread>
 
 static long long now_ms() {
   using namespace std::chrono;
@@ -33,7 +34,15 @@ int main(int argc, char **argv) {
       u8"\u4e2d\u6587 C++ DLL smoke test: $E=mc^2$ "
       u8"\\[\\int_0^1 x^2\\,dx=\\frac13\\] "
       u8"{\\color{blue}$\\ce{2H2 + O2 -> 2H2O}$}";
+  bool bad_then_good = false;
   if (case_name == "--bad") {
+    snippet = u8"\u4e2d\u6587 error test: \\undefinedstemtexcommand";
+  } else if (case_name == "--bad-then-good") {
+    bad_then_good = true;
+    snippet = u8"\u4e2d\u6587 error test: \\undefinedstemtexcommand";
+  } else if (case_name == "--bad-then-good-wait") {
+    bad_then_good = true;
+    std::this_thread::sleep_for(std::chrono::seconds(8));
     snippet = u8"\u4e2d\u6587 error test: \\undefinedstemtexcommand";
   } else if (case_name == "--chem-text") {
     snippet = u8"\u6b63\u6587\u6a21\u5f0f\u5316\u5b66: "
@@ -55,8 +64,13 @@ int main(int argc, char **argv) {
       std::fprintf(stderr, "run=%d renderMs=%lld\n", i + 1, render_end - render_start);
       std::fprintf(stderr, "render failed: %s\n", error ? error : "");
       stemtex_renderer_free_string(error);
-      stemtex_renderer_destroy(renderer);
-      return 1;
+      if (!bad_then_good) {
+        stemtex_renderer_destroy(renderer);
+        return 1;
+      }
+      snippet = u8"\u4e2d\u6587 recovery test: $E=mc^2$ "
+                u8"\\[\\ip{\\psi}{\\phi}\\quad \\ce{H2O}\\]";
+      continue;
     }
     long long render_end = now_ms();
     std::printf("run=%d renderMs=%lld pdf=%s\nsummary=%s\n", i + 1, render_end - render_start,

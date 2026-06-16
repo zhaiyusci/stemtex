@@ -16,6 +16,7 @@
 #include <functional>
 #include <iomanip>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -396,6 +397,11 @@ std::string installed_warmup_body(const RendererConfig &cfg) {
   return warmup;
 }
 
+std::string light_prime_body() {
+  return R"(hot spare prime $E=mc^2$ {\color{blue}blue}
+)";
+}
+
 fs::path default_runtime(const fs::path &repo_root) {
   const char *env = std::getenv("XETEX_RUNTIME");
   if (env && *env) return fs::absolute(env);
@@ -596,6 +602,21 @@ XdvParts run_warmup(const RendererConfig &cfg) {
   return read_xdv_parts(out_dir / "worker-webapp.xdv");
 }
 
+XdvParts load_or_run_warmup(const RendererConfig &cfg) {
+  for (const fs::path &candidate : {
+           cfg.runtime_root / "texmf-var" / "cache-warmup" / "warmup.xdv",
+           cfg.runtime_root / "texmf-var" / "cache-warmup" / "worker-webapp.xdv",
+       }) {
+    if (fs::exists(candidate)) {
+      try {
+        return read_xdv_parts(candidate);
+      } catch (...) {
+      }
+    }
+  }
+  return run_warmup(cfg);
+}
+
 std::string json_escape(const std::string &s) {
   std::string out;
   for (char c : s) {
@@ -628,105 +649,154 @@ int clamp_width(int width) {
 }  // namespace
 
 struct StemTeXRenderer {
-  explicit StemTeXRenderer(RendererConfig c) : cfg(std::move(c)), parts(run_warmup(cfg)) {
-    start_live_worker();
+  explicit StemTeXRenderer(RendererConfig c) : cfg(std::move(c)), parts(load_or_run_warmup(cfg)) {
+    worker_env = worker_environment(cfg);
+    primary = create_ready_worker("primary");
+    schedule_spare_rebuild_locked();
   }
 
-  void start_live_worker() {
-    child.stop();
-    fs::remove_all(cfg.state_root / "live");
-    live_out = cfg.state_root / "live";
-    fs::create_directories(live_out);
-    ready = false;
-    done = false;
-    output_tail.clear();
-    last_xdv_offset = 0;
-    next_request = 0;
-    worker_env = worker_environment(cfg);
-    child.start(worker_command(cfg, live_out), cfg.repo_root, worker_env, [&](const std::string &text) {
+  struct WorkerSlot {
+    std::string name;
+    fs::path live_out;
+    ChildProcess child;
+    LineWatcher lines;
+    std::mutex mu;
+    std::condition_variable cv;
+    bool ready = false;
+    bool done = false;
+    std::string output_tail;
+    uint64_t last_xdv_offset = 0;
+    int next_request = 0;
+  };
+
+  std::unique_ptr<WorkerSlot> create_ready_worker(const std::string &name, bool prime = true) {
+    auto slot = std::make_unique<WorkerSlot>();
+    slot->name = name;
+    slot->live_out = cfg.state_root / "workers" / name / "live";
+    fs::remove_all(cfg.state_root / "workers" / name);
+    fs::create_directories(slot->live_out);
+    slot->ready = false;
+    slot->done = false;
+    slot->output_tail.clear();
+    slot->last_xdv_offset = 0;
+    slot->next_request = 0;
+    WorkerSlot *raw = slot.get();
+    raw->child.start(worker_command(cfg, raw->live_out), cfg.repo_root, worker_env, [raw](const std::string &text) {
       {
-        std::lock_guard<std::mutex> lock(mu);
-        output_tail += text;
-        if (output_tail.size() > 8192) {
-          output_tail.erase(0, output_tail.size() - 8192);
+        std::lock_guard<std::mutex> lock(raw->mu);
+        raw->output_tail += text;
+        if (raw->output_tail.size() > 8192) {
+          raw->output_tail.erase(0, raw->output_tail.size() - 8192);
         }
       }
-      lines.feed(text, [&](const std::string &line) {
-        std::lock_guard<std::mutex> lock(mu);
+      raw->lines.feed(text, [raw](const std::string &line) {
+        std::lock_guard<std::mutex> lock(raw->mu);
         if (line.find("WORKER_READY") != std::string::npos) {
-          ready = true;
-          cv.notify_all();
+          raw->ready = true;
+          raw->cv.notify_all();
         }
         if (line.find("WORKER_DONE:") != std::string::npos) {
-          done = true;
-          cv.notify_all();
+          raw->done = true;
+          raw->cv.notify_all();
         }
       });
     });
-    std::unique_lock<std::mutex> lock(mu);
-    if (!cv.wait_for(lock, std::chrono::seconds(30), [&]() { return ready; })) {
-      throw std::runtime_error("Live worker did not become ready");
+    std::unique_lock<std::mutex> lock(raw->mu);
+    if (!raw->cv.wait_for(lock, std::chrono::seconds(30), [&]() { return raw->ready; })) {
+      raw->child.stop();
+      throw std::runtime_error("Live worker did not become ready: " + name);
     }
     lock.unlock();
-    prime_live_worker();
+    if (prime) prime_worker(*raw, false);
+    return slot;
   }
 
-  void prime_live_worker() {
-    fs::path req_path = cfg.state_root / "live-warmup-request" / "req1.tex";
-    write_text_file(req_path, installed_warmup_body(cfg));
+  void prime_worker(WorkerSlot &slot, bool full_warmup) {
+    fs::path req_path = cfg.state_root / "workers" / slot.name / "warmup-request" / "req1.tex";
+    write_text_file(req_path, full_warmup ? installed_warmup_body(cfg) : light_prime_body());
     {
-      std::lock_guard<std::mutex> lock(mu);
-      done = false;
+      std::lock_guard<std::mutex> lock(slot.mu);
+      slot.done = false;
     }
-    child.write_stdin("360pt\n");
-    child.write_stdin(slash_path(fs::relative(req_path, cfg.repo_root)) + "\n");
-    std::unique_lock<std::mutex> lock(mu);
+    slot.child.write_stdin("360pt\n");
+    slot.child.write_stdin(slash_path(fs::relative(req_path, cfg.repo_root)) + "\n");
+    std::unique_lock<std::mutex> lock(slot.mu);
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     bool completed = false;
     while (std::chrono::steady_clock::now() < deadline) {
-      if (done || !child.is_running()) {
+      if (slot.done || !slot.child.is_running()) {
         completed = true;
         break;
       }
-      cv.wait_for(lock, std::chrono::milliseconds(25));
+      slot.cv.wait_for(lock, std::chrono::milliseconds(25));
     }
-    if (!completed || !done) {
-      std::string tail = output_tail;
+    if (!completed || !slot.done) {
+      std::string tail = slot.output_tail;
       lock.unlock();
-      child.stop();
-      throw std::runtime_error("Live worker warmup failed. TeX output tail:\n" + tail);
+      slot.child.stop();
+      throw std::runtime_error("Live worker warmup failed: " + slot.name + ". TeX output tail:\n" + tail);
     }
     lock.unlock();
-    fs::path xdv_path = live_out / "worker-webapp.xdv";
-    last_xdv_offset = fs::file_size(xdv_path);
-    next_request = 1;
+    fs::path xdv_path = slot.live_out / "worker-webapp.xdv";
+    slot.last_xdv_offset = fs::file_size(xdv_path);
+    slot.next_request = 1;
   }
 
-  ~StemTeXRenderer() { child.stop(); }
+  ~StemTeXRenderer() {
+    shutting_down = true;
+    join_spare_builder();
+    if (primary) primary->child.stop();
+    if (spare) spare->child.stop();
+  }
 
-  void schedule_background_restart() {
-    bool expected = false;
-    if (!restart_scheduled.compare_exchange_strong(expected, true)) return;
-    std::thread([this]() {
-      std::lock_guard<std::mutex> lock(render_mu);
+  void join_spare_builder() {
+    if (spare_builder.joinable()) spare_builder.join();
+  }
+
+  void schedule_spare_rebuild_locked() {
+    if (shutting_down || spare_rebuilding) return;
+    if (spare_builder.joinable()) spare_builder.join();
+    spare_rebuilding = true;
+    spare_builder = std::thread([this]() {
+      std::unique_ptr<WorkerSlot> built;
       try {
-        start_live_worker();
+        built = create_ready_worker("spare");
       } catch (...) {
-        // The next render call will observe the dead worker and report/retry.
       }
-      restart_scheduled = false;
-    }).detach();
+      std::lock_guard<std::mutex> lock(render_mu);
+      if (!shutting_down && built) {
+        if (spare) spare->child.stop();
+        spare = std::move(built);
+      }
+      spare_rebuilding = false;
+    });
+  }
+
+  void promote_spare_locked() {
+    if (primary) primary->child.stop();
+    if (spare && spare->child.is_running()) {
+      primary = std::move(spare);
+      primary->name = "primary";
+      schedule_spare_rebuild_locked();
+      return;
+    }
+    primary.reset();
+    schedule_spare_rebuild_locked();
   }
 
   StemTeXRenderResult render(const std::string &snippet, int width_pt) {
     std::lock_guard<std::mutex> render_lock(render_mu);
-    if (restart_scheduled) {
-      throw std::runtime_error("Renderer is restarting after a previous TeX error");
+    if (!primary || !primary->child.is_running()) {
+      if (spare && spare->child.is_running()) {
+        primary = std::move(spare);
+        primary->name = "primary";
+        schedule_spare_rebuild_locked();
+      } else {
+        primary = create_ready_worker("primary");
+        schedule_spare_rebuild_locked();
+      }
     }
-    if (!child.is_running()) {
-      start_live_worker();
-      restart_scheduled = false;
-    }
+    WorkerSlot &slot = *primary;
     int64_t start = now_ms();
     std::string id = random_id();
     fs::path render_dir = cfg.renders_root / id;
@@ -734,45 +804,44 @@ struct StemTeXRenderer {
     write_text_file(req_path, snippet);
 
     {
-      std::lock_guard<std::mutex> lock(mu);
-      done = false;
+      std::lock_guard<std::mutex> lock(slot.mu);
+      slot.done = false;
     }
-    child.write_stdin(std::to_string(clamp_width(width_pt)) + "pt\n");
-    child.write_stdin(slash_path(fs::relative(req_path, cfg.repo_root)) + "\n");
+    slot.child.write_stdin(std::to_string(clamp_width(width_pt)) + "pt\n");
+    slot.child.write_stdin(slash_path(fs::relative(req_path, cfg.repo_root)) + "\n");
 
     {
-      std::unique_lock<std::mutex> lock(mu);
+      std::unique_lock<std::mutex> lock(slot.mu);
       auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
       bool completed = false;
       while (std::chrono::steady_clock::now() < deadline) {
-        if (done || !child.is_running()) {
+        if (slot.done || !slot.child.is_running()) {
           completed = true;
           break;
         }
-        cv.wait_for(lock, std::chrono::milliseconds(25));
+        slot.cv.wait_for(lock, std::chrono::milliseconds(25));
       }
       if (!completed) {
         lock.unlock();
-        child.stop();
-        schedule_background_restart();
+        promote_spare_locked();
         throw std::runtime_error("Worker request timed out");
       }
-      if (!done) {
-        std::string tail = output_tail;
+      if (!slot.done) {
+        std::string tail = slot.output_tail;
         lock.unlock();
-        schedule_background_restart();
+        promote_spare_locked();
         throw std::runtime_error("Worker exited before WORKER_DONE. TeX output tail:\n" + tail);
       }
     }
 
-    fs::path xdv_path = live_out / "worker-webapp.xdv";
+    fs::path xdv_path = slot.live_out / "worker-webapp.xdv";
     uint64_t current_size = fs::file_size(xdv_path);
     auto cumulative = read_file_range(xdv_path, 0, current_size);
-    auto delta = read_file_range(xdv_path, last_xdv_offset, current_size);
-    int32_t last_bop = (int32_t)(last_xdv_offset + find_first_bop(delta, xdv_path.string() + " delta"));
-    last_xdv_offset = current_size;
+    auto delta = read_file_range(xdv_path, slot.last_xdv_offset, current_size);
+    int32_t last_bop = (int32_t)(slot.last_xdv_offset + find_first_bop(delta, xdv_path.string() + " delta"));
+    slot.last_xdv_offset = current_size;
 
-    int request_no = ++next_request;
+    int request_no = ++slot.next_request;
     fs::path out_dir = render_dir / "out" / "live";
     fs::create_directories(out_dir);
     fs::path cumulative_path = out_dir / "snippet-1-cumulative.xdv";
@@ -801,7 +870,10 @@ struct StemTeXRenderer {
             << "\"newXdvBytes\":" << delta.size() << ","
             << "\"finalXdvBytes\":" << final_bytes << ","
             << "\"pdfBytes\":" << fs::file_size(pdf_path) << ","
-            << "\"workerRequest\":" << request_no
+            << "\"workerRequest\":" << request_no << ","
+            << "\"workerSlot\":\"" << json_escape(slot.name) << "\","
+            << "\"spareReady\":" << ((spare && spare->child.is_running()) ? "true" : "false") << ","
+            << "\"spareRebuilding\":" << (spare_rebuilding ? "true" : "false")
             << "}";
     write_text_file(render_dir / "out" / "summary.json", summary.str() + "\n");
 
@@ -814,19 +886,13 @@ struct StemTeXRenderer {
 
   RendererConfig cfg;
   XdvParts parts;
-  fs::path live_out;
-  ChildProcess child;
   std::vector<wchar_t> worker_env;
-  LineWatcher lines;
-  std::mutex mu;
   std::mutex render_mu;
-  std::condition_variable cv;
-  bool ready = false;
-  bool done = false;
-  std::atomic<bool> restart_scheduled{false};
-  std::string output_tail;
-  uint64_t last_xdv_offset = 0;
-  int next_request = 0;
+  std::unique_ptr<WorkerSlot> primary;
+  std::unique_ptr<WorkerSlot> spare;
+  std::thread spare_builder;
+  bool spare_rebuilding = false;
+  bool shutting_down = false;
 };
 
 extern "C" {
