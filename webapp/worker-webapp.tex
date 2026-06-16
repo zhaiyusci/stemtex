@@ -20,8 +20,10 @@
         \setcounter{equation}{0}%
         \setcounter{footnote}{0}%
         \normalfont\normalsize\normalcolor
+        \scrollmode
         \input\requestfile
         \par
+        \errorstopmode
       \endgroup
     }%
     \typeout{WORKER_DONE:\the\snippetcount}%

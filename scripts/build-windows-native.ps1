@@ -202,7 +202,7 @@ function Build-Zlib {
     return
   }
   $dir = Join-Path $Root "ptx\libs\zlib"
-  Invoke-Native -FilePath "nmake.exe" -Arguments @("/f", "win32\Makefile.msc", "libz.lib", "CFLAGS=-nologo -MT -W3 -O2 -Oy- -Zi -Fdzlib") -WorkingDirectory $dir
+  Invoke-Native -FilePath "nmake.exe" -Arguments @("/f", "Makefile", "libz.lib") -WorkingDirectory $dir
 }
 
 function Build-Libpng {
@@ -234,7 +234,11 @@ function Build-StaticDeps {
   Build-Zlib -Root $Root
   Build-Libpng -Root $Root
   Invoke-GnuMake -Root $Root -Directory (Join-Path $Root "ptx\libs\teckit")
-  Invoke-GnuMake -Root $Root -Directory (Join-Path $Root "ptx\libs\freetype")
+  $freetypeDir = Join-Path $Root "ptx\libs\freetype"
+  if (-not (Test-Path -LiteralPath (Join-Path $freetypeDir "objs\modules.cfg"))) {
+    Invoke-GnuMake -Root $Root -Directory $freetypeDir -Targets @("setup", "visualc")
+  }
+  Invoke-GnuMake -Root $Root -Directory $freetypeDir
   Invoke-GnuMake -Root $Root -Directory (Join-Path $Root "ptx\libs\pplib\src") -Targets @("libpplib.lib")
   Invoke-GnuMake -Root $Root -Directory (Join-Path $Root "ptx\libs\graphite2-src\src")
   Invoke-GnuMake -Root $Root -Directory (Join-Path $Root "ptx\libs\icu-src\source\stubdata")

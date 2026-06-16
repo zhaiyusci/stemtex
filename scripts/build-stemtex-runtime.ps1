@@ -94,7 +94,7 @@ function Write-RunScript {
     'set "FONTCONFIG_PATH=%TLROOT%\texmf-var\fonts\conf"',
     'set "XE_FC_CACHEDIR=%TLROOT%\texmf-var\fonts\cache"',
     'set "FC_CACHEDIR=%TLROOT%\texmf-var\fonts\cache"',
-    'if exist "%TLROOT%\bin\windows\icu-data\icudt76l.dat" set "ICU_DATA=%TLROOT%\bin\windows\icu-data"',
+    'if exist "%TLROOT%\bin\windows\icu-data\icudt*l.dat" set "ICU_DATA=%TLROOT%\bin\windows\icu-data"',
     $engineLine
   )
 
@@ -106,6 +106,12 @@ function Write-CacheWarmupTemplate {
 
   $warmupDir = Join-Path $DestRoot "cache-warmup"
   New-Item -ItemType Directory -Force -Path $warmupDir | Out-Null
+
+  $repoWarmup = Join-Path $SourceRoot "cache-warmup\warmup.tex"
+  if (Test-Path -LiteralPath $repoWarmup) {
+    Copy-Item -LiteralPath $repoWarmup -Destination (Join-Path $warmupDir "warmup.tex") -Force
+    return
+  }
 
   $content = @'
 \documentclass{article}
@@ -126,22 +132,70 @@ function Write-CacheWarmupTemplate {
 
 \begin{document}
 中文缓存预热，标点测试：，。！？；：“”
-English warmup: Times New Roman, \textsf{Arial}, \texttt{Consolas}.
+
+English warmup: Times New Roman, \textbf{bold}, \textit{italic},
+\textbf{\textit{bold italic}}, \textsf{Arial sans}, \texttt{Consolas mono}.
+
+{\sffamily 中文黑体预热：向量、矩阵、化学、单位。}
+
+{\ttfamily Mono warmup: abcXYZ0123 +-*/= () [] \{\}.}
+
+Inline math warmup:
+$E=mc^2$, $\alpha+\beta=\gamma$, $\symbf{\alpha}$, $\symcal{F}$,
+$\mathbb{R}$, $\mathbf{x}$, $\mathrm{d}x$, $\sin x$, $\nabla\cdot\mathbf{E}$.
 
 \[
-  \symbf{\alpha}+\symcal{F}(x)=
+  \int_0^1 x^2\,dx = \frac{1}{3},\qquad
+  \sum_{n=1}^{\infty}\frac{1}{n^2}=\frac{\pi^2}{6},\qquad
+  \sqrt{x^2+y^2}
+\]
+
+\[
+  A =
+  \begin{pmatrix}
+    1 & 2\\
+    3 & 4
+  \end{pmatrix},
+  \qquad
+  f(x)=
   \begin{cases}
     x^2, & x \ge 0,\\
     -x,  & x < 0,
   \end{cases}
-  \qquad
-  \ip{\psi}{\phi}
 \]
 
-{\color{blue}$\ce{2H2 + O2 -> 2H2O}$}
+Physics warmup:
 \[
-  \cancel{x+y} \quad \dv{x} \sin x = \cos x
+  \ip{\psi}{\phi}\quad
+  \dv{x}\sin x=\cos x\quad
+  \pdv{f}{x}\quad
+  \vb{v}\cdot\vu{n}\quad
+  \nabla f
 \]
+
+Chemistry warmup in text mode:
+\ce{H2O}, \ce{CO2}, \ce{Na+}, \ce{SO4^2-}, \ce{A -> B}, \ce{2H2 + O2 -> 2H2O}.
+
+Chemistry warmup in math/color context:
+{\color{blue}$\ce{H2O}$}
+{\color{red}$\ce{CO2 + C -> 2CO}$}
+\[
+  \ce{CH4 + 2O2 -> CO2 + 2H2O}
+\]
+
+Color and cancel warmup:
+{\color{blue}blue text}
+{\color{red}red text}
+{\color{green!50!black}green text}
+\[
+  \cancel{x+y}\quad \bcancel{a-b}\quad \xcancel{z}
+\]
+
+Script-size warmup:
+\[
+  x_{i_j}^{k_\ell} + \frac{\frac{a}{b}}{\sqrt{c_d}}
+\]
+
 \end{document}
 '@
 
@@ -242,7 +296,7 @@ try {
   $env:TEXMFCNF = Join-Path $RuntimeRoot "texmf-dist\web2c"
   $env:TEXFORMATS = "$fmtDir;$fmtDir\"
   $icuData = Join-Path $bin "icu-data"
-  if (Test-Path -LiteralPath (Join-Path $icuData "icudt76l.dat")) {
+  if (Get-ChildItem -LiteralPath $icuData -Filter "icudt*l.dat" -File -ErrorAction SilentlyContinue) {
     $env:ICU_DATA = $icuData
   }
   $env:XE_FONTCONFIG_PATH = $confDir
@@ -533,8 +587,29 @@ $daemonBat = @(
 )
 Set-Content -LiteralPath (Join-Path $destBinRoot "xelatexdaemon.bat") -Value $daemonBat -Encoding ascii
 New-Item -ItemType Directory -Force -Path (Join-Path $destBinRoot "icu-data") | Out-Null
-Copy-One -FromRoot (Join-Path $repoRoot "ptx\libs\icu-src\source\data\in") -ToRoot (Join-Path $destBinRoot "icu-data") -RelativePath "icudt76l.dat"
-Copy-One -FromRoot (Join-Path $repoRoot "ptx\libs\icu-src\bin64") -ToRoot $destBinRoot -RelativePath "icudt76.dll"
+$icuDataSource = Join-Path $repoRoot "ptx\libs\icu-src\source\data\in"
+$icuDataFile = Get-ChildItem -LiteralPath $icuDataSource -Filter "icudt*l.dat" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $icuDataFile) {
+  throw "ICU data file not found under $icuDataSource"
+}
+Copy-Item -LiteralPath $icuDataFile.FullName -Destination (Join-Path $destBinRoot "icu-data") -Force
+$icuDllSourceRoots = @(
+  (Join-Path $repoRoot "ptx\libs\icu-src\bin64"),
+  (Join-Path $repoRoot "ptx\libs\icu-src\bin")
+)
+$icuDllFile = $null
+foreach ($icuDllSourceRoot in $icuDllSourceRoots) {
+  if (Test-Path -LiteralPath $icuDllSourceRoot) {
+    $icuDllFile = Get-ChildItem -LiteralPath $icuDllSourceRoot -Filter "icudt*.dll" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($icuDllFile) {
+      break
+    }
+  }
+}
+if (-not $icuDllFile) {
+  throw "ICU stub DLL not found under ptx\libs\icu-src\bin64 or ptx\libs\icu-src\bin"
+}
+Copy-Item -LiteralPath $icuDllFile.FullName -Destination $destBinRoot -Force
 
 $texmfDist = Join-Path $tlRoot "texmf-dist"
 $destTexmfDist = Join-Path $destRoot "texmf-dist"
@@ -542,10 +617,6 @@ $texmfFiles = @(
   "dvipdfmx\dvipdfmx.cfg",
   "fonts\misc\xetex\fontmapping\base\tex-text.tec",
   "fonts\map\fontname\texfonts.map",
-  "fonts\opentype\public\lm\lmroman10-bold.otf",
-  "fonts\opentype\public\lm\lmroman10-bolditalic.otf",
-  "fonts\opentype\public\lm\lmroman10-italic.otf",
-  "fonts\opentype\public\lm\lmroman10-regular.otf",
   "tex\latex\ctex\ctexhook.sty",
   "web2c\fmtutil.cnf",
   "web2c\texmf.cnf"
@@ -556,17 +627,37 @@ foreach ($file in $texmfFiles) {
 Write-MiniTexmfCnfOverlay -DestRoot $destRoot
 
 $texmfDirs = @(
+  "fonts\afm\public\amsfonts",
+  "fonts\afm\public\lm",
+  "fonts\enc\dvips\lm",
+  "fonts\map\dvipdfm\lm",
   "fonts\map\dvips\amsfonts",
-  "fonts\type1\public\amsfonts\latxfont",
+  "fonts\map\dvips\lm",
+  "fonts\opentype\public\lm",
+  "fonts\opentype\public\xits",
+  "fonts\source\public\amsfonts",
+  "fonts\source\public\cm",
+  "fonts\source\public\latex-fonts",
+  "fonts\tfm\public\amsfonts",
   "fonts\tfm\public\cm",
   "fonts\tfm\public\latex-fonts",
-  "fonts\opentype\public\xits",
+  "fonts\tfm\public\lm",
+  "fonts\type1\public\amsfonts",
+  "fonts\type1\public\lm",
   "tex\latex\amsmath",
+  "tex\latex\amsfonts",
   "tex\latex\base",
   "tex\latex\cancel",
+  "tex\latex\tex-ini-files",
+  "tex\latex\firstaid",
   "tex\latex\fontspec",
   "tex\latex\chemgreek",
+  "tex\generic\babel",
+  "tex\generic\config",
+  "tex\generic\hyph-utf8",
+  "tex\generic\hyphen",
   "tex\generic\iftex",
+  "tex\generic\unicode-data",
   "tex\latex\graphics",
   "tex\latex\graphics-cfg",
   "tex\latex\graphics-def",
@@ -582,11 +673,26 @@ $texmfDirs = @(
   "tex\latex\tools",
   "tex\latex\unicode-math",
   "tex\latex\xcolor",
-  "tex\xelatex\xecjk"
+  "tex\xelatex\xecjk",
+  "tex\latex\lm",
+  "tex\plain\amsfonts"
 )
 foreach ($dir in $texmfDirs) {
   Copy-Tree -FromRoot $texmfDist -ToRoot $destTexmfDist -RelativePath $dir
 }
+
+$languageConfigDir = Join-Path $destTexmfDist "tex\generic\config"
+New-Item -ItemType Directory -Force -Path $languageConfigDir | Out-Null
+$languageDat = @(
+  "% StemTeX intentionally keeps format hyphenation minimal.",
+  "english hyphen.tex",
+  "=usenglish",
+  "=USenglish",
+  "=american",
+  "nohyphenation zerohyph.tex",
+  "dumylang dumyhyph.tex"
+)
+Set-Content -LiteralPath (Join-Path $languageConfigDir "language.dat") -Value $languageDat -Encoding ascii
 
 New-Item -ItemType Directory -Force -Path (Join-Path $destRoot "texmf-var\fonts\cache") | Out-Null
 Set-Content -LiteralPath (Join-Path $destRoot "VERSION") -Value $stemTeXVersion -Encoding ascii
