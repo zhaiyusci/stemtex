@@ -80,6 +80,11 @@ flush, not the transport protocol.
 scripts/
   build-stemtex-runtime.ps1       Build the StemTeX runtime tree.
   build-windows-native.ps1        Build patched W32TeX-style xetex.dll.
+  run-cpp-timing-report.sh        Run native DLL timing and error-path checks.
+cpp-daemon/
+  stemtex_renderer.h              C ABI for the native renderer DLL.
+  stemtex_renderer.cpp            Single-worker StemTeX renderer implementation.
+  stemtex_renderer_smoke.cpp      Native smoke/timing test executable.
 worker-prototype/
   run-single-worker-live-pdf.js   Current live-PDF worker controller.
   run-worker-*.js                 Earlier worker and pool experiments.
@@ -203,6 +208,8 @@ state to be worth it here.
 See:
 
 ```text
+docs\CPP_RENDERER_API.md
+docs\CPP_RENDERER_API_TODO.md
 docs\XELATEX_PROFILING_NOTES.md
 docs\WINDOWS_XETEX_BUILD_NOTES.md
 ```
