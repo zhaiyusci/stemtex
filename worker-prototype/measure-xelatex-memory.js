@@ -15,7 +15,7 @@ function readOption(name, fallback) {
 
 const outRoot = path.resolve(repoRoot, readOption('--out', 'out/xelatex-memory'));
 const runtimeRoot = path.resolve(repoRoot, readOption('--runtime', 'runtime'));
-const launcher = path.join(runtimeRoot, 'run-xelatex.bat');
+const launcher = path.join(runtimeRoot, 'run-xelatexdaemon.bat');
 
 fs.rmSync(outRoot, { recursive: true, force: true });
 fs.mkdirSync(outRoot, { recursive: true });

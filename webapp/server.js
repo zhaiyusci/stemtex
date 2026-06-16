@@ -24,10 +24,10 @@ const DEFAULT_WARMUP_SNIPPET = [
 ].join('\n');
 
 function findDefaultRuntime() {
-  const candidates = ['runtime', '../mini-rebuild-test', '../mini-texlive-xetex'];
+  const candidates = ['stemtex', 'runtime', '../stemtex'];
   for (const candidate of candidates) {
     const full = path.resolve(repoRoot, candidate);
-    if (fs.existsSync(path.join(full, 'run-xelatex.bat'))) {
+    if (fs.existsSync(path.join(full, 'run-xelatexdaemon.bat'))) {
       return candidate;
     }
   }
@@ -161,7 +161,7 @@ function readFileRange(filePath, start, end) {
 }
 
 function launcherPath() {
-  return path.join(runtimeRoot, 'run-xelatex.bat');
+  return path.join(runtimeRoot, 'run-xelatexdaemon.bat');
 }
 
 function xdvipdfmxPath() {

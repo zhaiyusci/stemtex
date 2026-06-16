@@ -1,4 +1,6 @@
 runtime/
+stemtex/
+dist/
 out/
 .build-tools/
 ptx/

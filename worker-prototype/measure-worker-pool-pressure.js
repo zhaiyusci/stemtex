@@ -31,7 +31,7 @@ const workerTex = readOption('--worker', 'worker-prototype/worker-file-request-o
 const poolSize = readNumber('--pool-size', 5);
 const idleMs = readNumber('--idle-ms', 5000);
 const sampleMs = readNumber('--sample-ms', 250);
-const launcher = path.join(runtimeRoot, 'run-xelatex.bat');
+const launcher = path.join(runtimeRoot, 'run-xelatexdaemon.bat');
 
 fs.rmSync(outRoot, { recursive: true, force: true });
 fs.mkdirSync(outRoot, { recursive: true });

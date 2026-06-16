@@ -1,9 +1,8 @@
-param(
+﻿param(
   [string]$TeXLiveRoot,
-  [string]$Destination = (Join-Path (Split-Path -Parent $PSScriptRoot) "runtime"),
+  [string]$Destination = (Join-Path (Split-Path -Parent $PSScriptRoot) "stemtex"),
   [string]$SourceRoot = (Split-Path -Parent $PSScriptRoot),
   [string]$CacheWarmupTex,
-  [switch]$UseSelfBuiltXeTeX,
   [switch]$SkipFontCacheWarmup,
   [switch]$Clean
 )
@@ -71,21 +70,9 @@ function Copy-Tree {
 }
 
 function Write-RunScript {
-  param([string]$DestRoot, [bool]$SelfBuilt)
+  param([string]$DestRoot)
 
-  $icuLines = if ($SelfBuilt) {
-    @(
-      'if exist "%TLROOT%\bin\windows\icu-data\icudt76l.dat" set "ICU_DATA=%TLROOT%\bin\windows\icu-data"'
-    )
-  } else {
-    @()
-  }
-
-  $engineLine = if ($SelfBuilt) {
-    'xelatex.exe --no-font-cache-refresh %*'
-  } else {
-    'xelatex.exe %*'
-  }
+  $engineLine = '"%TLROOT%\bin\windows\xetexdaemon.exe" -fmt=xelatex --no-font-cache-refresh %*'
 
   $content = @(
     '@echo off',
@@ -99,10 +86,12 @@ function Write-RunScript {
     'set "XE_FONTCONFIG_PATH=%TLROOT%\texmf-var\fonts\conf"',
     'set "FONTCONFIG_PATH=%TLROOT%\texmf-var\fonts\conf"',
     'set "XE_FC_CACHEDIR=%TLROOT%\texmf-var\fonts\cache"',
-    'set "FC_CACHEDIR=%TLROOT%\texmf-var\fonts\cache"'
-  ) + $icuLines + @($engineLine)
+    'set "FC_CACHEDIR=%TLROOT%\texmf-var\fonts\cache"',
+    'if exist "%TLROOT%\bin\windows\icu-data\icudt76l.dat" set "ICU_DATA=%TLROOT%\bin\windows\icu-data"',
+    $engineLine
+  )
 
-  Set-Content -LiteralPath (Join-Path $DestRoot "run-xelatex.bat") -Value $content -Encoding ascii
+  Set-Content -LiteralPath (Join-Path $DestRoot "run-xelatexdaemon.bat") -Value $content -Encoding ascii
 }
 
 function Write-CacheWarmupTemplate {
@@ -113,16 +102,24 @@ function Write-CacheWarmupTemplate {
 
   $content = @'
 \documentclass{article}
+\usepackage{mathtools}
 \usepackage{unicode-math}
+\setmainfont{Times New Roman}
+\setsansfont{Arial}
+\setmonofont{Consolas}
+\setmathfont{XITSMath-Regular.otf}[BoldFont=XITSMath-Bold.otf]
 \usepackage{xeCJK}
+\setCJKmainfont{SimSun}
+\setCJKsansfont{SimHei}
+\setCJKmonofont{SimSun}
 \usepackage[version=4]{mhchem}
 \usepackage{physics}
 \usepackage{xcolor}
+\usepackage{cancel}
 
 \begin{document}
 中文缓存预热，标点测试：，。！？；：“”
-
-$\symbf{\alpha}$ \ce{H2O} \color{blue} $\ip{1}{0}$
+$\symbf{\alpha}$ \ce{H2O} \color{blue} $\ip{1}{0}$ $\cancel{x}$
 \end{document}
 '@
 
@@ -143,13 +140,13 @@ $ErrorActionPreference = "Stop"
 
 $RuntimeRoot = $PSScriptRoot
 $bin = Join-Path $RuntimeRoot "bin\windows"
-$xelatex = Join-Path $bin "xelatex.exe"
+$launcher = Join-Path $bin "xetexdaemon.exe"
 $fmtDir = Join-Path $RuntimeRoot "texmf-var\web2c\xetex"
 $cacheDir = Join-Path $RuntimeRoot "texmf-var\fonts\cache"
 $confDir = Join-Path $RuntimeRoot "texmf-var\fonts\conf"
 
-if (-not (Test-Path -LiteralPath $xelatex)) {
-  throw "xelatex.exe not found under runtime root: $RuntimeRoot"
+if (-not (Test-Path -LiteralPath $launcher)) {
+  throw "xetexdaemon.exe not found under runtime root: $RuntimeRoot"
 }
 
 if (-not $WarmupTex) {
@@ -205,7 +202,7 @@ try {
 
   Push-Location -LiteralPath $warmupDir
   try {
-    & $xelatex -no-pdf -interaction=nonstopmode -halt-on-error -output-directory="$OutputDirectory" $warmupName
+    & $launcher -fmt=xelatex -no-pdf -interaction=nonstopmode -halt-on-error -output-directory="$OutputDirectory" $warmupName
     if ($LASTEXITCODE -ne 0) {
       throw "Font cache refresh failed with exit code $LASTEXITCODE."
     }
@@ -317,12 +314,14 @@ function Build-Format {
   param(
     [string]$TlRoot,
     [string]$DestRoot,
-    [bool]$SelfBuilt,
     [string]$RepoRoot
   )
 
   $fmtDir = Join-Path $DestRoot "texmf-var\web2c\xetex"
   New-Item -ItemType Directory -Force -Path $fmtDir | Out-Null
+  Get-ChildItem -LiteralPath $fmtDir -File |
+    Where-Object { $_.Extension -in @(".fmt", ".log", ".aux") } |
+    Remove-Item -Force
   $bin = Join-Path $DestRoot "bin\windows"
 
   $oldPath = $env:PATH
@@ -337,9 +336,7 @@ function Build-Format {
 
   try {
     $env:PATH = "$bin;$(Join-Path $TlRoot 'bin\windows');$env:SystemRoot\System32"
-    if ($SelfBuilt) {
-      $env:ICU_DATA = Join-Path $bin "icu-data"
-    }
+    $env:ICU_DATA = Join-Path $bin "icu-data"
     $env:TEXMFROOT = $TlRoot
     $env:TEXMFCNF = Join-Path $TlRoot "texmf-dist\web2c"
     $env:TEXFORMATS = "$fmtDir;$fmtDir\"
@@ -348,15 +345,20 @@ function Build-Format {
     $env:XE_FC_CACHEDIR = Join-Path $DestRoot "texmf-var\fonts\cache"
     $env:FC_CACHEDIR = Join-Path $DestRoot "texmf-var\fonts\cache"
 
+    $fmtEngine = Join-Path $bin "xetexdaemon.exe"
     Push-Location -LiteralPath $fmtDir
     try {
-      & (Join-Path $bin "xelatex.exe") -ini -etex -jobname=xelatex xelatex.ini
+      & $fmtEngine -ini -etex -jobname=xelatex xelatex.ini
       if ($LASTEXITCODE -ne 0) {
         throw "Failed to build xelatex.fmt."
       }
     } finally {
       Pop-Location
     }
+
+    Get-ChildItem -LiteralPath $fmtDir -File |
+      Where-Object { $_.Extension -in @(".log", ".aux") } |
+      Remove-Item -Force
   } finally {
     $env:PATH = $oldPath
     $env:TEXMFROOT = $oldTexmfRoot
@@ -373,8 +375,7 @@ function Build-Format {
 function Invoke-FontCacheWarmup {
   param(
     [string]$DestRoot,
-    [string]$WarmupTex,
-    [bool]$SelfBuilt
+    [string]$WarmupTex
   )
 
   if (-not (Test-Path -LiteralPath $WarmupTex)) {
@@ -402,9 +403,7 @@ function Invoke-FontCacheWarmup {
     $env:TEXMFROOT = $DestRoot
     $env:TEXMFCNF = Join-Path $DestRoot "texmf-dist\web2c"
     $env:TEXFORMATS = "$fmtDir;$fmtDir\"
-    if ($SelfBuilt) {
-      $env:ICU_DATA = Join-Path $bin "icu-data"
-    }
+    $env:ICU_DATA = Join-Path $bin "icu-data"
     $env:XE_FONTCONFIG_PATH = Join-Path $DestRoot "texmf-var\fonts\conf"
     $env:FONTCONFIG_PATH = Join-Path $DestRoot "texmf-var\fonts\conf"
     $env:XE_FC_CACHEDIR = $cacheDir
@@ -415,7 +414,7 @@ function Invoke-FontCacheWarmup {
     $warmupTexName = Split-Path -Leaf $resolvedWarmupTex
     Push-Location -LiteralPath $warmupTexDir
     try {
-      & (Join-Path $bin "xelatex.exe") -no-pdf -interaction=nonstopmode -halt-on-error -output-directory="$workDir" $warmupTexName
+      & (Join-Path $bin "xetexdaemon.exe") -fmt=xelatex -no-pdf -interaction=nonstopmode -halt-on-error -output-directory="$workDir" $warmupTexName
       if ($LASTEXITCODE -ne 0) {
         throw "Font cache warmup failed with exit code $LASTEXITCODE."
       }
@@ -444,7 +443,7 @@ $repoRoot = Resolve-ExistingPath -Path $SourceRoot -Name "SourceRoot"
 $tlRoot = Find-TeXLiveRoot
 $destRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Destination)
 if (-not $CacheWarmupTex) {
-  $CacheWarmupTex = Join-Path $repoRoot "test\test_5.tex"
+  $CacheWarmupTex = Join-Path (Split-Path -Parent $PSScriptRoot) "test\test_5.tex"
 }
 
 if ($Clean -and (Test-Path -LiteralPath $destRoot)) {
@@ -464,37 +463,35 @@ $binFiles = @(
   "ucrtbase.dll",
   "vcruntime140.dll",
   "vcruntime140_1.dll",
-  "xdvipdfmx.exe",
-  "xetex.exe",
-  "xelatex.exe"
+  "xdvipdfmx.exe"
 )
 
 foreach ($file in $binFiles) {
   Copy-One -FromRoot $tlBinRoot -ToRoot $destBinRoot -RelativePath $file
 }
 
-if ($UseSelfBuiltXeTeX) {
-  Copy-One -FromRoot (Join-Path $repoRoot "ptx\texk\web2c") -ToRoot $destBinRoot -RelativePath "xetex.dll"
-  Copy-One -FromRoot (Join-Path $repoRoot "ktx\texk\calldll") -ToRoot $destBinRoot -RelativePath "xetex.exe"
-  Copy-One -FromRoot (Join-Path $repoRoot "ktx\texk\calldll") -ToRoot $destBinRoot -RelativePath "xelatex.exe"
-  New-Item -ItemType Directory -Force -Path (Join-Path $destBinRoot "icu-data") | Out-Null
-  Copy-One -FromRoot (Join-Path $repoRoot "ptx\libs\icu-src\source\data\in") -ToRoot (Join-Path $destBinRoot "icu-data") -RelativePath "icudt76l.dat"
-  Copy-One -FromRoot (Join-Path $repoRoot "ptx\libs\icu-src\bin64") -ToRoot $destBinRoot -RelativePath "icudt76.dll"
-} else {
-  $icu = Get-ChildItem -LiteralPath $tlBinRoot -Filter "icudt*.dll" | Sort-Object Name -Descending | Select-Object -First 1
-  if (-not $icu) {
-    throw "No icudt*.dll found in $tlBinRoot"
-  }
-  Copy-Item -LiteralPath $icu.FullName -Destination (Join-Path $destBinRoot $icu.Name) -Force
-  Copy-One -FromRoot $tlBinRoot -ToRoot $destBinRoot -RelativePath "xetex.dll"
-}
+Copy-Item -LiteralPath (Join-Path $repoRoot "ptx\texk\web2c\xetex.dll") -Destination (Join-Path $destBinRoot "xetexdaemon.dll") -Force
+Copy-Item -LiteralPath (Join-Path $repoRoot "ktx\texk\calldll\xetexdaemon.exe") -Destination (Join-Path $destBinRoot "xetexdaemon.exe") -Force
+$daemonBat = @(
+  '@echo off',
+  '"%~dp0xetexdaemon.exe" -fmt=xelatex %*'
+)
+Set-Content -LiteralPath (Join-Path $destBinRoot "xelatexdaemon.bat") -Value $daemonBat -Encoding ascii
+New-Item -ItemType Directory -Force -Path (Join-Path $destBinRoot "icu-data") | Out-Null
+Copy-One -FromRoot (Join-Path $repoRoot "ptx\libs\icu-src\source\data\in") -ToRoot (Join-Path $destBinRoot "icu-data") -RelativePath "icudt76l.dat"
+Copy-One -FromRoot (Join-Path $repoRoot "ptx\libs\icu-src\bin64") -ToRoot $destBinRoot -RelativePath "icudt76.dll"
 
 $texmfDist = Join-Path $tlRoot "texmf-dist"
 $destTexmfDist = Join-Path $destRoot "texmf-dist"
 $texmfFiles = @(
   "dvipdfmx\dvipdfmx.cfg",
+  "fonts\misc\xetex\fontmapping\base\tex-text.tec",
   "fonts\map\fontname\texfonts.map",
-  "fonts\tfm\public\cm\cmr10.tfm",
+  "fonts\opentype\public\lm\lmroman10-bold.otf",
+  "fonts\opentype\public\lm\lmroman10-bolditalic.otf",
+  "fonts\opentype\public\lm\lmroman10-italic.otf",
+  "fonts\opentype\public\lm\lmroman10-regular.otf",
+  "tex\latex\ctex\ctexhook.sty",
   "web2c\fmtutil.cnf",
   "web2c\texmf.cnf"
 )
@@ -504,15 +501,17 @@ foreach ($file in $texmfFiles) {
 Write-MiniTexmfCnfOverlay -DestRoot $destRoot
 
 $texmfDirs = @(
-  "fonts\opentype\public\fandol",
-  "fonts\opentype\public\lm",
-  "fonts\opentype\public\lm-math",
+  "fonts\map\dvips\amsfonts",
+  "fonts\type1\public\amsfonts\latxfont",
+  "fonts\tfm\public\cm",
+  "fonts\tfm\public\latex-fonts",
+  "fonts\opentype\public\xits",
   "tex\latex\amsmath",
   "tex\latex\base",
-  "tex\latex\cjk\texinput",
-  "tex\latex\ctex",
+  "tex\latex\cancel",
   "tex\latex\fontspec",
   "tex\latex\chemgreek",
+  "tex\generic\iftex",
   "tex\latex\graphics",
   "tex\latex\graphics-cfg",
   "tex\latex\graphics-def",
@@ -521,7 +520,9 @@ $texmfDirs = @(
   "tex\latex\l3packages\l3keys2e",
   "tex\latex\l3packages\xparse",
   "tex\latex\l3packages\xtemplate",
+  "tex\latex\mathtools",
   "tex\latex\mhchem",
+  "tex\latex\siunitx",
   "tex\latex\physics",
   "tex\latex\tools",
   "tex\latex\unicode-math",
@@ -534,12 +535,12 @@ foreach ($dir in $texmfDirs) {
 
 New-Item -ItemType Directory -Force -Path (Join-Path $destRoot "texmf-var\fonts\cache") | Out-Null
 Write-Fontconfig -DestRoot $destRoot
-Build-Format -TlRoot $tlRoot -DestRoot $destRoot -SelfBuilt:$UseSelfBuiltXeTeX.IsPresent -RepoRoot $repoRoot
-Write-RunScript -DestRoot $destRoot -SelfBuilt:$UseSelfBuiltXeTeX.IsPresent
+Build-Format -TlRoot $tlRoot -DestRoot $destRoot -RepoRoot $repoRoot
+Write-RunScript -DestRoot $destRoot
 Write-CacheWarmupTemplate -DestRoot $destRoot
 Write-RefreshCacheScript -DestRoot $destRoot
 if (-not $SkipFontCacheWarmup) {
-  Invoke-FontCacheWarmup -DestRoot $destRoot -WarmupTex $CacheWarmupTex -SelfBuilt:$UseSelfBuiltXeTeX.IsPresent
+  Invoke-FontCacheWarmup -DestRoot $destRoot -WarmupTex $CacheWarmupTex
 }
 
-Write-Host "Built mini XeLaTeX tree: $destRoot"
+Write-Host "Built StemTeX runtime: $destRoot"

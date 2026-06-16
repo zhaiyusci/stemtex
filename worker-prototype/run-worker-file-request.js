@@ -29,7 +29,7 @@ if (requestFiles.length === 0) {
 fs.rmSync(outDir, { recursive: true, force: true });
 fs.mkdirSync(outDir, { recursive: true });
 
-const launcher = path.join(runtimeRoot, 'run-xelatex.bat');
+const launcher = path.join(runtimeRoot, 'run-xelatexdaemon.bat');
 const childArgs = [
   '/c',
   launcher,

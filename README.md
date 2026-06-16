@@ -1,11 +1,14 @@
-# xetex-live-worker
+﻿# xetex-live-worker
 
 Experimental Windows XeLaTeX runtime and worker prototype for low-latency
 snippet rendering.
 
+The runtime produced by this repository is called **StemTeX**: a small
+Windows-focused XeLaTeX service runtime for interactive STEM snippets.
+
 The core idea is:
 
-- build or provide a small XeLaTeX runtime tree under `runtime/`;
+- build a small XeLaTeX runtime tree under `stemtex/`;
 - treat fontconfig cache as runtime data;
 - keep one XeTeX process hot with a fixed preamble;
 - patch XeTeX so `-no-pdf` output is flushed after each `\shipout`;
@@ -74,7 +77,9 @@ flush, not the transport protocol.
 
 ```text
 scripts/
-  build-mini-texlive-xetex.ps1    Build the small runtime tree.
+  build-stemtex-runtime.ps1       Build the StemTeX runtime tree.
+  build-tlmgr-texlive-xetexdaemon.ps1
+                                  Build a tlmgr-maintainable service dist.
   build-windows-native.ps1        Build patched W32TeX-style xetex.dll.
 worker-prototype/
   run-single-worker-live-pdf.js   Current live-PDF worker controller.
@@ -92,7 +97,7 @@ docs/
 Generated directories are ignored:
 
 ```text
-runtime/
+stemtex/
 out/
 ptx/
 ktx/
@@ -101,26 +106,83 @@ texlive-source/
 
 ## Build A Small Runtime
 
+There are two runtime layouts.
+
+### StemTeX Runtime
+
 From PowerShell:
 
 ```powershell
-.\scripts\build-mini-texlive-xetex.ps1 -TeXLiveRoot C:\texlive\2026 -Destination .\runtime -Clean
+.\scripts\build-stemtex-runtime.ps1 -TeXLiveRoot C:\texlive\2026 -Destination .\stemtex -Clean
 ```
 
-To use a locally built patched W32TeX-style engine, place the expected source
-trees at the repository root and build first:
+StemTeX always uses the patched daemon engine. Place the expected W32TeX-style
+source/build trees at the repository root and build the engine first:
 
 ```powershell
 .\scripts\build-windows-native.ps1 -Target All -Arch x64
-.\scripts\build-mini-texlive-xetex.ps1 -TeXLiveRoot C:\texlive\2026 -Destination .\runtime -UseSelfBuiltXeTeX -Clean
+.\scripts\build-stemtex-runtime.ps1 -TeXLiveRoot C:\texlive\2026 -Destination .\stemtex -Clean
 ```
+
+The default preamble is aimed at short STEM snippets: `unicode-math`, `xeCJK`,
+`mathtools`, `mhchem`, `physics`, `xcolor`, and `cancel`, using Windows
+text/CJK fonts plus XITS Math.  The runtime tree also carries `siunitx` for
+optional preamble variants, but it is not loaded by default because it conflicts
+with `physics` over `\qty`.
 
 The runtime build warms fontconfig cache with `test\test_5.tex` by default.
 Refresh manually after adding packages/fonts:
 
 ```powershell
-.\runtime\refresh-font-cache.ps1 -Clean
+.\stemtex\refresh-font-cache.ps1 -Clean
 ```
+
+### tlmgr-Maintainable Runtime
+
+If users should be able to install/update TeX Live packages themselves, build a
+portable TeX Live dist with `tlmgr` and keep the patched XeTeX engine as a
+separate overlay named `xetexdaemon`/`xelatexdaemon`.
+
+First build the patched engine:
+
+```powershell
+.\scripts\build-windows-native.ps1 -Target All -Arch x64
+```
+
+Then build the dist:
+
+```powershell
+.\scripts\build-tlmgr-texlive-xetexdaemon.ps1 `
+  -InstallTl C:\path\to\install-tl-windows.bat `
+  -Destination .\dist\stemtex-tlmgr `
+  -Clean
+```
+
+The output layout is:
+
+```text
+dist\stemtex-tlmgr\
+  texlive\                 TeX Live installation managed by tlmgr.
+  patched-bin\windows\     Patched xetexdaemon/xelatexdaemon overlay.
+  renderer-tlmgr.bat       Wrapper for texlive\bin\windows\tlmgr.bat.
+  run-xelatexdaemon.bat      Runs the patched XeTeX service engine.
+  refresh-renderer.ps1     Rebuilds filename DB and warms fontconfig cache.
+```
+
+Users can add packages with:
+
+```powershell
+.\renderer-tlmgr.bat install siunitx
+.\refresh-renderer.ps1 -Clean
+```
+
+Do not put the patched engine under `texlive\bin\windows` as a replacement for
+TeX Live's own `xetex` package. Keeping it under `patched-bin\windows` prevents
+`tlmgr update --all` from overwriting the service engine.
+
+See [docs/DISTRIBUTION_OPTIONS.md](docs/DISTRIBUTION_OPTIONS.md) for the full
+comparison between the trimmed embedded runtime, the `tlmgr`-maintainable
+portable dist, and the overlay-into-user-TeX-Live option.
 
 ## Run The Live Worker
 
@@ -171,7 +233,7 @@ node .\webapp\server.js
 If the runtime is not under `.\runtime`, point the server at it:
 
 ```powershell
-$env:XETEX_RUNTIME="..\mini-rebuild-test"
+$env:XETEX_RUNTIME="..\stemtex"
 node .\webapp\server.js
 ```
 
@@ -196,3 +258,4 @@ See:
 docs\XELATEX_PROFILING_NOTES.md
 docs\WINDOWS_XETEX_BUILD_NOTES.md
 ```
+

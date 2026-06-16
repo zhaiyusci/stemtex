@@ -276,12 +276,12 @@ function Build-Launchers {
   param([string]$Root)
 
   $dir = Join-Path $Root "ktx\texk\calldll"
-  Invoke-Native -FilePath "nmake.exe" -Arguments @("/f", "Makefile", "xetex.exe") -WorkingDirectory $dir
-  $xetex = Join-Path $dir "xetex.exe"
-  $xelatex = Join-Path $dir "xelatex.exe"
-  Copy-Item -LiteralPath $xetex -Destination $xelatex -Force
-  Write-Host "Built $xetex"
-  Write-Host "Copied $xelatex"
+  Invoke-GnuMake -Root $Root -Directory $dir -Targets @("xetexdaemon.exe")
+  $launcher = Join-Path $dir "xetexdaemon.exe"
+  if (-not (Test-Path -LiteralPath $launcher)) {
+    throw "Launcher build completed but output was not found: $launcher"
+  }
+  Write-Host "Built $launcher"
 }
 
 $root = Resolve-RepoPath $SourceRoot

@@ -176,7 +176,7 @@ async function main() {
   const workerTex = readOption('--worker', 'worker-file-request-prototype.tex');
   const cumulativePdf = args.includes('--cumulative');
   const pdfMode = cumulativePdf ? 'cumulative' : 'latest-page';
-  const launcher = path.join(runtimeRoot, 'run-xelatex.bat');
+  const launcher = path.join(runtimeRoot, 'run-xelatexdaemon.bat');
   const xdvipdfmx = path.join(runtimeRoot, 'bin', 'windows', 'xdvipdfmx.exe');
   const jobBaseName = xdvJobBaseName(workerTex);
   const requestFiles = fs.readdirSync(requestsDir)

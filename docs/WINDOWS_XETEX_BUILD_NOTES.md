@@ -86,13 +86,14 @@ ptx\texk\make\paths.mk
 This satisfies a dependency in the local Windows web2c makefiles.  The XeTeX
 build path here does not require variables from that file.
 
-## Small Runtime Tree
+## StemTeX Runtime Tree
 
-The small runtime tree is:
+The current trimmed runtime is called StemTeX:
 
 ```text
-runtime\
-  run-xelatex.bat
+stemtex\
+  run-xelatexdaemon.bat
+  refresh-font-cache.ps1
   bin\windows\
   texmf-dist\
   texmf-var\
@@ -101,14 +102,15 @@ runtime\
 `bin\windows` contains the engine/launcher/runtime DLL layer:
 
 ```text
-xetex.exe
-xelatex.exe
-xetex.dll
+xetexdaemon.exe
+xetexdaemon.dll
+xelatexdaemon.bat
 xdvipdfmx.exe
 dvipdfmx.dll
 kpsewhich.exe
 kpathsealibw64.dll
-icudt*.dll or icu-data\icudt76l.dat
+icudt76.dll
+icu-data\icudt76l.dat
 VC runtime DLLs
 ```
 
@@ -119,9 +121,9 @@ web2c\texmf.cnf
 web2c\fmtutil.cnf
 tex\latex\...
 tex\xelatex\xecjk\...
-fonts\opentype\public\fandol\...
-fonts\opentype\public\lm\...
-fonts\opentype\public\lm-math\...
+fonts\opentype\public\xits\...
+fonts\opentype\public\lm\...      minimal text-font compatibility files
+fonts\tfm\public\cm\...
 dvipdfmx\dvipdfmx.cfg
 ```
 
@@ -133,38 +135,39 @@ fonts\conf\fonts.conf
 fonts\cache\...
 ```
 
-The existing `runtime` tree is assembled as a runtime, not as source.
-It can run XeLaTeX documents, but its original `xetex.dll` came from TeX Live.
-To test the self-built DLL, either replace the DLL in the tree or put
-`ptx\texk\web2c` first in `PATH`.
+The StemTeX tree is assembled as a runtime, not as source.  It always uses the
+patched daemon engine: `xetexdaemon.exe` loads `xetexdaemon.dll`.  The shipped
+runtime intentionally does not include `xetex.exe`, `xelatex.exe`, or
+`xetex.dll`.
 
-## Rebuilding The Small Runtime Tree
+## Rebuilding The StemTeX Runtime Tree
 
-A script was added for rebuilding a small runtime tree:
+Build the patched engine first, then assemble StemTeX:
 
 ```powershell
-.\scripts\build-mini-texlive-xetex.ps1 -Destination .\runtime -UseSelfBuiltXeTeX -Clean
+.\scripts\build-windows-native.ps1 -Target All -Arch x64
+.\scripts\build-stemtex-runtime.ps1 -Destination .\stemtex -Clean
 ```
 
 Parameters:
 
 ```text
 -TeXLiveRoot        full TeX Live root, for example C:\texlive\2026
--Destination        output runtime tree
+-Destination        output StemTeX tree
 -SourceRoot         this workspace root
--UseSelfBuiltXeTeX  copy ptx-built xetex.dll and matching launchers
+-CacheWarmupTex     warmup document, defaulting to test\test_5.tex
+-SkipFontCacheWarmup
 -Clean              delete destination before rebuilding
 ```
 
 Without `-TeXLiveRoot`, the script tries `$env:TEXLIVE_ROOT`, then
 `kpsewhich -var-value=TEXMFROOT`.
 
-With `-UseSelfBuiltXeTeX`, the script copies:
+The script copies:
 
 ```text
-ptx\texk\web2c\xetex.dll
-ktx\texk\calldll\xetex.exe
-ktx\texk\calldll\xelatex.exe
+ptx\texk\web2c\xetex.dll              -> bin\windows\xetexdaemon.dll
+ktx\texk\calldll\xetexdaemon.exe      -> bin\windows\xetexdaemon.exe
 ptx\libs\icu-src\source\data\in\icudt76l.dat
 ptx\libs\icu-src\bin64\icudt76.dll
 ```
@@ -190,13 +193,13 @@ Fatal format file error; I'm stymied
 made by different executable version, strings are different
 ```
 
-The fix is to dump a new format using the same `xetex.dll` that will run it.
-The small-tree build script does this automatically.
+The fix is to dump a new format using the same daemon engine that will run it.
+The StemTeX build script does this automatically.
 
 The manual equivalent is:
 
 ```powershell
-xelatex.exe -ini -etex -jobname=xelatex xelatex.ini
+xetexdaemon.exe -ini -etex -jobname=xelatex xelatex.ini
 ```
 
 Make sure `TEXFORMATS` points to the directory where the new
@@ -262,16 +265,16 @@ selfbuild-test\
 
 ## Current Caveats
 
-The small runtime script is intentionally conservative: it copies a selected
+The StemTeX runtime script is intentionally conservative: it copies a selected
 set of packages and fonts known to cover the current tests.  If a new document
 uses more packages or fonts, add the corresponding directories/files to
-`scripts\build-mini-texlive-xetex.ps1`.
+`scripts\build-stemtex-runtime.ps1`.
 
-The mini-tree build script now prepends a runtime override block to
+The StemTeX build script prepends a runtime override block to
 `texmf-dist\web2c\texmf.cnf`.  This removes the full TeX Live `!!` database-only
 assumptions and makes package lookup relative to the small tree itself.  The
-script was verified by rebuilding the runtime tree and running `test_4.tex`
-through that tree's own `run-xelatex.bat`.
+script was verified by rebuilding the runtime tree and running documents
+through that tree's own `run-xelatexdaemon.bat`.
 
 The script also warms the fontconfig cache during the build.  By default it
 uses:
@@ -281,14 +284,15 @@ test\test_5.tex
 ```
 
 as the warmup document, because that document exercises the intended fixed
-preamble, including `mhchem`, `physics`, and `xcolor`.  The warmup run does not
+preamble, including `mathtools`, `mhchem`, `physics`, `xcolor`, and `cancel`.
+The warmup run does not
 use `--no-font-cache-refresh`, so cache files are written under:
 
 ```text
 texmf-var\fonts\cache
 ```
 
-The generated `run-xelatex.bat` still uses `--no-font-cache-refresh` for normal
+The generated `run-xelatexdaemon.bat` uses `--no-font-cache-refresh` for normal
 runtime execution.
 
 ## Manual Font Cache Refresh
@@ -328,14 +332,14 @@ The script can also take a custom warmup document:
 Use this after adding fonts, changing fontconfig configuration, or extending the
 default package/font set in a way that should be exercised before normal
 runtime calls.  Normal document compilation should continue to use
-`run-xelatex.bat`, which keeps cache refresh disabled.
+`run-xelatexdaemon.bat`, which keeps cache refresh disabled.
 
 Do not confuse the three layers:
 
 ```text
-xetex.dll       real engine
-xetex.exe       launcher
-xelatex.fmt     preloaded LaTeX format tied to the engine build
+xetexdaemon.dll   real engine, copied from the patched xetex.dll build output
+xetexdaemon.exe   launcher that loads the same-basename DLL
+xelatex.fmt       preloaded LaTeX format tied to the engine build
 ```
 
 When changing XeTeX source, rebuild `xetex.dll` and redump `xelatex.fmt`.

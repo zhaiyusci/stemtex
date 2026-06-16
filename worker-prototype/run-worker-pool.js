@@ -31,7 +31,7 @@ const requestsDir = path.resolve(repoRoot, readOption('--requests', 'worker-prot
 const workerTex = readOption('--worker', 'worker-prototype/worker-file-request-once.tex');
 const poolSize = readNumber('--pool-size', 5);
 const spacingMs = readNumber('--spacing-ms', 0);
-const launcher = path.join(runtimeRoot, 'run-xelatex.bat');
+const launcher = path.join(runtimeRoot, 'run-xelatexdaemon.bat');
 
 const requestFiles = fs.readdirSync(requestsDir)
   .filter((name) => /^req\d+\.tex$/.test(name))
