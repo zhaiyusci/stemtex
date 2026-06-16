@@ -15,6 +15,8 @@ typedef struct StemTeXConfig {
   const char *runtime_root_utf8;
   const char *state_root_utf8;
   const char *renders_root_utf8;
+  /* 0 means the default hot spare count. Positive values are clamped internally. */
+  int spare_worker_count;
 } StemTeXConfig;
 
 typedef struct StemTeXRenderResult {

@@ -17,6 +17,7 @@ int main(int argc, char **argv) {
   cfg.runtime_root_utf8 = argc > 2 ? argv[2] : nullptr;
   int runs = argc > 3 ? std::atoi(argv[3]) : 1;
   std::string case_name = argc > 4 ? argv[4] : "";
+  cfg.spare_worker_count = argc > 5 ? std::atoi(argv[5]) : 1;
   if (runs <= 0) runs = 1;
 
   char *error = nullptr;

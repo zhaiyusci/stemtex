@@ -125,6 +125,7 @@ typedef struct StemTeXConfig {
   const char *runtime_root_utf8;
   const char *state_root_utf8;
   const char *renders_root_utf8;
+  int spare_worker_count;
 } StemTeXConfig;
 ```
 

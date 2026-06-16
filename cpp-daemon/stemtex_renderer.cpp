@@ -378,6 +378,7 @@ struct RendererConfig {
   fs::path runtime_root;
   fs::path state_root;
   fs::path renders_root;
+  int spare_worker_count = 1;
 };
 
 std::string installed_warmup_body(const RendererConfig &cfg) {
@@ -646,6 +647,11 @@ int clamp_width(int width) {
   return std::max(180, std::min(430, width));
 }
 
+int normalize_spare_worker_count(int count) {
+  if (count <= 0) return 1;
+  return std::min(4, count);
+}
+
 }  // namespace
 
 struct StemTeXRenderer {
@@ -746,7 +752,9 @@ struct StemTeXRenderer {
     shutting_down = true;
     join_spare_builder();
     if (primary) primary->child.stop();
-    if (spare) spare->child.stop();
+    for (auto &slot : spares) {
+      if (slot) slot->child.stop();
+    }
   }
 
   void join_spare_builder() {
@@ -754,44 +762,81 @@ struct StemTeXRenderer {
   }
 
   void schedule_spare_rebuild_locked() {
-    if (shutting_down || spare_rebuilding) return;
+    if (shutting_down || spare_rebuilding || (int)spares.size() >= cfg.spare_worker_count) return;
     if (spare_builder.joinable()) spare_builder.join();
     spare_rebuilding = true;
     spare_builder = std::thread([this]() {
-      std::unique_ptr<WorkerSlot> built;
-      try {
-        built = create_ready_worker("spare");
-      } catch (...) {
+      while (true) {
+        int slot_index = 0;
+        {
+          std::lock_guard<std::mutex> lock(render_mu);
+          if (shutting_down || (int)spares.size() >= cfg.spare_worker_count) {
+            spare_rebuilding = false;
+            return;
+          }
+          slot_index = next_spare_index++;
+        }
+
+        std::unique_ptr<WorkerSlot> built;
+        try {
+          built = create_ready_worker("spare-" + std::to_string(slot_index));
+        } catch (...) {
+        }
+
+        std::lock_guard<std::mutex> lock(render_mu);
+        if (shutting_down) {
+          spare_rebuilding = false;
+          return;
+        }
+        if (built && (int)spares.size() < cfg.spare_worker_count) {
+          spares.push_back(std::move(built));
+        }
       }
-      std::lock_guard<std::mutex> lock(render_mu);
-      if (!shutting_down && built) {
-        if (spare) spare->child.stop();
-        spare = std::move(built);
-      }
-      spare_rebuilding = false;
     });
   }
 
   void promote_spare_locked() {
     if (primary) primary->child.stop();
-    if (spare && spare->child.is_running()) {
-      primary = std::move(spare);
-      primary->name = "primary";
-      schedule_spare_rebuild_locked();
-      return;
+    while (!spares.empty()) {
+      auto candidate = std::move(spares.back());
+      spares.pop_back();
+      if (candidate && candidate->child.is_running()) {
+        primary = std::move(candidate);
+        primary->name = "primary";
+        schedule_spare_rebuild_locked();
+        return;
+      }
     }
     primary.reset();
     schedule_spare_rebuild_locked();
   }
 
+  bool promote_if_available_locked() {
+    while (!spares.empty()) {
+      auto candidate = std::move(spares.back());
+      spares.pop_back();
+      if (candidate && candidate->child.is_running()) {
+        primary = std::move(candidate);
+        primary->name = "primary";
+        schedule_spare_rebuild_locked();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  int spare_ready_count_locked() const {
+    int count = 0;
+    for (const auto &slot : spares) {
+      if (slot && slot->child.is_running()) ++count;
+    }
+    return count;
+  }
+
   StemTeXRenderResult render(const std::string &snippet, int width_pt) {
     std::lock_guard<std::mutex> render_lock(render_mu);
     if (!primary || !primary->child.is_running()) {
-      if (spare && spare->child.is_running()) {
-        primary = std::move(spare);
-        primary->name = "primary";
-        schedule_spare_rebuild_locked();
-      } else {
+      if (!promote_if_available_locked()) {
         primary = create_ready_worker("primary");
         schedule_spare_rebuild_locked();
       }
@@ -872,7 +917,8 @@ struct StemTeXRenderer {
             << "\"pdfBytes\":" << fs::file_size(pdf_path) << ","
             << "\"workerRequest\":" << request_no << ","
             << "\"workerSlot\":\"" << json_escape(slot.name) << "\","
-            << "\"spareReady\":" << ((spare && spare->child.is_running()) ? "true" : "false") << ","
+            << "\"spareReady\":" << spare_ready_count_locked() << ","
+            << "\"spareTarget\":" << cfg.spare_worker_count << ","
             << "\"spareRebuilding\":" << (spare_rebuilding ? "true" : "false")
             << "}";
     write_text_file(render_dir / "out" / "summary.json", summary.str() + "\n");
@@ -889,10 +935,11 @@ struct StemTeXRenderer {
   std::vector<wchar_t> worker_env;
   std::mutex render_mu;
   std::unique_ptr<WorkerSlot> primary;
-  std::unique_ptr<WorkerSlot> spare;
+  std::vector<std::unique_ptr<WorkerSlot>> spares;
   std::thread spare_builder;
   bool spare_rebuilding = false;
   bool shutting_down = false;
+  int next_spare_index = 0;
 };
 
 extern "C" {
@@ -912,6 +959,7 @@ STEMTEX_API StemTeXRenderer *stemtex_renderer_create(const StemTeXConfig *config
     cfg.renders_root = config && config->renders_root_utf8 && *config->renders_root_utf8
                            ? fs::absolute(config->renders_root_utf8)
                            : cfg.repo_root / "out" / "cpp-renderer-renders";
+    cfg.spare_worker_count = config ? normalize_spare_worker_count(config->spare_worker_count) : 1;
     fs::create_directories(cfg.state_root);
     fs::create_directories(cfg.renders_root);
     if (!fs::exists(cfg.runtime_root / "run-xelatexdaemon.bat")) {

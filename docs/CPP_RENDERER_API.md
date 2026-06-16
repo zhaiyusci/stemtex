@@ -23,10 +23,11 @@ cpp-daemon/stemtex_renderer.h
 
 ## Runtime Model
 
-`stemtex-renderer.dll` owns two live XeTeX worker processes:
+`stemtex-renderer.dll` owns one primary XeTeX worker plus a configurable number
+of hot spare workers:
 
 - `primary`: handles normal render requests.
-- `spare`: stays hot as an immediate failover target.
+- `spare-N`: stays hot as an immediate failover target.
 
 On create, it:
 
@@ -36,12 +37,12 @@ On create, it:
 3. Falls back to running a warmup worker with `cache-warmup/warmup.tex` only if
    that cached XDV is missing or unreadable.
 4. Starts and primes a primary live worker.
-5. Starts building a spare live worker in the background.
+5. Starts building spare live workers in the background.
 
-The primary and spare workers are initialized serially for now. `create` returns
-after the primary worker is ready; the spare is then built asynchronously. This
-avoids parallel XeTeX font/loading contention while also avoiding a longer
-foreground create path.
+`create` returns after the primary worker is ready. Spare workers are then built
+asynchronously, so increasing the spare count does not lengthen the foreground
+create path. This also avoids parallel XeTeX font/loading contention during the
+critical user-visible path.
 
 The fixed preamble currently uses native/OpenType fonts through `fontspec`,
 `xeCJK`, and `unicode-math`. XeTeX refuses to dump a format after native fonts or
@@ -77,6 +78,7 @@ typedef struct StemTeXConfig {
   const char *runtime_root_utf8;
   const char *state_root_utf8;
   const char *renders_root_utf8;
+  int spare_worker_count;
 } StemTeXConfig;
 ```
 
@@ -89,6 +91,9 @@ Fields:
   uses `out/cpp-renderer-state` under the repo root.
 - `renders_root_utf8`: optional render output directory. If null, the renderer
   uses `out/cpp-renderer-renders` under the repo root.
+- `spare_worker_count`: number of hot spare workers to maintain. `0` means the
+  default, currently `1`. Positive values are clamped internally; the current
+  maximum is `4`.
 
 Create a renderer:
 
@@ -195,7 +200,8 @@ If `width_pt <= 0`, the renderer uses `360pt`.
   "pdfBytes": 26111,
   "workerRequest": 2,
   "workerSlot": "primary",
-  "spareReady": true,
+  "spareReady": 1,
+  "spareTarget": 1,
   "spareRebuilding": false
 }
 ```
@@ -219,11 +225,11 @@ not receive `WORKER_DONE:N`, returns failure from `stemtex_renderer_render`, and
 includes the recent TeX output tail in `error_utf8`.
 
 After a primary worker failure or request timeout, the renderer immediately
-promotes the hot spare to primary and schedules a new spare in the background.
-The failing request still fails, but the next request can use the promoted worker
-without paying cold-start cost.
+promotes a hot spare to primary and schedules replacement spares in the
+background. The failing request still fails, but the next request can use the
+promoted worker without paying cold-start cost.
 
-If both primary and spare are unavailable, the renderer falls back to creating a
+If primary and all spares are unavailable, the renderer falls back to creating a
 new primary synchronously. That is the degraded path and can pay cold-start
 latency.
 
