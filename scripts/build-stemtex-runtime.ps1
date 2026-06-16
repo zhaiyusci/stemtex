@@ -8,6 +8,13 @@
 )
 
 $ErrorActionPreference = "Stop"
+$scriptRoot = Split-Path -Parent $PSScriptRoot
+$stemTeXVersionFile = Join-Path $scriptRoot "VERSION"
+$stemTeXVersion = if (Test-Path -LiteralPath $stemTeXVersionFile) {
+  (Get-Content -LiteralPath $stemTeXVersionFile -TotalCount 1).Trim()
+} else {
+  "0.1.0"
+}
 
 function Resolve-ExistingPath {
   param([string]$Path, [string]$Name)
@@ -119,7 +126,22 @@ function Write-CacheWarmupTemplate {
 
 \begin{document}
 中文缓存预热，标点测试：，。！？；：“”
-$\symbf{\alpha}$ \ce{H2O} \color{blue} $\ip{1}{0}$ $\cancel{x}$
+English warmup: Times New Roman, \textsf{Arial}, \texttt{Consolas}.
+
+\[
+  \symbf{\alpha}+\symcal{F}(x)=
+  \begin{cases}
+    x^2, & x \ge 0,\\
+    -x,  & x < 0,
+  \end{cases}
+  \qquad
+  \ip{\psi}{\phi}
+\]
+
+{\color{blue}$\ce{2H2 + O2 -> 2H2O}$}
+\[
+  \cancel{x+y} \quad \dv{x} \sin x = \cos x
+\]
 \end{document}
 '@
 
@@ -145,6 +167,38 @@ $fmtDir = Join-Path $RuntimeRoot "texmf-var\web2c\xetex"
 $cacheDir = Join-Path $RuntimeRoot "texmf-var\fonts\cache"
 $confDir = Join-Path $RuntimeRoot "texmf-var\fonts\conf"
 
+function Write-FontconfigForRuntime {
+  param([string]$Root)
+
+  $rootForXml = $Root.Replace("\", "/")
+  $configDir = Join-Path $Root "texmf-var\fonts\conf"
+  New-Item -ItemType Directory -Force -Path (Join-Path $configDir "conf.d") | Out-Null
+
+  $fontsConf = @"
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <dir>C:/Windows/fonts</dir>
+  <dir>$rootForXml/texmf-dist/fonts/opentype</dir>
+  <dir>$rootForXml/texmf-dist/fonts/truetype</dir>
+  <cachedir>$rootForXml/texmf-var/fonts/cache</cachedir>
+  <include ignore_missing="yes">conf.d</include>
+  <config>
+    <rescan><int>30</int></rescan>
+  </config>
+</fontconfig>
+"@
+  Set-Content -LiteralPath (Join-Path $configDir "fonts.conf") -Value $fontsConf -Encoding utf8
+
+  $localConf = @"
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+</fontconfig>
+"@
+  Set-Content -LiteralPath (Join-Path $configDir "conf.d\51-local.conf") -Value $localConf -Encoding utf8
+}
+
 if (-not (Test-Path -LiteralPath $launcher)) {
   throw "xetexdaemon.exe not found under runtime root: $RuntimeRoot"
 }
@@ -164,6 +218,7 @@ if ($Clean -and (Test-Path -LiteralPath $cacheDir)) {
   Remove-Item -LiteralPath $cacheDir -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $cacheDir, $OutputDirectory | Out-Null
+Write-FontconfigForRuntime -Root $RuntimeRoot
 
 $savedEnv = @{}
 foreach ($name in @(
@@ -534,6 +589,7 @@ foreach ($dir in $texmfDirs) {
 }
 
 New-Item -ItemType Directory -Force -Path (Join-Path $destRoot "texmf-var\fonts\cache") | Out-Null
+Set-Content -LiteralPath (Join-Path $destRoot "VERSION") -Value $stemTeXVersion -Encoding ascii
 Write-Fontconfig -DestRoot $destRoot
 Build-Format -TlRoot $tlRoot -DestRoot $destRoot -RepoRoot $repoRoot
 Write-RunScript -DestRoot $destRoot
@@ -543,4 +599,4 @@ if (-not $SkipFontCacheWarmup) {
   Invoke-FontCacheWarmup -DestRoot $destRoot -WarmupTex $CacheWarmupTex
 }
 
-Write-Host "Built StemTeX runtime: $destRoot"
+Write-Host "Built StemTeX runtime $stemTeXVersion`: $destRoot"

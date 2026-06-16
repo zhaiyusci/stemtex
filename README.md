@@ -5,6 +5,7 @@ snippet rendering.
 
 The runtime produced by this repository is called **StemTeX**: a small
 Windows-focused XeLaTeX service runtime for interactive STEM snippets.
+The current StemTeX small-tree version is `0.1.0`.
 
 The core idea is:
 
