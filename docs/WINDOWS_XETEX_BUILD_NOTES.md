@@ -10,6 +10,110 @@ The source build lives under `ptx`.  The small runtime tree lives under
 
 ## Native XeTeX Build
 
+### TeX Live upstream xetex.exe experiment
+
+The TeX Live upstream source experiment builds only the XeTeX executable target
+with MSYS2 UCRT64/MinGW:
+
+```sh
+JOBS=16 scripts/build-texlive-xetex-ucrt64.sh
+```
+
+Defaults:
+
+```text
+TL_SRC     ../texlive-source
+BUILD_DIR  ../tlbuild-xetex-ucrt64-mingw
+JOBS       16
+CLEAN      0
+USE_GENERATED 1
+USE_PREBUILT_LIBS 1
+```
+
+Use a clean build directory when needed:
+
+```sh
+CLEAN=1 JOBS=16 scripts/build-texlive-xetex-ucrt64.sh
+```
+
+The script seeds generated web2c outputs from:
+
+```text
+texlive-xetex\web2c
+```
+
+This skips the `tie`/`otangle`/`web2c convert` literate-programming step during
+normal builds. To force regeneration from the original WEB/CWEB files:
+
+```sh
+USE_GENERATED=0 JOBS=16 scripts/build-texlive-xetex-ucrt64.sh
+```
+
+The script also seeds UCRT64 static libraries and generated dependency headers
+from:
+
+```text
+texlive-xetex\prebuilt-ucrt64
+```
+
+This avoids rebuilding `kpathsea`, `ptexenc`, `teckit`, `pplib`, and the small
+web2c support libraries in ordinary rebuilds. To force rebuilding them:
+
+```sh
+USE_PREBUILT_LIBS=0 JOBS=16 scripts/build-texlive-xetex-ucrt64.sh
+```
+
+The script configures TeX Live with:
+
+```text
+--build=x86_64-w64-mingw32
+--host=x86_64-w64-mingw32
+--disable-all-pkgs
+--enable-web2c
+--enable-xetex
+--disable-xetex-synctex
+```
+
+It uses system MSYS2 UCRT libraries for zlib, libpng, freetype2, ICU, graphite2,
+and HarfBuzz. It builds only the internal pieces XeTeX still needs from the TeX
+Live tree:
+
+```text
+texk/kpathsea
+texk/ptexenc
+libs/teckit
+libs/pplib
+texk/web2c target xetex.exe
+```
+
+The output is:
+
+```text
+..\tlbuild-xetex-ucrt64-mingw\texk\web2c\xetex.exe
+```
+
+Two Windows-native build details matter:
+
+- build the real target `xetex.exe`, not bare `xetex`, because GNU make can
+  otherwise choose its built-in Pascal rule;
+- the generated `texk/web2c/Makefile` contains Unix path lists such as
+  `WEBINPUTS=.:$(srcdir)`, but the generated tools are native Windows
+  executables. The script patches the build-directory Makefile to quote
+  semicolon-separated `WEBINPUTS` values.
+
+The upstream web2c bootstrap rules may try to update these source files:
+
+```text
+texk/web2c/tangleboot.pin
+texk/web2c/ctangleboot.cin
+texk/web2c/cwebboot.cin
+```
+
+The script backs them up before the build and restores them afterward if the
+build touched them.
+
+### W32TeX xetexdaemon.dll build
+
 The native build script is:
 
 ```powershell
