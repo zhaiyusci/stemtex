@@ -1,0 +1,21 @@
+# Packages installed on top of scheme-infraonly for a tlmgr-managed StemTeX root.
+# Keep this list modest. Users can run tlmgr install later for extra packages.
+amsfonts
+amsmath
+cancel
+ctablestack
+dehyph-exptl
+fontspec
+latex
+latex-bin
+latexconfig
+mathtools
+mhchem
+physics
+siunitx
+tools
+unicode-math
+xcolor
+xecjk
+xetex
+xetexconfig

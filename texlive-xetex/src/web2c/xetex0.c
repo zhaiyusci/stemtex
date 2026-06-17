@@ -19069,6 +19069,29 @@ zshipout ( halfword p )
   if ( ! nopdfoutput ) 
   fflush ( dvifile ) ;
 	;
+  if ( ipcon == 3 ) 
+  {
+    if ( dvilimit == halfbuf ) 
+    {
+      writedvi ( halfbuf , dvibufsize - 1 ) ;
+      flushdvi () ;
+      dvigone = dvigone + halfbuf ;
+    } 
+    if ( dviptr > ( 2147483647L - dvioffset ) ) 
+    {
+      curs = -2 ;
+      fatalerror ( 66226L ) ;
+    } 
+    if ( dviptr > 0 ) 
+    {
+      writedvi ( 0 , dviptr - 1 ) ;
+      flushdvi () ;
+      dvioffset = dvioffset + dviptr ;
+      dvigone = dvigone + dviptr ;
+    } 
+    dviptr = 0 ;
+    dvilimit = dvibufsize ;
+  } 
 #ifdef IPC
   if ( ipcon > 0 ) 
   {

@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/icons">
+    <file alias="stemtex-renderer-gui.png">assets/stemtex-renderer-gui-256.png</file>
+  </qresource>
+</RCC>

@@ -30,11 +30,34 @@
 #endif
 #include <time.h> /* For `struct tm'.  Moved here for Visual Studio 2005.  */
 
+#ifdef _MSC_VER
+#include <winsock2.h>
+#include <windows.h>
+
+static int
+gettimeofday(struct timeval *tv, void *tz)
+{
+  FILETIME ft;
+  unsigned long long ticks;
+  (void)tz;
+  GetSystemTimeAsFileTime(&ft);
+  ticks = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+  ticks -= 116444736000000000ULL;
+  tv->tv_sec = (long)(ticks / 10000000ULL);
+  tv->tv_usec = (long)((ticks % 10000000ULL) / 10ULL);
+  return 0;
+}
+#endif
+
 #if defined(__STDC__)
 #include <locale.h>
 #endif
 
 #include <signal.h> /* Catch interrupts.  */
+
+#ifndef __GNUC__
+#define __attribute__(x)
+#endif
 
 #include <texmfmp-help.h>
 
@@ -727,6 +750,7 @@ runpopen (char *cmd, const char *mode)
 
 #ifdef XeTeX
 #include "xetexdir/XeTeX_ext.h"
+int xetex_no_font_cache_refresh = 0;
 #endif
 
 /* What we were invoked as and with.  */
@@ -1851,6 +1875,8 @@ static struct option long_options[]
 #endif /* !Aleph */
 #if defined(XeTeX)
       { "no-pdf",                    0, &nopdfoutput, 1 },
+      { "flush-output-on-shipout",   0, &ipcon, 3 },
+      { "no-font-cache-refresh",     0, &xetex_no_font_cache_refresh, 1 },
       { "output-driver",             1, 0, 0 },
       { "papersize",                 1, 0, 0 },
 #endif /* XeTeX */

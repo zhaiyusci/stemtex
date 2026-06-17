@@ -4,13 +4,15 @@ This workspace has two related but separate pieces:
 
 - a native Windows build of XeTeX from source, producing `xetex.dll`;
 - a small XeLaTeX runtime tree, enough to run the current test documents.
+- a standalone upstream TeX Live source bundle under `texlive-xetex`, built from
+  generated/ordinary C and C++ sources without repeating WEB/CWEB conversion.
 
 The source build lives under `ptx`.  The small runtime tree lives under
 `runtime`.
 
 ## Native XeTeX Build
 
-### TeX Live upstream xetex.exe experiment
+### TeX Live upstream standalone experiment
 
 The TeX Live upstream source experiment builds only the XeTeX executable target
 with MSYS2 UCRT64/MinGW:
@@ -28,6 +30,32 @@ JOBS       16
 CLEAN      0
 USE_GENERATED 1
 USE_PREBUILT_LIBS 1
+```
+
+The top-level standalone bundle builds directly from the copied/generated
+sources and outputs TeX Live Windows style DLL-backed wrappers for both the
+engine and converter:
+
+```sh
+cd texlive-xetex
+JOBS=16 ./build-standalone-ucrt64.sh
+```
+
+```text
+texlive-xetex\out\standalone-ucrt64\xetex.dll
+texlive-xetex\out\standalone-ucrt64\xetex.exe
+texlive-xetex\out\standalone-ucrt64\dvipdfmxdaemon.dll
+texlive-xetex\out\standalone-ucrt64\xdvipdfmxdaemon.exe
+```
+
+The `xdvipdfmx.exe` path uses ordinary `texk/dvipdfm-x` C sources plus the
+small `libpaper` C sources. It does not involve WEB/CWEB conversion.
+
+The wrappers follow the same import pattern as `C:\texlive\2026\bin\windows`:
+
+```text
+xetex.exe     imports xetex.dll:dllxetexmain
+xdvipdfmxdaemon.exe imports dvipdfmxdaemon.dll:dlldvipdfmxmain
 ```
 
 Use a clean build directory when needed:
@@ -209,8 +237,8 @@ stemtex\
 xetexdaemon.exe
 xetexdaemon.dll
 xelatexdaemon.bat
-xdvipdfmx.exe
-dvipdfmx.dll
+xdvipdfmxdaemon.exe
+dvipdfmxdaemon.dll
 kpsewhich.exe
 kpathsealibw64.dll
 icudt76.dll

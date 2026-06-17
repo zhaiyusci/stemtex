@@ -152,7 +152,7 @@ const uint32_t byteMark             = 0x00000080UL;
 
 /* if the user specifies a paper size or output driver program */
 const char *papersize;
-const char *outputdriver = "xdvipdfmx -q -E"; /* default to portable xdvipdfmx driver */
+const char *outputdriver = "xdvipdfmxdaemon -q -E"; /* default to StemTeX patched XDV-to-PDF driver */
 
 
 void initversionstring(char **versions)

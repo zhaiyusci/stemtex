@@ -1,0 +1,34 @@
+\input{@@STEMTEX_PREAMBLE@@}
+\newcount\snippetcount
+\def\workerstopline{\workerstop}
+\pagestyle{empty}
+\begin{document}
+\typeout{WORKER_READY}
+\def\workerloop{%
+  \advance\snippetcount by 1
+  \typeout{WORKER_WAIT:\the\snippetcount}%
+  \read16 to\snippetHsize
+  \ifx\snippetHsize\workerstopline
+    \typeout{WORKER_STOPPED}%
+  \else
+    \read16 to\requestfile
+    \shipout\vbox{%
+      \hsize=\snippetHsize
+      \parindent=0pt
+      \begingroup
+        \setcounter{page}{1}%
+        \setcounter{equation}{0}%
+        \setcounter{footnote}{0}%
+        \normalfont\normalsize\normalcolor
+        \scrollmode
+        \input\requestfile
+        \par
+        \errorstopmode
+      \endgroup
+    }%
+    \typeout{WORKER_DONE:\the\snippetcount}%
+    \workerloop
+  \fi
+}
+\workerloop
+\end{document}

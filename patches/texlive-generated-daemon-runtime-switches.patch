@@ -1,0 +1,108 @@
+diff --git a/texlive-xetex/src/web2c/lib/texmfmp.c b/texlive-xetex/src/web2c/lib/texmfmp.c
+index d7d4d25..85a2444 100644
+--- a/texlive-xetex/src/web2c/lib/texmfmp.c
++++ b/texlive-xetex/src/web2c/lib/texmfmp.c
+@@ -727,6 +727,7 @@ runpopen (char *cmd, const char *mode)
+ 
+ #ifdef XeTeX
+ #include "xetexdir/XeTeX_ext.h"
++int xetex_no_font_cache_refresh = 0;
+ #endif
+ 
+ /* What we were invoked as and with.  */
+@@ -1851,6 +1852,8 @@ static struct option long_options[]
+ #endif /* !Aleph */
+ #if defined(XeTeX)
+       { "no-pdf",                    0, &nopdfoutput, 1 },
++      { "flush-output-on-shipout",   0, &ipcon, 3 },
++      { "no-font-cache-refresh",     0, &xetex_no_font_cache_refresh, 1 },
+       { "output-driver",             1, 0, 0 },
+       { "papersize",                 1, 0, 0 },
+ #endif /* XeTeX */
+diff --git a/texlive-xetex/src/web2c/texmfmp-help.h b/texlive-xetex/src/web2c/texmfmp-help.h
+index c67e81b..7930fbb 100644
+--- a/texlive-xetex/src/web2c/texmfmp-help.h
++++ b/texlive-xetex/src/web2c/texmfmp-help.h
+@@ -569,6 +569,8 @@ const_string XETEXHELP[] = {
+     "-output-directory=DIR   use existing DIR as the directory to write files in",
+     "-output-driver=CMD      use CMD as the XDV-to-PDF driver instead of xdvipdfmx",
+     "-no-pdf                 generate XDV (extended DVI) output rather than PDF",
++    "-flush-output-on-shipout flush XDV/PDF output after each \\shipout",
++    "-no-font-cache-refresh  use existing fontconfig caches only",
+     "[-no]-parse-first-line  disable/enable parsing of first line of input file",
+     "-papersize=STRING       set PDF media size to STRING",
+     "-progname=STRING        set program (and fmt) name to STRING",
+diff --git a/texlive-xetex/src/web2c/xetex0.c b/texlive-xetex/src/web2c/xetex0.c
+index 485105d..89f4b0d 100644
+--- a/texlive-xetex/src/web2c/xetex0.c
++++ b/texlive-xetex/src/web2c/xetex0.c
+@@ -19069,6 +19069,29 @@ zshipout ( halfword p )
+   if ( ! nopdfoutput ) 
+   fflush ( dvifile ) ;
+ 	;
++  if ( ipcon == 3 ) 
++  {
++    if ( dvilimit == halfbuf ) 
++    {
++      writedvi ( halfbuf , dvibufsize - 1 ) ;
++      flushdvi () ;
++      dvigone = dvigone + halfbuf ;
++    } 
++    if ( dviptr > ( 2147483647L - dvioffset ) ) 
++    {
++      curs = -2 ;
++      fatalerror ( 66226L ) ;
++    } 
++    if ( dviptr > 0 ) 
++    {
++      writedvi ( 0 , dviptr - 1 ) ;
++      flushdvi () ;
++      dvioffset = dvioffset + dviptr ;
++      dvigone = dvigone + dviptr ;
++    } 
++    dviptr = 0 ;
++    dvilimit = dvibufsize ;
++  } 
+ #ifdef IPC
+   if ( ipcon > 0 ) 
+   {
+diff --git a/texlive-xetex/src/web2c/xetexdir/XeTeXFontMgr_FC.cpp b/texlive-xetex/src/web2c/xetexdir/XeTeXFontMgr_FC.cpp
+index c454454..c4c765d 100644
+--- a/texlive-xetex/src/web2c/xetexdir/XeTeXFontMgr_FC.cpp
++++ b/texlive-xetex/src/web2c/xetexdir/XeTeXFontMgr_FC.cpp
+@@ -51,9 +51,11 @@ authorization from the copyright holders.
+ #define kPreferredFamilyName    16
+ #define kPreferredSubfamilyName 17
+ 
+-static UConverter* macRomanConv = NULL;
+-static UConverter* utf16beConv = NULL;
+-static UConverter* utf8Conv = NULL;
++static UConverter* macRomanConv = NULL;
++static UConverter* utf16beConv = NULL;
++static UConverter* utf8Conv = NULL;
++
++extern "C" int xetex_no_font_cache_refresh;
+ 
+ static char*
+ convertToUtf8(UConverter* conv, const unsigned char* name, int len)
+@@ -309,12 +311,14 @@ XeTeXFontMgr_FC::searchForHostPlatformFonts(const std::string& name)
+ void
+ XeTeXFontMgr_FC::initialize()
+ {
+-    if (FcInit() == FcFalse) {
+-        fprintf(stderr, "\nXeTeX (FontMgr) fontconfig initialization failed!\n");
+-        exit(9);
+-    }
+-
+-    if (gFreeTypeLibrary == 0 && FT_Init_FreeType(&gFreeTypeLibrary) != 0) {
++    if (FcInit() == FcFalse) {
++        fprintf(stderr, "\nXeTeX (FontMgr) fontconfig initialization failed!\n");
++        exit(9);
++    }
++    if (xetex_no_font_cache_refresh)
++        FcConfigSetRescanInterval(FcConfigGetCurrent(), 0);
++
++    if (gFreeTypeLibrary == 0 && FT_Init_FreeType(&gFreeTypeLibrary) != 0) {
+         fprintf(stderr, "\nXeTeX (FontMgr) FreeType initialization failed!\n");
+         exit(9);
+     }

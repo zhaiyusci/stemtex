@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: MIT OR MPL-2.0 OR LGPL-2.1-or-later OR GPL-2.0-or-later
+// Copyright 2010, SIL International, All rights reserved.
+= Graphite2 Manual =
+Martin Hosken <martin_hosken@sil.org>
+
+:numbered:
+
+include::intro.adoc[]
+include::building.adoc[]
+include::calling.adoc[]
+include::features.adoc[]
+include::font.adoc[]
+include::hacking.adoc[]
+include::testing.adoc[]

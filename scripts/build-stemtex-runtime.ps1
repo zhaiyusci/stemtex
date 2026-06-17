@@ -79,7 +79,7 @@ function Copy-Tree {
 function Write-RunScript {
   param([string]$DestRoot)
 
-  $engineLine = '"%TLROOT%\bin\windows\xetexdaemon.exe" -fmt=xelatex --no-font-cache-refresh %*'
+  $engineLine = '"%TLROOT%\bin\windows\xetexdaemon.exe" -fmt=xelatexdaemon --no-font-cache-refresh %*'
 
   $content = @(
     '@echo off',
@@ -311,7 +311,7 @@ try {
 
   Push-Location -LiteralPath $warmupDir
   try {
-    & $launcher -fmt=xelatex -no-pdf -interaction=nonstopmode -halt-on-error -output-directory="$OutputDirectory" $warmupName
+    & $launcher -fmt=xelatexdaemon -no-pdf -interaction=nonstopmode -halt-on-error -output-directory="$OutputDirectory" $warmupName
     if ($LASTEXITCODE -ne 0) {
       throw "Font cache refresh failed with exit code $LASTEXITCODE."
     }
@@ -462,9 +462,9 @@ function Build-Format {
     $fmtEngine = Join-Path $bin "xetexdaemon.exe"
     Push-Location -LiteralPath $fmtDir
     try {
-      & $fmtEngine -ini -etex -jobname=xelatex xelatex.ini
+      & $fmtEngine -ini -etex -jobname=xelatexdaemon xelatex.ini
       if ($LASTEXITCODE -ne 0) {
-        throw "Failed to build xelatex.fmt."
+        throw "Failed to build xelatexdaemon.fmt."
       }
     } finally {
       Pop-Location
@@ -528,7 +528,7 @@ function Invoke-FontCacheWarmup {
     $warmupTexName = Split-Path -Leaf $resolvedWarmupTex
     Push-Location -LiteralPath $warmupTexDir
     try {
-      & (Join-Path $bin "xetexdaemon.exe") -fmt=xelatex -no-pdf -interaction=nonstopmode -halt-on-error -output-directory="$workDir" $warmupTexName
+      & (Join-Path $bin "xetexdaemon.exe") -fmt=xelatexdaemon -no-pdf -interaction=nonstopmode -halt-on-error -output-directory="$workDir" $warmupTexName
       if ($LASTEXITCODE -ne 0) {
         throw "Font cache warmup failed with exit code $LASTEXITCODE."
       }
@@ -570,14 +570,14 @@ $destBinRoot = Join-Path $destRoot "bin\windows"
 New-Item -ItemType Directory -Force -Path $destBinRoot | Out-Null
 
 $binFiles = @(
-  "dvipdfmx.dll",
+  "dvipdfmxdaemon.dll",
   "kpathsealibw64.dll",
   "kpsewhich.exe",
   "msvcp140.dll",
   "ucrtbase.dll",
   "vcruntime140.dll",
   "vcruntime140_1.dll",
-  "xdvipdfmx.exe"
+  "xdvipdfmxdaemon.exe"
 )
 
 foreach ($file in $binFiles) {
@@ -588,7 +588,7 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "ptx\texk\web2c\xetex.dll") -Destina
 Copy-Item -LiteralPath (Join-Path $repoRoot "ktx\texk\calldll\xetexdaemon.exe") -Destination (Join-Path $destBinRoot "xetexdaemon.exe") -Force
 $daemonBat = @(
   '@echo off',
-  '"%~dp0xetexdaemon.exe" -fmt=xelatex %*'
+  '"%~dp0xetexdaemon.exe" -fmt=xelatexdaemon %*'
 )
 Set-Content -LiteralPath (Join-Path $destBinRoot "xelatexdaemon.bat") -Value $daemonBat -Encoding ascii
 New-Item -ItemType Directory -Force -Path (Join-Path $destBinRoot "icu-data") | Out-Null

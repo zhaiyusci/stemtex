@@ -1,0 +1,167 @@
+.site-title {
+    color: $grey-dk-250;
+    font-weight: 700;
+}
+  
+.site-footer {
+    color: $grey-dk-200;
+}
+
+.nav-list .nav-list .nav-list > .nav-list-item a {
+    font-size: 0.75rem !important;  /* the normal size is 0.88 */
+}
+
+code {
+    line-height: 0.9;  /* doesn't seem to have an effect */
+}
+
+/* Tutorial navigation bar */
+
+table.tut-nav-bar,
+table.tut-nav-bar2 {
+    color: white;
+    background-color: #227efa; /* same as blue button */
+}
+
+table.tut-nav-bar  tbody tr:last-of-type td,
+table.tut-nav-bar2 tbody tr:last-of-type td {
+    padding-bottom: 6px;  /* override the extra padding at the bottom of a table */
+}
+
+table.tut-nav-bar  td,
+table.tut-nav-bar2 td {
+    text-align: center;
+    color: white;
+    background-color: #227efa;
+    font-weight: bold;
+    width: 12%;
+    font-size: .95rem;
+    line-height: 1;
+}
+
+table.tut-nav-bar td:first-of-type {
+    text-align: left;
+    width: 44%;
+}
+
+table.tut-nav-bar td:last-of-type {
+    text-align: right;
+    width: 44%;
+}
+
+/* tut-nav-bar2 is more flexible about the label lengths */
+table.tut-nav-bar2 td:first-of-type {
+    text-align: left;
+}
+
+table.tut-nav-bar2 td:last-of-type {
+    text-align: right;
+}
+
+table.tut-nav-bar  a,
+table.tut-nav-bar2 a {
+    color: white;
+    text-decoration: none;
+}
+
+table.tut-nav-bar  a:hover,
+table.tut-nav-bar2 a:hover {
+    color: #CCE0FF;
+    text-decoration: none;
+}
+
+table.tut-nav-bar  td,
+table.tut-nav-bar2 td {
+    padding-bottom: 0.4rem;
+    padding-top:    0.4rem;
+}
+
+
+/* Notes and Warnings */
+
+blockquote.blue-note {
+    background-color: #E6F2FF;
+    border-left: 10px solid #227efa;  /* same as blue button */
+    padding-top: 2px;
+    padding-bottom: 2px;
+}
+
+blockquote.red-warning {
+    background-color: #eebbbb;
+    border-left: 10px solid #aa3355;
+    padding-top: 2px;
+    padding-bottom: 2px;
+}
+
+/* Images and captions */
+
+/* To avoid a lot of space between the image and the caption: */
+.image-tight {
+    margin-bottom: 1px;
+}
+
+p.caption, figcaption {
+    font-style: italic;
+    font-size: 0.9rem;
+    margin-top: 0px;
+    margin-bottom: 18px;
+}
+
+/* Language rendering */
+
+/* The font paths are relative to this CSS file. */
+
+@font-face {
+    font-family: SimpleGraphite;
+    src: url(../../assets/fonts/Simple-Graphite-Font.ttf);
+}
+
+@font-face {
+  font-family: AwamiDemoTtf;
+  src: url(../..//assets/fonts/AwamiNastaliq-Demo.ttf);
+}
+
+@font-face {
+  font-family: PadaukDemoTtf;
+  src: url(../../assets/fonts/Padauk-Demo.ttf);
+}
+
+@font-face {
+    font-family: PadaukDemoWoff2;
+    src: url(../../assets/fonts/Padauk-Demo.woff2);
+}
+
+.simple-graphite-ttf {
+    font-family: SimpleGraphite;
+}
+
+.awami-ttf {
+    font-family: AwamiDemoTtf;
+    direction: rtl;
+    font-size: 150%;
+}
+
+.padauk-local {
+    font-family: Padauk;
+    font-size: 120%;
+    -moz-font-feature-settings: "wtri=1";
+    -moz-font-feature-settings: "wtri" 1;
+}
+
+.padauk-ttf {
+    font-family: PadaukDemoTtf;
+    font-size: 120%;
+    -moz-font-feature-settings: "wtri=1";
+    -moz-font-feature-settings: "wtri" 1;
+}
+
+.padauk-woff2 {
+    font-family: PadaukDemoWoff2;
+    font-size: 120%;
+    -moz-font-feature-settings: "wtri=1";
+    -moz-font-feature-settings: "wtri" 1;
+}
+
+.arabic-sample {
+    direction: rtl;
+}

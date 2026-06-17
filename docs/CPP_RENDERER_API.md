@@ -10,15 +10,25 @@ load it like a normal Windows DLL without using a network protocol.
 The current CMake build emits:
 
 ```text
-dist/cpp-daemon/build/stemtex-renderer.dll
-dist/cpp-daemon/build/stemtex-renderer.lib
-dist/cpp-daemon/build/stemtex-renderer-smoke.exe
+build/cpp-daemon/Release/stemtex-renderer.dll
+build/cpp-daemon/Release/stemtex-renderer.lib
+build/cpp-daemon/Release/stemtex-renderer-smoke.exe
 ```
 
 The public header is:
 
 ```text
 cpp-daemon/stemtex_renderer.h
+```
+
+In the installer/runtime layout, the renderer is treated as part of the StemTeX
+runtime SDK:
+
+```text
+runtime\
+  bin\sdk\stemtex-renderer.dll
+  sdk\include\stemtex_renderer.h
+  sdk\lib\stemtex-renderer.lib
 ```
 
 ## Runtime Model
@@ -95,12 +105,15 @@ typedef struct StemTeXConfig {
 Fields:
 
 - `repo_root_utf8`: repository/resource root. The renderer expects to find
-  `webapp/worker-webapp.tex` and `test/preamble.tex` under this tree.
-- `runtime_root_utf8`: StemTeX runtime root, for example `C:\StemTeX`.
+  `cpp-daemon/worker-template.tex` and `test/preamble.tex` under this tree in
+  a source checkout. If they are absent, it falls back to
+  `runtime_root\worker-template.tex` and `runtime_root\preamble.tex`.
+- `runtime_root_utf8`: StemTeX runtime root, for example
+  `C:\StemTeX\runtime`.
 - `state_root_utf8`: optional worker state directory. If null, the renderer
-  uses `out/cpp-renderer-state` under the repo root.
+  uses a unique directory under the system temporary directory.
 - `renders_root_utf8`: optional render output directory. If null, the renderer
-  uses `out/cpp-renderer-renders` under the repo root.
+  uses a unique directory under the system temporary directory.
 - `request_timeout_ms`: worker request timeout. `0` uses `90000`.
 - `xdvipdfmx_timeout_ms`: PDF conversion timeout. `0` uses `90000`.
 - `min_width_pt`, `max_width_pt`, `default_width_pt`: width policy. `0` uses
@@ -310,7 +323,7 @@ Memory returned through `error_utf8` belongs to the DLL and must be freed with
 
 ## Environment Isolation
 
-The renderer launches `xetexdaemon.exe` and `xdvipdfmx.exe` with a StemTeX-local
+The renderer launches `xetexdaemon.exe` and `xdvipdfmxdaemon.exe` with a StemTeX-local
 environment. It sets paths such as:
 
 ```text

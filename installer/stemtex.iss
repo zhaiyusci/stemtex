@@ -28,11 +28,14 @@ WizardStyle=modern
 UninstallDisplayName=StemTeX
 
 [Files]
-Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "texmf-var\fonts\cache\*;texmf-var\cache-warmup\*"
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "runtime\texmf-var\fonts\cache\*;runtime\texmf-var\cache-warmup\*"
 
 [Run]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\refresh-font-cache.ps1"" -Clean -WarmupTex ""{app}\cache-warmup\warmup.tex"""; StatusMsg: "Building StemTeX font cache..."; Flags: waituntilterminated
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\runtime\refresh-font-cache.ps1"" -Clean -WarmupTex ""{app}\runtime\cache-warmup\warmup.tex"""; StatusMsg: "Building StemTeX font cache..."; Flags: waituntilterminated
+
+[Icons]
+Name: "{autoprograms}\StemTeX Renderer GUI"; Filename: "{app}\gui\stemtex-renderer-gui.exe"; WorkingDir: "{app}\gui"
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{app}\texmf-var\fonts\cache"
-Type: filesandordirs; Name: "{app}\texmf-var\cache-warmup"
+Type: filesandordirs; Name: "{app}\runtime\texmf-var\fonts\cache"
+Type: filesandordirs; Name: "{app}\runtime\texmf-var\cache-warmup"

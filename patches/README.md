@@ -46,3 +46,22 @@ after each page, so an external controller can add a temporary postamble and run
 
 Therefore the project adds a new explicit switch instead of relying on `-ipc` or
 `-ipc-start`.
+
+`texlive-generated-daemon-runtime-switches.patch`
+
+Applies the same daemon runtime switches to the checked-in generated-C TeX Live
+bundle under `texlive-xetex/src/web2c`. It is used after the WEB/CWEB conversion
+has already happened, so it patches generated `xetex0.c` directly instead of
+`xetex.web`.
+
+It adds:
+
+```text
+--flush-output-on-shipout
+--no-font-cache-refresh
+```
+
+For this generated-C/MinGW route, `--no-font-cache-refresh` is implemented in
+XeTeX's Fontconfig initialization by setting Fontconfig's rescan interval to
+zero. The old W32TeX route patched bundled fontconfig sources; this route links
+against the MSYS2 UCRT64 fontconfig DLL instead.

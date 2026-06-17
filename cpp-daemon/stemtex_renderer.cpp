@@ -168,6 +168,15 @@ std::string read_text_file(const fs::path &p) {
   return std::string(reinterpret_cast<const char *>(bytes.data()), bytes.size());
 }
 
+void replace_all(std::string &text, const std::string &from, const std::string &to) {
+  if (from.empty()) return;
+  size_t pos = 0;
+  while ((pos = text.find(from, pos)) != std::string::npos) {
+    text.replace(pos, from.size(), to);
+    pos += to.size();
+  }
+}
+
 void write_file(const fs::path &p, const std::vector<uint8_t> &bytes) {
   fs::create_directories(p.parent_path());
   std::ofstream f(p, std::ios::binary);
@@ -451,20 +460,21 @@ fs::path default_runtime(const fs::path &repo_root) {
 
 std::wstring worker_command(const RendererConfig &cfg, const fs::path &out_dir) {
   fs::path exe = cfg.runtime_root / "bin" / "windows" / "xetexdaemon.exe";
-  fs::path worker = cfg.worker_template.empty() ? cfg.repo_root / "webapp" / "worker-webapp.tex" : cfg.worker_template;
-  std::string worker_arg;
-  try {
-    worker_arg = slash_path(fs::relative(worker, cfg.repo_root));
-  } catch (...) {
-    worker_arg = slash_path(worker);
-  }
+  fs::path worker = out_dir / "worker-template.tex";
+  std::string worker_arg = slash_path(worker);
   std::wostringstream cmd;
   cmd << quote_cmd_arg_w(path_to_wstring(exe))
-      << L" -fmt=xelatex --no-font-cache-refresh"
-      << L" -interaction=errorstopmode -halt-on-error -no-pdf -flush-output-on-shipout"
+      << L" -fmt=xelatexdaemon --no-font-cache-refresh"
+      << L" -jobname=worker-template -interaction=errorstopmode -halt-on-error -no-pdf -flush-output-on-shipout"
       << L" -output-directory=" << quote_cmd_arg_w(path_to_wstring(out_dir))
       << L" " << quote_cmd_arg_w(widen_utf8(worker_arg));
   return cmd.str();
+}
+
+void materialize_worker_template(const RendererConfig &cfg, const fs::path &out_dir) {
+  std::string text = read_text_file(cfg.worker_template);
+  replace_all(text, "@@STEMTEX_PREAMBLE@@", slash_path(cfg.preamble_tex));
+  write_text_file(out_dir / "worker-template.tex", text);
 }
 
 std::vector<wchar_t> worker_environment(const RendererConfig &cfg) {
@@ -605,19 +615,19 @@ std::map<std::wstring, std::wstring> runtime_environment_overrides(const Rendere
 
 std::string run_dvipdfmx_dll(const RendererConfig &cfg, const fs::path &final_path, const fs::path &pdf_path,
                              const std::string &page_range) {
-  fs::path dll_path = cfg.runtime_root / "bin" / "windows" / "dvipdfmx.dll";
-  if (!fs::exists(dll_path)) throw std::runtime_error("dvipdfmx.dll missing");
+  fs::path dll_path = cfg.runtime_root / "bin" / "windows" / "dvipdfmxdaemon.dll";
+  if (!fs::exists(dll_path)) throw std::runtime_error("dvipdfmxdaemon.dll missing");
 
   ScopedEnvironment env(runtime_environment_overrides(cfg));
   using MainFn = int(__cdecl *)(int, char **);
   HMODULE dll = LoadLibraryW(dll_path.wstring().c_str());
-  if (!dll) throw std::runtime_error("LoadLibrary dvipdfmx.dll failed: " + std::to_string(GetLastError()));
+  if (!dll) throw std::runtime_error("LoadLibrary dvipdfmxdaemon.dll failed: " + std::to_string(GetLastError()));
   auto free_dll = std::unique_ptr<std::remove_pointer<HMODULE>::type, decltype(&FreeLibrary)>(dll, FreeLibrary);
   auto fn = reinterpret_cast<MainFn>(GetProcAddress(dll, "dlldvipdfmxmain"));
   if (!fn) throw std::runtime_error("GetProcAddress dlldvipdfmxmain failed: " + std::to_string(GetLastError()));
 
   std::vector<std::string> args = {
-      "xdvipdfmx",
+      "xdvipdfmxdaemon",
       "-q",
       "-z",
       "1",
@@ -632,8 +642,8 @@ std::string run_dvipdfmx_dll(const RendererConfig &cfg, const fs::path &final_pa
   std::vector<char *> av;
   for (auto &arg : args) av.push_back(arg.data());
   int code = fn((int)av.size(), av.data());
-  if (code != 0) throw std::runtime_error("dvipdfmx.dll returned " + std::to_string(code));
-  if (!fs::exists(pdf_path)) throw std::runtime_error("dvipdfmx.dll did not write PDF: " + pdf_path.string());
+  if (code != 0) throw std::runtime_error("dvipdfmxdaemon.dll returned " + std::to_string(code));
+  if (!fs::exists(pdf_path)) throw std::runtime_error("dvipdfmxdaemon.dll did not write PDF: " + pdf_path.string());
   return "dll";
 }
 
@@ -761,13 +771,13 @@ XdvParts run_warmup(const RendererConfig &cfg) {
   child.write_stdin(std::string(kWorkerStop) + "\n");
   DWORD code = child.wait();
   if (code != 0) throw std::runtime_error("Warmup worker exited with code " + std::to_string(code) + "\n" + log);
-  return read_xdv_parts(out_dir / "worker-webapp.xdv");
+  return read_xdv_parts(out_dir / "worker-template.xdv");
 }
 
 XdvParts load_or_run_warmup(const RendererConfig &cfg) {
   for (const fs::path &candidate : {
            cfg.runtime_root / "texmf-var" / "cache-warmup" / "warmup.xdv",
-           cfg.runtime_root / "texmf-var" / "cache-warmup" / "worker-webapp.xdv",
+           cfg.runtime_root / "texmf-var" / "cache-warmup" / "worker-template.xdv",
        }) {
     if (fs::exists(candidate)) {
       try {
@@ -834,21 +844,29 @@ RendererConfig config_from_api(const StemTeXConfig *config) {
   cfg.runtime_root = config && config->runtime_root_utf8 && *config->runtime_root_utf8
                          ? fs::absolute(config->runtime_root_utf8)
                          : default_runtime(cfg.repo_root);
+  std::string instance_id = random_id();
+  fs::path default_work_root = fs::temp_directory_path() / "stemtex-renderer" / instance_id;
   cfg.state_root = config && config->state_root_utf8 && *config->state_root_utf8
                        ? fs::absolute(config->state_root_utf8)
-                       : cfg.repo_root / "out" / "cpp-renderer-state";
+                       : default_work_root / "state";
   cfg.renders_root = config && config->renders_root_utf8 && *config->renders_root_utf8
                          ? fs::absolute(config->renders_root_utf8)
-                         : cfg.repo_root / "out" / "cpp-renderer-renders";
+                         : default_work_root / "renders";
   cfg.warmup_tex = config && config->warmup_tex_utf8 && *config->warmup_tex_utf8
                        ? fs::absolute(config->warmup_tex_utf8)
                        : cfg.runtime_root / "cache-warmup" / "warmup.tex";
-  cfg.worker_template = config && config->worker_template_utf8 && *config->worker_template_utf8
-                            ? fs::absolute(config->worker_template_utf8)
-                            : cfg.repo_root / "webapp" / "worker-webapp.tex";
-  cfg.preamble_tex = config && config->preamble_tex_utf8 && *config->preamble_tex_utf8
-                         ? fs::absolute(config->preamble_tex_utf8)
-                         : cfg.repo_root / "test" / "preamble.tex";
+  if (config && config->worker_template_utf8 && *config->worker_template_utf8) {
+    cfg.worker_template = fs::absolute(config->worker_template_utf8);
+  } else {
+    fs::path repo_worker = cfg.repo_root / "cpp-daemon" / "worker-template.tex";
+    cfg.worker_template = fs::exists(repo_worker) ? repo_worker : cfg.runtime_root / "worker-template.tex";
+  }
+  if (config && config->preamble_tex_utf8 && *config->preamble_tex_utf8) {
+    cfg.preamble_tex = fs::absolute(config->preamble_tex_utf8);
+  } else {
+    fs::path repo_preamble = cfg.repo_root / "test" / "preamble.tex";
+    cfg.preamble_tex = fs::exists(repo_preamble) ? repo_preamble : cfg.runtime_root / "preamble.tex";
+  }
   if (config) {
     cfg.request_timeout_ms = normalize_timeout_ms(config->request_timeout_ms);
     cfg.xdvipdfmx_timeout_ms = normalize_timeout_ms(config->xdvipdfmx_timeout_ms);
@@ -873,8 +891,8 @@ std::string validate_config_text(const RendererConfig &cfg) {
   require_dir(cfg.runtime_root, "runtime root");
   require_file(cfg.runtime_root / "run-xelatexdaemon.bat", "runtime launcher");
   require_file(cfg.runtime_root / "bin" / "windows" / "xetexdaemon.exe", "xetexdaemon.exe");
-  require_file(cfg.runtime_root / "bin" / "windows" / "xdvipdfmx.exe", "xdvipdfmx.exe");
-  require_file(cfg.runtime_root / "texmf-var" / "web2c" / "xetex" / "xelatex.fmt", "xelatex.fmt");
+  require_file(cfg.runtime_root / "bin" / "windows" / "xdvipdfmxdaemon.exe", "xdvipdfmxdaemon.exe");
+  require_file(cfg.runtime_root / "texmf-var" / "web2c" / "xetex" / "xelatexdaemon.fmt", "xelatexdaemon.fmt");
   require_file(cfg.warmup_tex, "warmup tex");
   require_file(cfg.worker_template, "worker template");
   require_file(cfg.preamble_tex, "preamble tex");
@@ -943,6 +961,7 @@ struct StemTeXRenderer {
     slot->live_out = cfg.state_root / "workers" / name / "live";
     fs::remove_all(cfg.state_root / "workers" / name);
     fs::create_directories(slot->live_out);
+    materialize_worker_template(cfg, slot->live_out);
     slot->ready = false;
     slot->done = false;
     slot->output_tail.clear();
@@ -1006,7 +1025,7 @@ struct StemTeXRenderer {
       throw ApiException(STEMTEX_ERROR_WORKER_STARTUP, "Live worker warmup failed: " + slot.name + ". TeX output tail:\n" + tail);
     }
     lock.unlock();
-    fs::path xdv_path = slot.live_out / "worker-webapp.xdv";
+    fs::path xdv_path = slot.live_out / "worker-template.xdv";
     slot.last_xdv_offset = fs::file_size(xdv_path);
     slot.next_request = 1;
   }
@@ -1212,7 +1231,7 @@ struct StemTeXRenderer {
       cancel_requested = false;
     }
 
-    fs::path xdv_path = slot.live_out / "worker-webapp.xdv";
+    fs::path xdv_path = slot.live_out / "worker-template.xdv";
     uint64_t current_size = fs::file_size(xdv_path);
     auto cumulative = read_file_range(xdv_path, 0, current_size);
     auto delta = read_file_range(xdv_path, slot.last_xdv_offset, current_size);
@@ -1230,7 +1249,7 @@ struct StemTeXRenderer {
     int64_t finalize_start = now_ms();
     size_t final_bytes = finalize_xdv_body(cumulative, final_path, parts, (uint16_t)request_no, last_bop);
     int64_t convert_start = now_ms();
-    fs::path xdvipdfmx = cfg.runtime_root / "bin" / "windows" / "xdvipdfmx.exe";
+    fs::path xdvipdfmx = cfg.runtime_root / "bin" / "windows" / "xdvipdfmxdaemon.exe";
     std::string xdvipdfmx_options = "-q -z 1 -C 64";
     std::string page_range = std::to_string(request_no) + "-" + std::to_string(request_no);
     std::string xdvipdfmx_mode = "dll";
@@ -1507,7 +1526,7 @@ STEMTEX_API int stemtex_refresh_font_cache(const char *runtime_root_utf8, const 
     cfg.renders_root = cfg.runtime_root / "texmf-var" / "cache-warmup-renders";
     cfg.warmup_tex = warmup_tex_utf8 && *warmup_tex_utf8 ? fs::absolute(warmup_tex_utf8)
                                                          : cfg.runtime_root / "cache-warmup" / "warmup.tex";
-    cfg.worker_template = cfg.repo_root / "webapp" / "worker-webapp.tex";
+    cfg.worker_template = cfg.repo_root / "cpp-daemon" / "worker-template.tex";
     cfg.preamble_tex = cfg.repo_root / "test" / "preamble.tex";
     cfg.request_timeout_ms = 90000;
     cfg.xdvipdfmx_timeout_ms = 90000;
@@ -1517,7 +1536,7 @@ STEMTEX_API int stemtex_refresh_font_cache(const char *runtime_root_utf8, const 
     auto env = worker_environment(cfg);
     fs::path exe = cfg.runtime_root / "bin" / "windows" / "xetexdaemon.exe";
     std::ostringstream cmd;
-    cmd << quote_cmd_arg(exe.string()) << " -fmt=xelatex -no-pdf -interaction=nonstopmode -halt-on-error"
+    cmd << quote_cmd_arg(exe.string()) << " -fmt=xelatexdaemon -no-pdf -interaction=nonstopmode -halt-on-error"
         << " -output-directory=" << quote_cmd_arg(output_dir.string()) << " " << quote_cmd_arg(cfg.warmup_tex.string());
     run_sync(cmd.str(), cfg.warmup_tex.parent_path(), env, 90000);
     fs::path warmup_xdv = output_dir / (cfg.warmup_tex.stem().string() + ".xdv");

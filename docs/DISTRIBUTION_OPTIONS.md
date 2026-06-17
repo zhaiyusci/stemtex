@@ -11,14 +11,26 @@ application and controlled enough for low-latency snippet rendering.
 
 ```text
 stemtex\
+  gui\
+    stemtex-renderer-gui.exe
+    Qt runtime files
+  runtime\
   bin\windows\
     xetexdaemon.exe
     xetexdaemon.dll
     xelatexdaemon.bat
-    xdvipdfmx.exe
+    xdvipdfmxdaemon.exe
+    dvipdfmxdaemon.dll
     required DLLs
   cache-warmup\
     warmup.tex
+  worker-template.tex
+  preamble.tex
+  sdk\
+    include\stemtex_renderer.h
+    lib\stemtex-renderer.lib
+  bin\sdk\
+    stemtex-renderer.dll
   texmf-dist\
   texmf-var\
   run-xelatexdaemon.bat
@@ -70,7 +82,7 @@ This is not the default distribution path.
 MyApp\
   renderer\
     stemtex-renderer.dll
-    worker-webapp.tex
+    worker-template.tex
   xetexdaemon\
     xetexdaemon.exe
     xetexdaemon.dll

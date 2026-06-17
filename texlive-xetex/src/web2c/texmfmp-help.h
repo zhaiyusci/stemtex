@@ -569,6 +569,8 @@ const_string XETEXHELP[] = {
     "-output-directory=DIR   use existing DIR as the directory to write files in",
     "-output-driver=CMD      use CMD as the XDV-to-PDF driver instead of xdvipdfmx",
     "-no-pdf                 generate XDV (extended DVI) output rather than PDF",
+    "-flush-output-on-shipout flush XDV/PDF output after each \\shipout",
+    "-no-font-cache-refresh  use existing fontconfig caches only",
     "[-no]-parse-first-line  disable/enable parsing of first line of input file",
     "-papersize=STRING       set PDF media size to STRING",
     "-progname=STRING        set program (and fmt) name to STRING",

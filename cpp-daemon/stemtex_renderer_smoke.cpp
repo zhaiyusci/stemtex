@@ -80,9 +80,9 @@ int main(int argc, char **argv) {
 
   std::printf("repoRoot=%s\n", repo_root_utf8.c_str());
   std::printf("runtimeRoot=%s\n", runtime_root_utf8.c_str());
-  std::printf("runtimeHasXetexdaemon=%d runtimeHasDvipdfmxDll=%d runtimeHasWarmup=%d\n",
+  std::printf("runtimeHasXetexdaemon=%d runtimeHasDvipdfmxDaemonDll=%d runtimeHasWarmup=%d\n",
               fs::exists(runtime_root / "bin" / "windows" / "xetexdaemon.exe") ? 1 : 0,
-              fs::exists(runtime_root / "bin" / "windows" / "dvipdfmx.dll") ? 1 : 0,
+              fs::exists(runtime_root / "bin" / "windows" / "dvipdfmxdaemon.dll") ? 1 : 0,
               fs::exists(runtime_root / "texmf-var" / "cache-warmup" / "warmup.xdv") ? 1 : 0);
 
   char *error = nullptr;

@@ -55,6 +55,8 @@ static UConverter* macRomanConv = NULL;
 static UConverter* utf16beConv = NULL;
 static UConverter* utf8Conv = NULL;
 
+extern "C" int xetex_no_font_cache_refresh;
+
 static char*
 convertToUtf8(UConverter* conv, const unsigned char* name, int len)
 {
@@ -313,6 +315,8 @@ XeTeXFontMgr_FC::initialize()
         fprintf(stderr, "\nXeTeX (FontMgr) fontconfig initialization failed!\n");
         exit(9);
     }
+    if (xetex_no_font_cache_refresh)
+        FcConfigSetRescanInterval(FcConfigGetCurrent(), 0);
 
     if (gFreeTypeLibrary == 0 && FT_Init_FreeType(&gFreeTypeLibrary) != 0) {
         fprintf(stderr, "\nXeTeX (FontMgr) FreeType initialization failed!\n");
