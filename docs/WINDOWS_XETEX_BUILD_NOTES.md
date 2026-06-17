@@ -1,477 +1,165 @@
 # Windows XeTeX Build Notes
 
-This workspace has two related but separate pieces:
+StemTeX currently builds its daemon engine from the generated-C source bundle in
+`texlive-xetex/`.  The preferred Windows route is MSVC with static third-party
+dependencies.
 
-- a native Windows build of XeTeX from source, producing `xetex.dll`;
-- a small XeLaTeX runtime tree, enough to run the current test documents.
-- a standalone upstream TeX Live source bundle under `texlive-xetex`, built from
-  generated/ordinary C and C++ sources without repeating WEB/CWEB conversion.
+## Current Build Route
 
-The source build lives under `ptx`.  The small runtime tree lives under
-`runtime`.
-
-## Native XeTeX Build
-
-### TeX Live upstream standalone experiment
-
-The TeX Live upstream source experiment builds only the XeTeX executable target
-with MSYS2 UCRT64/MinGW:
+Build from MSYS2, using the installed Visual Studio toolchain:
 
 ```sh
-JOBS=16 scripts/build-texlive-xetex-ucrt64.sh
+cd /c/Users/jairy/Documents/xetex/xetex-live-worker
+./texlive-xetex/build-standalone-msvc.sh
 ```
 
-Defaults:
+Outputs:
 
 ```text
-TL_SRC     ../texlive-source
-BUILD_DIR  ../tlbuild-xetex-ucrt64-mingw
-JOBS       16
-CLEAN      0
-USE_GENERATED 1
-USE_PREBUILT_LIBS 1
+texlive-xetex/out/standalone-msvc/xetexdaemon.dll
+texlive-xetex/out/standalone-msvc/xetexdaemon.exe
+texlive-xetex/out/standalone-msvc/dvipdfmxdaemon.dll
+texlive-xetex/out/standalone-msvc/xdvipdfmxdaemon.exe
 ```
 
-The top-level standalone bundle builds directly from the copied/generated
-sources and outputs TeX Live Windows style DLL-backed wrappers for both the
-engine and converter:
+The `.exe` files are small `calldll` wrappers.  The actual engine/converter
+code lives in the DLLs:
+
+```text
+xetexdaemon.exe     -> xetexdaemon.dll:dllxetexmain
+xdvipdfmxdaemon.exe -> dvipdfmxdaemon.dll:dlldvipdfmxmain
+```
+
+Install the built binaries into the static StemTeX side tree:
 
 ```sh
-cd texlive-xetex
-JOBS=16 ./build-standalone-ucrt64.sh
+./texlive-xetex/install-msvc-standalone-to-side-tree.sh
 ```
 
-```text
-texlive-xetex\out\standalone-ucrt64\xetex.dll
-texlive-xetex\out\standalone-ucrt64\xetex.exe
-texlive-xetex\out\standalone-ucrt64\dvipdfmxdaemon.dll
-texlive-xetex\out\standalone-ucrt64\xdvipdfmxdaemon.exe
-```
-
-The `xdvipdfmx.exe` path uses ordinary `texk/dvipdfm-x` C sources plus the
-small `libpaper` C sources. It does not involve WEB/CWEB conversion.
-
-The wrappers follow the same import pattern as `C:\texlive\2026\bin\windows`:
-
-```text
-xetex.exe     imports xetex.dll:dllxetexmain
-xdvipdfmxdaemon.exe imports dvipdfmxdaemon.dll:dlldvipdfmxmain
-```
-
-Use a clean build directory when needed:
+Then refresh the runtime warmup/cache data:
 
 ```sh
-CLEAN=1 JOBS=16 scripts/build-texlive-xetex-ucrt64.sh
+./scripts/refresh-static-runtime-cache.sh
 ```
 
-The script seeds generated web2c outputs from:
+## Source Inputs
 
-```text
-texlive-xetex\web2c
-```
-
-This skips the `tie`/`otangle`/`web2c convert` literate-programming step during
-normal builds. To force regeneration from the original WEB/CWEB files:
-
-```sh
-USE_GENERATED=0 JOBS=16 scripts/build-texlive-xetex-ucrt64.sh
-```
-
-The script also seeds UCRT64 static libraries and generated dependency headers
-from:
-
-```text
-texlive-xetex\prebuilt-ucrt64
-```
-
-This avoids rebuilding `kpathsea`, `ptexenc`, `teckit`, `pplib`, and the small
-web2c support libraries in ordinary rebuilds. To force rebuilding them:
-
-```sh
-USE_PREBUILT_LIBS=0 JOBS=16 scripts/build-texlive-xetex-ucrt64.sh
-```
-
-The script configures TeX Live with:
-
-```text
---build=x86_64-w64-mingw32
---host=x86_64-w64-mingw32
---disable-all-pkgs
---enable-web2c
---enable-xetex
---disable-xetex-synctex
-```
-
-It uses system MSYS2 UCRT libraries for zlib, libpng, freetype2, ICU, graphite2,
-and HarfBuzz. It builds only the internal pieces XeTeX still needs from the TeX
-Live tree:
-
-```text
-texk/kpathsea
-texk/ptexenc
-libs/teckit
-libs/pplib
-texk/web2c target xetex.exe
-```
-
-The output is:
-
-```text
-..\tlbuild-xetex-ucrt64-mingw\texk\web2c\xetex.exe
-```
-
-Two Windows-native build details matter:
-
-- build the real target `xetex.exe`, not bare `xetex`, because GNU make can
-  otherwise choose its built-in Pascal rule;
-- the generated `texk/web2c/Makefile` contains Unix path lists such as
-  `WEBINPUTS=.:$(srcdir)`, but the generated tools are native Windows
-  executables. The script patches the build-directory Makefile to quote
-  semicolon-separated `WEBINPUTS` values.
-
-The upstream web2c bootstrap rules may try to update these source files:
-
-```text
-texk/web2c/tangleboot.pin
-texk/web2c/ctangleboot.cin
-texk/web2c/cwebboot.cin
-```
-
-The script backs them up before the build and restores them afterward if the
-build touched them.
-
-### W32TeX xetexdaemon.dll build
-
-The native build script is:
-
-```powershell
-.\scripts\build-windows-native.ps1 -Target All -Arch x64
-```
-
-Important targets:
-
-```powershell
-.\scripts\build-windows-native.ps1 -Target XeTeX -Arch x64
-.\scripts\build-windows-native.ps1 -Target Launchers -Arch x64
-```
-
-`XeTeX` builds the real engine DLL:
-
-```text
-ptx\texk\web2c\xetex.dll
-```
-
-`Launchers` builds the small DLL-loading launchers:
-
-```text
-ktx\texk\calldll\xetex.exe
-ktx\texk\calldll\xelatex.exe
-```
-
-The launchers are not the engine.  They call `dllxetexmain` from whichever
-`xetex.dll` is found by Windows DLL search rules.  For testing the self-built
-engine, put this directory before any TeX Live binary directory in `PATH`:
-
-```text
-ptx\texk\web2c
-```
-
-The build script discovers Visual Studio through `vswhere` or installed
-Visual Studio paths.  It also bootstraps GNU make into `.build-tools` when
-needed and creates a local no-space junction for Git for Windows `usr\bin`,
-because several W32TeX makefiles use `sh.exe` and GNU make handles paths with
-spaces poorly in this tree.
-
-## Source Changes Made
-
-An explicit XeTeX command-line switch was added:
-
-```text
---no-font-cache-refresh
-```
-
-It sets:
-
-```text
-FONTCONFIG_NO_CACHE_REFRESH=1
-```
-
-Relevant files:
-
-```text
-ptx\texk\web2c\lib\texmfmp.c
-ptx\texk\web2c\texmfmp-help.h
-ptx\libs\fontconfig\src\fccache.c
-ptx\libs\fontconfig\src\fcdir.c
-ptx\libs\fontconfig\src\fcint.h
-```
-
-The fontconfig patch makes cache writes and fallback rescans opt out when
-`FONTCONFIG_NO_CACHE_REFRESH` is true.  Existing caches can still be read.
-
-A placeholder make include was also added:
-
-```text
-ptx\texk\make\paths.mk
-```
-
-This satisfies a dependency in the local Windows web2c makefiles.  The XeTeX
-build path here does not require variables from that file.
-
-## StemTeX Runtime Tree
-
-The current trimmed runtime is called StemTeX:
-
-```text
-stemtex\
-  run-xelatexdaemon.bat
-  refresh-font-cache.ps1
-  bin\windows\
-  texmf-dist\
-  texmf-var\
-```
-
-`bin\windows` contains the engine/launcher/runtime DLL layer:
-
-```text
-xetexdaemon.exe
-xetexdaemon.dll
-xelatexdaemon.bat
-xdvipdfmxdaemon.exe
-dvipdfmxdaemon.dll
-kpsewhich.exe
-kpathsealibw64.dll
-icudt76.dll
-icu-data\icudt76l.dat
-VC runtime DLLs
-```
-
-`texmf-dist` contains the reduced TeX tree:
-
-```text
-web2c\texmf.cnf
-web2c\fmtutil.cnf
-tex\latex\...
-tex\xelatex\xecjk\...
-fonts\opentype\public\xits\...
-fonts\opentype\public\lm\...      minimal text-font compatibility files
-fonts\tfm\public\cm\...
-dvipdfmx\dvipdfmx.cfg
-```
-
-`texmf-var` contains generated/runtime state:
-
-```text
-web2c\xetex\xelatex.fmt
-fonts\conf\fonts.conf
-fonts\cache\...
-```
-
-The StemTeX tree is assembled as a runtime, not as source.  It always uses the
-patched daemon engine: `xetexdaemon.exe` loads `xetexdaemon.dll`.  The shipped
-runtime intentionally does not include `xetex.exe`, `xelatex.exe`, or
-`xetex.dll`.
-
-## Rebuilding The StemTeX Runtime Tree
-
-Build the patched engine first, then assemble StemTeX:
-
-```powershell
-.\scripts\build-windows-native.ps1 -Target All -Arch x64
-.\scripts\build-stemtex-runtime.ps1 -Destination .\stemtex -Clean
-```
-
-Parameters:
-
-```text
--TeXLiveRoot        full TeX Live root, for example C:\texlive\2026
--Destination        output StemTeX tree
--SourceRoot         this workspace root
--CacheWarmupTex     warmup document, defaulting to test\test_5.tex
--SkipFontCacheWarmup
--Clean              delete destination before rebuilding
-```
-
-Without `-TeXLiveRoot`, the script tries `$env:TEXLIVE_ROOT`, then
-`kpsewhich -var-value=TEXMFROOT`.
-
-The script copies:
-
-```text
-ptx\texk\web2c\xetex.dll              -> bin\windows\xetexdaemon.dll
-ktx\texk\calldll\xetexdaemon.exe      -> bin\windows\xetexdaemon.exe
-ptx\libs\icu-src\source\data\in\icudt76l.dat
-ptx\libs\icu-src\bin64\icudt76.dll
-```
-
-The full ICU data file is important.  The stub `icudt76.dll` alone is not
-enough: XeTeX then fails during startup of ICU converters with:
-
-```text
-internal error; cannot read font names
-```
-
-The wording is misleading.  In this case, fontconfig was not the failing
-piece; ICU could not open converters such as `macintosh`, `UTF16BE`, and
-`UTF8`.
-
-## Format Files
-
-`xelatex.fmt` is tied to the exact XeTeX executable/string pool.  After changing
-or rebuilding XeTeX, an old format can fail with:
-
-```text
-Fatal format file error; I'm stymied
-made by different executable version, strings are different
-```
-
-The fix is to dump a new format using the same daemon engine that will run it.
-The StemTeX build script does this automatically.
-
-The manual equivalent is:
-
-```powershell
-xetexdaemon.exe -ini -etex -jobname=xelatex xelatex.ini
-```
-
-Make sure `TEXFORMATS` points to the directory where the new
-`xelatex.fmt` should be written.
-
-## Fontconfig Runtime
-
-For this W32TeX/fontconfig tree, these variables matter:
-
-```text
-XE_FONTCONFIG_PATH
-FONTCONFIG_PATH
-XE_FC_CACHEDIR
-FC_CACHEDIR
-```
-
-The runtime batch file sets them to the small tree:
-
-```text
-texmf-var\fonts\conf
-texmf-var\fonts\cache
-```
-
-`--no-font-cache-refresh` makes the self-built XeTeX use existing fontconfig
-caches only.  It does not change the document output by itself.  It is useful
-when treating font caches as part of the runtime image.
-
-## Testing
-
-The self-built DLL was tested against:
-
-```text
-test\test_1.tex
-test\test_2.tex
-test\test_3.tex
-test\test_4.tex
-```
-
-The successful test setup used:
-
-- `ptx\texk\web2c\xetex.dll`;
-- a freshly dumped `xelatex.fmt`;
-- full ICU data from `ptx\libs\icu-src\source\data\in\icudt76l.dat`;
-- fontconfig path/cache variables set;
-- `--no-font-cache-refresh`;
-- `xdvipdfmx` for the final XDV-to-PDF step.
-
-The last run of `test_4.tex` succeeded after the document was changed to avoid
-glyphs missing from Fandol:
-
-```text
-XeTeXExit  = 0
-DriverExit = 0
-PDF        = yes
-Missing character lines: none
-```
-
-Output was written under:
-
-```text
-selfbuild-test\
-```
-
-## Current Caveats
-
-The StemTeX runtime script is intentionally conservative: it copies a selected
-set of packages and fonts known to cover the current tests.  If a new document
-uses more packages or fonts, add the corresponding directories/files to
-`scripts\build-stemtex-runtime.ps1`.
-
-The StemTeX build script prepends a runtime override block to
-`texmf-dist\web2c\texmf.cnf`.  This removes the full TeX Live `!!` database-only
-assumptions and makes package lookup relative to the small tree itself.  The
-script was verified by rebuilding the runtime tree and running documents
-through that tree's own `run-xelatexdaemon.bat`.
-
-The script also warms the fontconfig cache during the build.  By default it
+The build does not read a full TeX Live checkout during normal operation.  It
 uses:
 
 ```text
-test\test_5.tex
+texlive-xetex/src/web2c
+texlive-xetex/src/dvipdfm-x
+texlive-xetex/src/libpaper
+texlive-xetex/src/libs
+texlive-xetex/src/texk
+texlive-xetex/src/windows_mingw_wrapper
 ```
 
-as the warmup document, because that document exercises the intended fixed
-preamble, including `mathtools`, `mhchem`, `physics`, `xcolor`, and `cancel`.
-The warmup run does not
-use `--no-font-cache-refresh`, so cache files are written under:
+`src/web2c` contains generated XeTeX C/C++ files, so the build skips the
+WEB/CWEB literate-programming conversion step.
+
+The checked-in dependency bundle is:
 
 ```text
-texmf-var\fonts\cache
+texlive-xetex/prebuilt-msvc
 ```
 
-The generated `run-xelatexdaemon.bat` uses `--no-font-cache-refresh` for normal
-runtime execution.
+It contains static libraries, headers, and ICU data only.  It should not contain
+`.exe`, `.dll`, `.obj`, `.pdb`, or other build outputs.
 
-## Manual Font Cache Refresh
+## Rebuilding Static Dependencies
 
-The small runtime tree now includes a manual refresh entry point:
+The source snapshots for third-party libraries live under:
 
 ```text
-refresh-font-cache.bat
-refresh-font-cache.ps1
-cache-warmup\warmup.tex
+texlive-xetex/third_party-msvc-src
 ```
 
-The default use is:
+Rebuild them with:
 
-```cmd
-refresh-font-cache.bat
+```sh
+./texlive-xetex/build-thirdparty-msvc.sh
+./texlive-xetex/build-texlive-libs-msvc.sh
 ```
 
-It runs XeLaTeX without `--no-font-cache-refresh`, writes fontconfig caches under:
+This regenerates the static dependency inputs used by
+`build-standalone-msvc.sh`.  Build products inside `third_party-msvc-src/` are
+not source and should not be committed.
+
+## Runtime Switches
+
+The generated-C source carries StemTeX's daemon switches:
 
 ```text
-texmf-var\fonts\cache
+--flush-output-on-shipout
+--no-font-cache-refresh
 ```
 
-and writes temporary warmup output under:
+Patch record:
 
 ```text
-texmf-var\cache-warmup
+patches/texlive-generated-daemon-runtime-switches.patch
 ```
 
-The script can also take a custom warmup document:
+`--flush-output-on-shipout` makes live `-no-pdf` XeTeX output usable after each
+page by flushing pending XDV bytes at `\shipout`.
 
-```powershell
-.\refresh-font-cache.ps1 -WarmupTex C:\path\to\warmup.tex -Clean
-```
+`--no-font-cache-refresh` makes normal rendering rely on installation-time
+fontconfig cache generation instead of refreshing cache during interactive
+requests.
 
-Use this after adding fonts, changing fontconfig configuration, or extending the
-default package/font set in a way that should be exercised before normal
-runtime calls.  Normal document compilation should continue to use
-`run-xelatexdaemon.bat`, which keeps cache refresh disabled.
+## StemTeX Runtime Tree
 
-Do not confuse the three layers:
+The build/install scripts assemble:
 
 ```text
-xetexdaemon.dll   real engine, copied from the patched xetex.dll build output
-xetexdaemon.exe   launcher that loads the same-basename DLL
-xelatex.fmt       preloaded LaTeX format tied to the engine build
+dist/stemtex-texlive-daemon-static/
+  bin/windows/
+    xetexdaemon.exe
+    xetexdaemon.dll
+    xdvipdfmxdaemon.exe
+    dvipdfmxdaemon.dll
+  cache-warmup/warmup.tex
+  texmf-dist/
+  texmf-var/
 ```
 
-When changing XeTeX source, rebuild `xetex.dll` and redump `xelatex.fmt`.
+The shipped runtime intentionally does not include stock `xetex.exe`,
+`xelatex.exe`, or `xetex.dll`.
+
+The daemon format is named:
+
+```text
+texmf-var/web2c/xetex/xelatexdaemon.fmt
+```
+
+The default fixed preamble is:
+
+```text
+test/preamble.tex
+```
+
+It is copied into the runtime as:
+
+```text
+runtime/preamble.tex
+```
+
+## Historical Routes
+
+The earlier W32TeX source route produced `ptx/texk/web2c/xetex.dll` and patched
+bundled fontconfig sources.  That work is retained only as notes in:
+
+```text
+patches/w32tex-2025-runtime-switches.md
+```
+
+The UCRT64 route is still present for comparison:
+
+```sh
+./texlive-xetex/build-standalone-ucrt64.sh
+```
+
+It is not the preferred distribution route because it pulls in a larger MSYS2
+runtime dependency set.

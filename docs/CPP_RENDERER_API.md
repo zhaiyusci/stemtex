@@ -108,8 +108,10 @@ Fields:
   `cpp-daemon/worker-template.tex` and `test/preamble.tex` under this tree in
   a source checkout. If they are absent, it falls back to
   `runtime_root\worker-template.tex` and `runtime_root\preamble.tex`.
-- `runtime_root_utf8`: StemTeX runtime root, for example
-  `C:\StemTeX\runtime`.
+- `runtime_root_utf8`: StemTeX runtime root, meaning the directory that directly
+  contains `bin\windows\xetexdaemon.exe`, `worker-template.tex`,
+  `preamble.tex`, and `cache-warmup\warmup.tex`. In the installer layout this
+  is normally `C:\StemTeX\runtime`.
 - `state_root_utf8`: optional worker state directory. If null, the renderer
   uses a unique directory under the system temporary directory.
 - `renders_root_utf8`: optional render output directory. If null, the renderer
@@ -177,6 +179,7 @@ int stemtex_renderer_render_async(
 int stemtex_renderer_restart(StemTeXRenderer *renderer, StemTeXErrorCode *error_code, char **error_utf8);
 int stemtex_renderer_cancel_current(StemTeXRenderer *renderer, StemTeXErrorCode *error_code, char **error_utf8);
 StemTeXRendererStatus stemtex_renderer_status(StemTeXRenderer *renderer);
+int stemtex_renderer_engine_snapshot(StemTeXRenderer *renderer, StemTeXEngineSnapshot *snapshot);
 StemTeXErrorCode stemtex_renderer_last_error_code(StemTeXRenderer *renderer);
 char *stemtex_renderer_get_log_tail(StemTeXRenderer *renderer, int max_bytes);
 const char *stemtex_renderer_version(void);
@@ -216,7 +219,7 @@ void stemtex_renderer_destroy(StemTeXRenderer *renderer);
 int main() {
   StemTeXConfig cfg{};
   cfg.repo_root_utf8 = "C:\\Users\\jairy\\Documents\\xetex\\xetex-live-worker";
-  cfg.runtime_root_utf8 = "C:\\StemTeX";
+  cfg.runtime_root_utf8 = "C:\\StemTeX\\runtime";
 
   char *error = nullptr;
   StemTeXErrorCode error_code = STEMTEX_OK;

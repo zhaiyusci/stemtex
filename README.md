@@ -1,216 +1,177 @@
-﻿# xetex-live-worker
+# StemTeX
 
-Experimental Windows XeLaTeX runtime and worker prototype for low-latency
-snippet rendering.
+StemTeX is a Windows-native XeLaTeX daemon runtime for low-latency rendering of
+short STEM snippets.  The current version is `0.1.0`.
 
-The runtime produced by this repository is called **StemTeX**: a small
-Windows-focused XeLaTeX service runtime for interactive STEM snippets.
-The current StemTeX small-tree version is `0.1.0`.
+The project is no longer organized around the old Node worker/web preview
+experiments.  The supported path is:
 
-The core idea is:
+- a trimmed StemTeX runtime tree;
+- patched `xetexdaemon` and `xdvipdfmxdaemon` binaries;
+- a native C ABI renderer DLL in `cpp-daemon/`;
+- a Qt-based **StemTeX Renderer GUI** in `gui/`;
+- an Inno Setup installer that packages the GUI, runtime, and renderer SDK.
 
-- build a small XeLaTeX runtime tree under `stemtex/`;
-- treat fontconfig cache as runtime data;
-- keep one XeTeX process hot with a fixed preamble;
-- patch XeTeX so `-no-pdf` output is flushed after each `\shipout`;
-- finalize the cumulative live XDV and convert only the newest page with
-  `xdvipdfmx -s N-N`.
+## Runtime Model
 
-This repository intentionally does not vendor a full TeX Live source tree or a
-full runtime tree. The scripts expect either an installed TeX Live or local
-upstream source trees when rebuilding the engine.
+The renderer keeps one XeTeX worker hot with a fixed preamble.  Render requests
+send a small snippet body and a text-block width to that worker.  XeTeX runs with
+`-no-pdf --flush-output-on-shipout --no-font-cache-refresh`, writes cumulative
+XDV output, and flushes it after each `\shipout`.  The renderer then synthesizes
+a valid final XDV postamble and asks `xdvipdfmxdaemon` to convert only the newest
+page.
 
-## What We Changed In XeTeX
+This is deliberately not a general LaTeX sandbox.  The intended input is short
+Chinese/English STEM text with math, chemistry, physics, color, and ordinary
+inline/display formulas under the fixed preamble.
 
-This project does not simply enable Web2C's old `-ipc` option.
+## XeTeX Changes
 
-Instead, it adds a new explicit XeTeX switch:
+StemTeX adds two explicit daemon switches:
 
 ```text
 --flush-output-on-shipout
+--no-font-cache-refresh
 ```
 
-When XeTeX runs with `-no-pdf --flush-output-on-shipout`, every `\shipout`
-writes pending XDV bytes from XeTeX's in-memory DVI/XDV buffer to the `.xdv`
-file and flushes the file handle. The XeTeX process keeps running.
+`--flush-output-on-shipout` makes a live `-no-pdf` XeTeX process write pending
+XDV bytes after every `\shipout` without exiting.
 
-It deliberately does not:
+`--no-font-cache-refresh` is a runtime policy switch for the daemon path.  The
+installer or developer warmup step owns fontconfig cache generation; normal
+interactive rendering avoids refreshing that cache.
 
-- start TeXView;
-- open an IPC socket;
-- send `ipcpage` messages;
-- use the legacy `-ipc` or `-ipc-start` protocol.
+This is not the old Web2C `-ipc`/`-ipc-start` preview protocol.  The patch keeps
+the useful page-boundary buffer-flush idea and discards the TeXView-oriented
+transport.
 
-The implementation reuses the old IPC buffer-flushing idea, but not the old IPC
-transport. Internally the command-line option sets the existing `ipcon` flag to
-`3`; the shipout path checks that value and performs the write/flush block
-without calling `ipcpage()`.
-
-That matters because stock XeTeX normally leaves a live worker's XDV unusable
-until the job exits and writes the final postamble. With this patch, the worker
-can copy the currently flushed live XDV, synthesize the missing postamble with
-warmup font definitions, and ask `xdvipdfmx -s N-N` for only the newest page.
-
-## IPC Archeology
-
-Web2C still contains old IPC support for TeX. It was originally written by Tom
-Rokicki for NeXT TeXView and adapted to Web2C by Shamim Mohamed. The source
-comment describes the purpose: ship DVI output through a pipe/socket so a
-previewer can display it incrementally.
-
-In TeX Live 2026, classic `tex.exe --help` still shows:
+## Repository Layout
 
 ```text
--ipc
--ipc-start
-```
-
-but `xetex.exe --help` does not. So the situation is not that IPC was fully
-removed from Web2C; it is that the feature is historical, lightly documented,
-and not part of the normal XeTeX/XDV workflow.
-
-The old IPC path was aimed at DVI previewing, not at XeTeX's XDV-to-PDF
-pipeline. It also carries platform-specific socket code and a TeXView-oriented
-protocol. For this project, the useful piece was the page-boundary buffer
-flush, not the transport protocol.
-
-## Layout
-
-```text
-scripts/
-  build-stemtex-runtime.ps1       Build the StemTeX runtime tree.
-  build-windows-native.ps1        Build patched W32TeX-style xetex.dll.
-  run-cpp-timing-report.sh        Run native DLL timing and error-path checks.
 cpp-daemon/
-  stemtex_renderer.h              C ABI for the native renderer DLL.
-  stemtex_renderer.cpp            Single-worker StemTeX renderer implementation.
-  stemtex_renderer_smoke.cpp      Native smoke/timing test executable.
-worker-prototype/
-  run-single-worker-live-pdf.js   Current live-PDF worker controller.
-  run-worker-*.js                 Earlier worker and pool experiments.
-  requests/                       UTF-8 snippet inputs.
+  stemtex_renderer.h              Public C ABI.
+  stemtex_renderer.cpp            Renderer DLL implementation.
+  stemtex_renderer_smoke.cpp      Smoke/timing executable.
+  worker-template.tex             Live XeTeX worker template.
+
+gui/
+  main.cpp                        StemTeX Renderer GUI.
+  assets/                         GUI icon source and generated ICO/PNG.
+
+installer/
+  stemtex.iss                     Inno Setup definition.
+
+scripts/
+  build-cpp-daemon.sh             Build stemtex-renderer.dll.
+  build-gui.sh                    Build StemTeX Renderer GUI.
+  build-stemtex-installer.sh      Stage runtime/GUI/SDK and build installer.
+  generate-gui-icon.py            Regenerate GUI PNG/ICO from SVG.
+  refresh-static-runtime-cache.sh Rebuild runtime warmup/cache data.
+  sync-renderer-sdk-to-runtime.sh Copy renderer DLL/lib/header into runtime.
+
+texlive-xetex/
+  src/                            Generated-C XeTeX and xdvipdfmx sources.
+  prebuilt-msvc/                  Static MSVC dependency libs and headers.
+  third_party-msvc-src/           Source snapshots for rebuilding those libs.
+  build-standalone-msvc.sh        Build xetexdaemon/xdvipdfmxdaemon.
+  install-msvc-standalone-to-side-tree.sh
+
 test/
-  preamble.tex
-  test_1.tex ... test_5.tex
-patches/
-  *.patch                         Engine/fontconfig changes.
-docs/
-  Profiling and build notes from the prototype.
+  preamble.tex                    Default fixed preamble.
 ```
 
-Generated directories are ignored:
+Generated build/package directories such as `build/`, `dist/`, and
+`texlive-xetex/out/` are local artifacts and are not part of the source tree.
+
+## Build
+
+Run from MSYS2.  The scripts may call Visual Studio, CMake, Qt, and Inno Setup,
+but the orchestration is shell-based.
+
+Build the daemon engine bundle:
+
+```sh
+cd /c/Users/jairy/Documents/xetex/xetex-live-worker
+./texlive-xetex/build-standalone-msvc.sh
+./texlive-xetex/install-msvc-standalone-to-side-tree.sh
+./scripts/refresh-static-runtime-cache.sh
+```
+
+Build the renderer and GUI:
+
+```sh
+./scripts/build-cpp-daemon.sh
+./scripts/sync-renderer-sdk-to-runtime.sh
+./scripts/build-gui.sh
+```
+
+Run a native GUI smoke test:
+
+```sh
+timeout 90s ./build/gui/Release/stemtex-renderer-gui.exe --smoke
+```
+
+Build the installer:
+
+```sh
+./scripts/build-stemtex-installer.sh
+```
+
+The installer is written under:
 
 ```text
-stemtex/
-out/
-ptx/
-ktx/
-texlive-source/
+dist/installer/StemTeX-0.1.0-Setup.exe
 ```
 
-## Build A Small Runtime
+The installer intentionally does not ship generated font cache files.  During
+installation, `refresh-font-cache.ps1` compiles `runtime/cache-warmup/warmup.tex`
+to create the cache and warmup XDV for that machine.
 
-From PowerShell:
+## Runtime Layout
 
-```powershell
-.\scripts\build-stemtex-runtime.ps1 -TeXLiveRoot C:\texlive\2026 -Destination .\stemtex -Clean
-```
-
-StemTeX always uses the patched daemon engine. Place the expected W32TeX-style
-source/build trees at the repository root and build the engine first:
-
-```powershell
-.\scripts\build-windows-native.ps1 -Target All -Arch x64
-.\scripts\build-stemtex-runtime.ps1 -TeXLiveRoot C:\texlive\2026 -Destination .\stemtex -Clean
-```
-
-The default preamble is aimed at short STEM snippets: `unicode-math`, `xeCJK`,
-`mathtools`, `mhchem`, `physics`, `xcolor`, and `cancel`, using Windows
-text/CJK fonts plus XITS Math.  The runtime tree also carries `siunitx` for
-optional preamble variants, but it is not loaded by default because it conflicts
-with `physics` over `\qty`.
-
-The runtime build warms fontconfig cache with `test\test_5.tex` by default.
-Refresh manually after adding packages/fonts:
-
-```powershell
-.\stemtex\refresh-font-cache.ps1 -Clean
-```
-
-## Run The Live Worker
-
-The live worker requires a XeTeX build that supports:
+The staged or installed runtime has this shape:
 
 ```text
---flush-output-on-shipout
+StemTeX/
+  gui/
+    stemtex-renderer-gui.exe
+    Qt runtime files
+  runtime/
+    bin/windows/
+      xetexdaemon.exe
+      xetexdaemon.dll
+      xdvipdfmxdaemon.exe
+      dvipdfmxdaemon.dll
+    bin/sdk/
+      stemtex-renderer.dll
+    sdk/include/
+      stemtex_renderer.h
+    sdk/lib/
+      stemtex-renderer.lib
+    cache-warmup/warmup.tex
+    worker-template.tex
+    preamble.tex
+    texmf-dist/
+    texmf-var/
 ```
 
-Then run:
+## Native Renderer API
 
-```powershell
-node .\worker-prototype\run-single-worker-live-pdf.js
-```
+Host applications should use `stemtex-renderer.dll` through the C ABI in
+`cpp-daemon/stemtex_renderer.h`.  The same DLL powers the GUI.  The renderer
+serializes concurrent render calls for one renderer instance and uses spare
+workers only for failover, not parallel throughput.
 
-Output goes to:
+See [docs/CPP_RENDERER_API.md](docs/CPP_RENDERER_API.md).
+The current API completion/status notes are in
+[docs/CPP_RENDERER_API_STATUS.md](docs/CPP_RENDERER_API_STATUS.md).
 
-```text
-out\single-worker-live-pdf
-```
+## Notes
 
-Each request emits a single-page PDF by default. Add `--cumulative` to emit a
-cumulative debug PDF containing pages `1..N`.
-
-The request protocol is intentionally narrow: stdin carries UTF-8-safe request
-file paths, and each request file is treated as a small body snippet under the
-fixed preamble. The worker resets visible counters and visual state for each
-snippet (`page`, `equation`, `footnote`, normal font/size/color), but it is not
-a general LaTeX sandbox. Warmup workers stop by receiving a literal
-`\workerstop` line; live workers are killed by the controller after the requested
-PDFs have been emitted, because the live path does not need a final full XDV
-postamble.
-
-## Run The Web Preview
-
-The web preview wraps the same worker path behind a local HTTP server. It lets
-you edit one snippet, adjust the text block width in points, render, and preview
-the generated PDF on the right. The width control is clamped to `180-430pt` in
-both the browser and the server.
-
-The web preview uses the same latest-page path: it finalizes the cumulative live
-XDV and calls `xdvipdfmx -s N-N` for the newest page.
-
-```powershell
-node .\webapp\server.js
-```
-
-If the runtime is not under `.\runtime`, point the server at it:
-
-```powershell
-$env:XETEX_RUNTIME="..\stemtex"
-node .\webapp\server.js
-```
-
-Then open:
-
-```text
-http://localhost:5177
-```
-
-## Current Status
-
-This is a research prototype. The fastest working path is the patched single
-worker. In local profiling, the earlier whole-XDV latest-page path was roughly
-50-170 ms after the worker was warm, depending on snippet content and
-`xdvipdfmx` time. The abandoned independent-XDV experiment was removed from the
-runtime path because standalone deltas must reconstruct too much XDV driver
-state to be worth it here.
-
-See:
-
-```text
-docs\CPP_RENDERER_API.md
-docs\CPP_RENDERER_API_TODO.md
-docs\XELATEX_PROFILING_NOTES.md
-docs\WINDOWS_XETEX_BUILD_NOTES.md
-```
-
+- `docs/XELATEX_PROFILING_NOTES.md` is historical.  It records earlier timing
+  work, Tectonic checks, Node prototypes, and the abandoned independent-XDV
+  experiment.
+- `patches/w32tex-2025-runtime-switches.md` is historical source archaeology
+  for the earlier W32TeX route.
+- The current source-of-truth engine patch for the generated-C tree is
+  `patches/texlive-generated-daemon-runtime-switches.patch`.

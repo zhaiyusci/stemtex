@@ -1,26 +1,38 @@
 # Patches
 
-`texlive-2026-flush-output-on-shipout.patch`
+`texlive-generated-daemon-runtime-switches.patch`
 
-Applies the live-output experiment to a TeX Live 2026 source tree. It adds the
-explicit XeTeX command-line option:
+Current StemTeX engine patch record. It applies the daemon runtime switches to
+the checked-in generated-C TeX Live bundle under `texlive-xetex/src/web2c`.
+It patches generated `xetex0.c` directly, after the WEB/CWEB conversion has
+already happened.
+
+It adds:
 
 ```text
 --flush-output-on-shipout
+--no-font-cache-refresh
 ```
 
-With `-no-pdf`, XeTeX flushes the XDV file after each `\shipout`, while keeping
-the process alive.
+`--flush-output-on-shipout` makes a live `-no-pdf` XeTeX process flush pending
+XDV bytes after each `\shipout`.
 
-This is not the same as enabling legacy Web2C IPC. The patch uses `ipcon == 3`
-as a new file-flush mode: it writes and flushes the DVI/XDV buffer, then skips
-the old `ipcpage()` socket notification.
+`--no-font-cache-refresh` disables fontconfig rescans during normal daemon
+rendering. Installation/warmup owns cache generation.
+
+This is not the same as enabling legacy Web2C IPC. The patch reuses the old
+page-boundary buffer-flush idea but skips the old `ipcpage()` transport.
+
+`texlive-2026-flush-output-on-shipout.patch`
+
+Older source-tree patch for a TeX Live 2026 checkout. It is retained as
+archaeology for the pre-generated-C route.
 
 `w32tex-2025-runtime-switches.md`
 
-Records the changes used in the W32TeX-style Windows source tree used by the
-current prototype. It is a source-edit note rather than a guaranteed
-`git apply` patch. It adds:
+Historical source-edit notes from the earlier W32TeX-style Windows source tree.
+It is not the current build path and is not a guaranteed `git apply` patch.
+It records the same two user-facing switches:
 
 ```text
 --flush-output-on-shipout
@@ -47,21 +59,6 @@ after each page, so an external controller can add a temporary postamble and run
 Therefore the project adds a new explicit switch instead of relying on `-ipc` or
 `-ipc-start`.
 
-`texlive-generated-daemon-runtime-switches.patch`
-
-Applies the same daemon runtime switches to the checked-in generated-C TeX Live
-bundle under `texlive-xetex/src/web2c`. It is used after the WEB/CWEB conversion
-has already happened, so it patches generated `xetex0.c` directly instead of
-`xetex.web`.
-
-It adds:
-
-```text
---flush-output-on-shipout
---no-font-cache-refresh
-```
-
-For this generated-C/MinGW route, `--no-font-cache-refresh` is implemented in
+For the current generated-C route, `--no-font-cache-refresh` is implemented in
 XeTeX's Fontconfig initialization by setting Fontconfig's rescan interval to
-zero. The old W32TeX route patched bundled fontconfig sources; this route links
-against the MSYS2 UCRT64 fontconfig DLL instead.
+zero. The old W32TeX route patched bundled fontconfig sources instead.

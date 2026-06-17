@@ -1,136 +1,101 @@
 # Distribution Options
 
-This project now focuses on a single embeddable runtime: **StemTeX**, a trimmed
-Windows XeLaTeX tree with the patched daemon engine and a fixed STEM-oriented
-package set.
+StemTeX currently supports one concrete distribution shape: an embedded Windows
+runtime with the patched daemon engine, native renderer DLL, SDK header/import
+library, and the optional GUI.
 
-## StemTeX Embedded Runtime
+Older package-manager and Node prototype routes were useful during research, but
+they are not current delivery paths.
 
-StemTeX is the product/runtime shape. It is small enough to ship inside another
-application and controlled enough for low-latency snippet rendering.
+## Supported: Embedded StemTeX Runtime
+
+The installer stages this layout:
 
 ```text
-stemtex\
+StemTeX\
   gui\
     stemtex-renderer-gui.exe
     Qt runtime files
   runtime\
-  bin\windows\
-    xetexdaemon.exe
-    xetexdaemon.dll
-    xelatexdaemon.bat
-    xdvipdfmxdaemon.exe
-    dvipdfmxdaemon.dll
-    required DLLs
-  cache-warmup\
-    warmup.tex
-  worker-template.tex
-  preamble.tex
-  sdk\
-    include\stemtex_renderer.h
-    lib\stemtex-renderer.lib
-  bin\sdk\
-    stemtex-renderer.dll
-  texmf-dist\
-  texmf-var\
-  run-xelatexdaemon.bat
-  refresh-font-cache.ps1
-```
-
-Build script:
-
-```powershell
-.\scripts\build-windows-native.ps1 -Target All -Arch x64
-
-.\scripts\build-stemtex-runtime.ps1 `
-  -TeXLiveRoot C:\texlive\2026 `
-  -Destination .\stemtex `
-  -Clean
-```
-
-Strengths:
-
-- Small enough to embed in an application.
-- The runtime is controlled and reproducible.
-- No user TeX Live installation is required.
-- Fast and predictable after fontconfig cache warmup.
-- Uses daemon names in the shipped runtime.
-
-Costs:
-
-- No package manager inside the runtime.
-- Users cannot freely install arbitrary packages inside this runtime.
-- If the fixed preamble changes enough to need new packages/fonts, the vendor
-  rebuilds and ships a new runtime.
-
-Use this when the product has a known preamble and snippets are ordinary CJK,
-English, math, chemistry, physics, and color content. The default preamble
-currently loads `mathtools`, `mhchem`, `physics`, `xcolor`, and `cancel` on top
-of `unicode-math` and `xeCJK`.
-
-The embedded tree also includes `siunitx` for alternate preamble variants, but
-it is not loaded by the default low-latency preamble because it conflicts with
-`physics` over `\qty`.
-
-## Existing TeX Integration
-
-For expert users, an application may ship only the patched engine overlay and
-renderer code, then use a user-provided full TeX installation for packages.
-This is not the default distribution path.
-
-```text
-MyApp\
-  renderer\
-    stemtex-renderer.dll
+    bin\windows\
+      xetexdaemon.exe
+      xetexdaemon.dll
+      xdvipdfmxdaemon.exe
+      dvipdfmxdaemon.dll
+    bin\sdk\
+      stemtex-renderer.dll
+    sdk\include\
+      stemtex_renderer.h
+    sdk\lib\
+      stemtex-renderer.lib
+    cache-warmup\
+      warmup.tex
     worker-template.tex
-  xetexdaemon\
-    xetexdaemon.exe
-    xetexdaemon.dll
-    xelatexdaemon.fmt
-    setup-user-texlive.ps1
+    preamble.tex
+    texmf-dist\
+    texmf-var\
+    refresh-font-cache.ps1
 ```
 
-At setup time:
+Build sequence:
 
-```text
-1. Find the user's TeX bin directory.
-2. Verify kpsewhich, xelatex.ini, xdvipdfmx, and required packages.
-3. Put xetexdaemon before the user's TeX bin directory in PATH.
-4. Build a daemon-specific format with xetexdaemon.
-5. Run a warmup document to check fonts and cache behavior.
-6. Save the discovered paths in renderer config.
+```sh
+./texlive-xetex/build-standalone-msvc.sh
+./texlive-xetex/install-msvc-standalone-to-side-tree.sh
+./scripts/refresh-static-runtime-cache.sh
+./scripts/build-cpp-daemon.sh
+./scripts/sync-renderer-sdk-to-runtime.sh
+./scripts/build-gui.sh
+./scripts/build-stemtex-installer.sh
 ```
 
 Strengths:
 
-- Smallest application download.
-- Advanced users can keep using their own TeX installation.
-- No need to distribute a TeX package tree.
+- The application does not depend on a user TeX installation.
+- The runtime is controlled, reproducible, and known to match the renderer.
+- The GUI and host applications use the same `stemtex-renderer.dll`.
+- Font cache generation happens during installation, not during normal
+  interactive rendering.
+- The SDK files are installed next to the runtime for host integration.
 
 Costs:
 
-- Requires an existing user TeX installation.
-- The app must discover and validate the user's TeX tree.
-- Version compatibility matters. The safest setup builds a daemon-specific
-  format with the daemon executable.
-- Font cache policy is partly delegated to the user's TeX environment.
+- There is no package manager inside this tree.
+- The vendor rebuilds and ships a new runtime when the supported package/font
+  set changes.
+- The runtime is intentionally narrower than a full TeX Live installation.
+
+Use this path for applications with a known preamble and short snippets using
+ordinary CJK, English, math, chemistry, physics, and color content.
+
+## Conceptual: User TeX Integration
+
+An application could ship only `stemtex-renderer.dll` and a daemon-engine
+overlay, then use a user-provided full TeX installation for packages.  This is
+not implemented as a supported installer path.
+
+Such an integration would need to:
+
+1. Discover and validate the user's TeX installation.
+2. Build or select a daemon-specific format.
+3. Ensure `xetexdaemon` and `xdvipdfmxdaemon` are first on the runtime search
+   path used by the renderer.
+4. Generate cache/warmup data for that environment.
+5. Store the validated paths in renderer configuration.
+
+This remains a possible expert-mode strategy, but it trades installer size for
+significantly more validation and support burden.
 
 ## Font Cache And Warmup
 
-`--no-font-cache-refresh` mostly affects cold startup and first font discovery.
-It is not a per-snippet typesetting accelerator after the live worker is hot.
+`--no-font-cache-refresh` is mainly a cold-start/runtime hygiene switch.  After
+workers are hot, per-snippet latency is dominated by XeTeX page work and
+`xdvipdfmxdaemon` conversion.
 
-New glyphs in an already selected font are normally handled by `xdvipdfmx` when
-it subsets the selected page. The important boundary is new font instances:
-CJK fallback fonts, bold/italic variants, new math alphabets, or different
-OpenType fonts. Those should be covered by `cache-warmup\warmup.tex`.
+New glyphs in an already selected font are handled during PDF subsetting.  The
+important warmup boundary is new font instances: CJK fallback fonts, bold or
+italic variants, new math alphabets, or different OpenType fonts.  Those should
+be covered by `runtime/cache-warmup/warmup.tex`.
 
-For StemTeX, treat fontconfig cache and warmup as runtime/installation state.
-If the default preamble or supported macro usage expands, update the warmup file
-and rebuild the runtime/installer.
-
-## Current Preference
-
-For an embeddable software component, StemTeX embedded runtime is the default
-and supported distribution. It is the smallest controlled package and matches
-the fixed-preamble snippet-rendering product goal.
+When the default preamble or supported macro usage expands, update the warmup
+document and rebuild the installer.

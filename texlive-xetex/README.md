@@ -1,125 +1,93 @@
-# Generated TeX Live XeTeX Sources
+# Generated-C XeTeX Daemon Bundle
 
-This directory stores generated web2c outputs for the TeX Live upstream XeTeX
-experiment, so the normal build does not need to repeat the WEB/CWEB literate
-programming conversion step.
+This directory contains the generated-C XeTeX and ordinary C `xdvipdfmx`
+sources used by StemTeX.  It avoids repeating TeX Live's WEB/CWEB conversion
+step during normal builds.
 
-It also contains enough ordinary C/C++ source and prebuilt UCRT64 static
-libraries to build TeX Live style DLL-backed `xetex.exe` and `xdvipdfmx.exe`
-wrappers without the TeX Live WEB/CWEB sources.
-
-Current source:
-
-```text
-../texlive-source
-TeX Live 2027/dev, commit a1f0eea56a708007b32b8fecda2a79a6efe94084
-```
-
-Generated files:
-
-```text
-web2c/xetexini.c
-web2c/xetex0.c
-web2c/xetexcoerce.h
-web2c/xetexd.h
-web2c/xetex-pool.c
-```
-
-Standalone C/C++ build:
+The supported build path is the MSVC static-dependency route:
 
 ```sh
-JOBS=16 ./build-standalone-ucrt64.sh
+./build-standalone-msvc.sh
 ```
 
-Output:
+It produces TeX Live style Windows wrappers backed by DLL entrypoints:
 
 ```text
-out/standalone-ucrt64/xetex.dll
-out/standalone-ucrt64/xetex.exe
-out/standalone-ucrt64/dvipdfmx.dll
-out/standalone-ucrt64/xdvipdfmx.exe
+out/standalone-msvc/
+  xetexdaemon.dll
+  xetexdaemon.exe
+  dvipdfmxdaemon.dll
+  xdvipdfmxdaemon.exe
 ```
 
-The default UCRT64 build keeps MSYS2 third-party libraries dynamic.  For a
-smaller distributable tree, build the same DLL-backed layout with static
-third-party linkage:
+Install those binaries into the StemTeX side tree with:
 
 ```sh
-LINK_MODE=static OUT_DIR=out/standalone-ucrt64-static JOBS=16 ./build-standalone-ucrt64.sh
+./install-msvc-standalone-to-side-tree.sh
 ```
 
-This still produces independent TeX Live style DLLs:
+The default destination is:
 
 ```text
-xetexdaemon.exe -> xetexdaemon.dll:dllxetexmain
-xdvipdfmx.exe   -> dvipdfmx.dll:dlldvipdfmxmain
+../dist/stemtex-texlive-daemon-static
 ```
 
-but `xetexdaemon.dll` and `dvipdfmx.dll` absorb most MSYS2 runtime
-dependencies such as fontconfig, freetype, harfbuzz, graphite2, ICU, libpng,
-zlib, libstdc++, and libgcc.  The current static UCRT64 route still imports
-the Windows UCRT API-set DLLs.  Set `STRIP_OUTPUT=0` when a debug-symbol build
-is needed; release builds strip binaries by default.
-
-The next size-reduction route is an MSVC build with `/MT` plus static
-third-party libraries.  The intended shape is the same as above: keep
-`xetexdaemon.dll` and `dvipdfmx.dll` as the public binary components, but avoid
-shipping a loose pile of compiler/runtime DLLs.  MSVC alone only removes the
-MinGW runtime layer; third-party libraries still need static MSVC builds to
-remove their DLLs.
-
-This standalone route does not read `../texlive-source`. It uses:
+## Source Layout
 
 ```text
-src/web2c                    ordinary C/C++ and generated C/H files
-src/dvipdfm-x                ordinary xdvipdfmx C/H files
-src/libpaper                 small libpaper C/H files used by xdvipdfmx
-src/windows_mingw_wrapper    TeX Live style DLL wrapper sources
-prebuilt-ucrt64              static libraries and generated dependency headers
-MSYS2 UCRT64 system packages zlib/libpng/freetype/ICU/graphite2/harfbuzz/fontconfig
+src/web2c/                  Generated XeTeX C/C++ and support sources.
+src/dvipdfm-x/              xdvipdfmx C sources.
+src/libpaper/               Small libpaper source used by xdvipdfmx.
+src/libs/                   TeX Live library source snapshots needed here.
+src/texk/                   TeX Live texk source snapshots needed here.
+src/windows_mingw_wrapper/  Small calldll wrapper source.
+
+prebuilt-msvc/              Static MSVC libs and headers required to build.
+third_party-msvc-src/       Third-party source snapshots for rebuilding libs.
 ```
 
-The directory intentionally does not include `.web`, `.ch`, `.p`, or `.pool`
-literate-programming inputs/intermediates. `xdvipdfmx` is built from ordinary
-C sources and does not require a WEB conversion step here.
+`prebuilt-msvc/` intentionally contains no `.exe`, `.dll`, `.obj`, `.pdb`, or
+other build products.  It is a build input directory: headers, static import
+libraries, and ICU data only.
 
-The executable wrappers import the same DLL entrypoints used by TeX Live on
-Windows:
+`third_party-msvc-src/` stores source snapshots for zlib, libpng, expat,
+graphite2, freetype, ICU, harfbuzz, and fontconfig.  Build outputs from those
+trees should not be committed.
 
-```text
-xetex.exe     -> xetex.dll:dllxetexmain
-xdvipdfmx.exe -> dvipdfmx.dll:dlldvipdfmxmain
-```
+## Rebuilding Dependencies
 
-The normal script uses these files by default:
+Most day-to-day work should not need this.  To rebuild third-party static
+libraries with MSVC:
 
 ```sh
-scripts/build-texlive-xetex-ucrt64.sh
+./build-thirdparty-msvc.sh
+./build-texlive-libs-msvc.sh
 ```
 
-To force regeneration from the original WEB/CWEB sources, disable the seed:
+Then rebuild the daemon bundle:
 
 ```sh
-USE_GENERATED=0 scripts/build-texlive-xetex-ucrt64.sh
+./build-standalone-msvc.sh
 ```
 
-After regenerating, copy the updated files back into `web2c/`.
+## Daemon Runtime Switches
 
-`prebuilt-ucrt64/` stores the UCRT64 static libraries and generated headers
-needed by the same build route. The build script seeds them by default:
+The generated-C source under `src/web2c` carries the StemTeX daemon switches:
 
 ```text
-texk/kpathsea
-texk/ptexenc
-libs/teckit
-libs/pplib
-texk/web2c/lib
-texk/web2c/libmd5.a
-texk/web2c/libxetex.a
+--flush-output-on-shipout
+--no-font-cache-refresh
 ```
 
-To force rebuilding those libraries from source:
+The corresponding patch record is:
 
-```sh
-USE_PREBUILT_LIBS=0 scripts/build-texlive-xetex-ucrt64.sh
+```text
+../patches/texlive-generated-daemon-runtime-switches.patch
 ```
+
+## UCRT64 Route
+
+`build-standalone-ucrt64.sh` is kept for comparison and emergency diagnosis.
+It is not the preferred distribution route because it tends to pull in a larger
+MSYS2 runtime dependency set.  The StemTeX installer is based on the MSVC
+static-dependency build.

@@ -1,9 +1,9 @@
 # W32TeX 2025 Runtime Switches
 
-These notes record the local W32TeX-style source changes used by the current
-prototype. They are intentionally notes rather than a blindly applicable patch:
-the checked-in repository does not vendor the `ptx/` source tree, and the exact
-generated `xetex0.c` context depends on that tree.
+These historical notes record the local W32TeX-style source changes used by an
+earlier prototype. They are intentionally notes rather than a blindly applicable
+patch: the current build path is the generated-C bundle under `texlive-xetex/`,
+and the checked-in repository does not vendor the old `ptx/` source tree.
 
 ## XeTeX Options
 

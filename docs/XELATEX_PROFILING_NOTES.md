@@ -1,11 +1,17 @@
 # XeLaTeX Profiling Notes
 
-This note records the current profiling results for the small XeLaTeX runtime
-tree and the fixed-preamble experiments.
+This is a historical research log.  It records the timing work that led to the
+current StemTeX renderer, including Node prototypes, worker-pool experiments,
+Tectonic checks, and the abandoned independent-XDV experiment.
+
+The current product path is the C++ renderer in `cpp-daemon/`, the GUI in
+`gui/`, and the MSVC-built daemon runtime under
+`dist/stemtex-texlive-daemon-static/`.  Do not treat the old
+`worker-prototype/` or `webapp/` references below as live code.
 
 ## Runtime Under Test
 
-The timings below were taken with the small runtime tree:
+The early timings below were taken with the small runtime tree:
 
 ```text
 mini-rebuild-test
@@ -687,7 +693,7 @@ Tried to select a font that hasn't been defined
 Using font definitions extracted from a warmup XDV, partial snapshots can be
 finalized and converted successfully.
 
-Prototype script:
+Historical prototype script:
 
 ```text
 worker-prototype\run-single-worker-live-pdf.js
@@ -733,9 +739,9 @@ That prototype lived in:
 worker-prototype\run-single-worker-live-pdf.js
 ```
 
-This remains the selected prototype path.  A later independent-XDV experiment
-was removed because standalone deltas have to reconstruct too much XDV driver
-state.
+This became the basis of the current C++ renderer.  The Node script itself has
+been removed.  A later independent-XDV experiment was also removed because
+standalone deltas have to reconstruct too much XDV driver state.
 
 Latest-page timing result:
 
@@ -777,7 +783,7 @@ output around 50-170 ms in the current sample.
 
 ## Latest-Page Controller
 
-The current controller path is:
+The selected controller design is:
 
 ```text
 WORKER_DONE:N
@@ -787,13 +793,13 @@ write snippet-N-final.xdv
 xdvipdfmx -s N-N -o snippet-N.pdf snippet-N-final.xdv
 ```
 
-The cumulative debug mode is available:
+The old Node prototype exposed a cumulative debug mode:
 
 ```text
 node worker-prototype\run-single-worker-live-pdf.js --cumulative
 ```
 
-The summary JSON now records the timing stages needed to see where latency is
+The renderer summary JSON records the timing stages needed to see where latency is
 spent:
 
 ```text
@@ -815,11 +821,11 @@ all requested PDFs are produced because each requested PDF has already been
 converted.
 
 The worker template also exposes `\snippetHsize`, defaulting to `360pt`, so
-callers can change the text block width without editing the template.  The web
-preview uses that hook for its width control.
+callers can change the text block width without editing the template.  The
+current GUI uses the native renderer API for this control.
 
-An experimental independent-XDV path was tried and then removed.  The prototype
-now keeps only the cumulative latest-page path.
+An experimental independent-XDV path was tried and then removed.  The selected
+design keeps only the cumulative latest-page path.
 
 The controller still needs a real page-boundary pointer when synthesizing the
 postamble.  A raw byte scan for the last `139` opcode is not reliable because
