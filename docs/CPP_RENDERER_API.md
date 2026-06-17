@@ -78,7 +78,17 @@ typedef struct StemTeXConfig {
   const char *runtime_root_utf8;
   const char *state_root_utf8;
   const char *renders_root_utf8;
+  int request_timeout_ms;
+  int xdvipdfmx_timeout_ms;
+  int min_width_pt;
+  int max_width_pt;
+  int default_width_pt;
   int spare_worker_count;
+  int auto_restart;
+  int delete_intermediates;
+  const char *warmup_tex_utf8;
+  const char *worker_template_utf8;
+  const char *preamble_tex_utf8;
 } StemTeXConfig;
 ```
 
@@ -91,15 +101,26 @@ Fields:
   uses `out/cpp-renderer-state` under the repo root.
 - `renders_root_utf8`: optional render output directory. If null, the renderer
   uses `out/cpp-renderer-renders` under the repo root.
+- `request_timeout_ms`: worker request timeout. `0` uses `90000`.
+- `xdvipdfmx_timeout_ms`: PDF conversion timeout. `0` uses `90000`.
+- `min_width_pt`, `max_width_pt`, `default_width_pt`: width policy. `0` uses
+  `180`, `430`, and `360`.
 - `spare_worker_count`: number of hot spare workers to maintain. `0` means the
   default, currently `1`. Positive values are clamped internally; the current
   maximum is `4`.
+- `auto_restart`: reserved policy flag; zero-initialized configs keep automatic
+  recovery enabled.
+- `delete_intermediates`: delete request/XDV intermediates after successful
+  render while keeping PDF and summary.
+- `warmup_tex_utf8`, `worker_template_utf8`, `preamble_tex_utf8`: optional
+  resource overrides.
 
 Create a renderer:
 
 ```cpp
 StemTeXRenderer *stemtex_renderer_create(
   const StemTeXConfig *config,
+  StemTeXErrorCode *error_code,
   char **error_utf8
 );
 ```
@@ -112,8 +133,45 @@ int stemtex_renderer_render(
   const char *snippet_utf8,
   int width_pt,
   StemTeXRenderResult *result,
+  StemTeXErrorCode *error_code,
   char **error_utf8
 );
+```
+
+Related APIs:
+
+```cpp
+int stemtex_renderer_render_pdf_bytes(
+  StemTeXRenderer *renderer,
+  const char *snippet_utf8,
+  int width_pt,
+  StemTeXPdfBytes *pdf,
+  StemTeXRenderResult *result,
+  StemTeXErrorCode *error_code,
+  char **error_utf8
+);
+
+int stemtex_renderer_render_async(
+  StemTeXRenderer *renderer,
+  const char *snippet_utf8,
+  int width_pt,
+  StemTeXRenderCallback callback,
+  void *user_data,
+  StemTeXErrorCode *error_code,
+  char **error_utf8
+);
+
+int stemtex_renderer_restart(StemTeXRenderer *renderer, StemTeXErrorCode *error_code, char **error_utf8);
+int stemtex_renderer_cancel_current(StemTeXRenderer *renderer, StemTeXErrorCode *error_code, char **error_utf8);
+StemTeXRendererStatus stemtex_renderer_status(StemTeXRenderer *renderer);
+StemTeXErrorCode stemtex_renderer_last_error_code(StemTeXRenderer *renderer);
+char *stemtex_renderer_get_log_tail(StemTeXRenderer *renderer, int max_bytes);
+const char *stemtex_renderer_version(void);
+const char *stemtex_renderer_abi_version(void);
+char *stemtex_renderer_runtime_version(StemTeXRenderer *renderer);
+int stemtex_renderer_validate_config(const StemTeXConfig *config, StemTeXErrorCode *error_code, char **diagnostics_utf8);
+int stemtex_refresh_font_cache(const char *runtime_root_utf8, const char *warmup_tex_utf8,
+                               StemTeXErrorCode *error_code, char **error_utf8);
 ```
 
 Render result:
@@ -130,6 +188,7 @@ Cleanup:
 
 ```cpp
 void stemtex_renderer_free_result(StemTeXRenderResult *result);
+void stemtex_renderer_free_pdf_bytes(StemTeXPdfBytes *pdf);
 void stemtex_renderer_free_string(char *value);
 void stemtex_renderer_destroy(StemTeXRenderer *renderer);
 ```
@@ -147,16 +206,17 @@ int main() {
   cfg.runtime_root_utf8 = "C:\\StemTeX";
 
   char *error = nullptr;
-  StemTeXRenderer *renderer = stemtex_renderer_create(&cfg, &error);
+  StemTeXErrorCode error_code = STEMTEX_OK;
+  StemTeXRenderer *renderer = stemtex_renderer_create(&cfg, &error_code, &error);
   if (!renderer) {
-    std::fprintf(stderr, "create failed: %s\n", error ? error : "");
+    std::fprintf(stderr, "create failed code=%d: %s\n", (int)error_code, error ? error : "");
     stemtex_renderer_free_string(error);
     return 1;
   }
 
   StemTeXRenderResult result{};
-  if (!stemtex_renderer_render(renderer, u8"中文 $E=mc^2$", 360, &result, &error)) {
-    std::fprintf(stderr, "render failed: %s\n", error ? error : "");
+  if (!stemtex_renderer_render(renderer, u8"中文 $E=mc^2$", 360, &result, &error_code, &error)) {
+    std::fprintf(stderr, "render failed code=%d: %s\n", (int)error_code, error ? error : "");
     stemtex_renderer_free_string(error);
     stemtex_renderer_destroy(renderer);
     return 1;
@@ -228,6 +288,13 @@ After a primary worker failure or request timeout, the renderer immediately
 promotes a hot spare to primary and schedules replacement spares in the
 background. The failing request still fails, but the next request can use the
 promoted worker without paying cold-start cost.
+
+Concurrent render calls on one renderer are serialized. The spare pool is only
+for failover/recovery; it is not used as a parallel rendering pool.
+
+`stemtex_renderer_cancel_current` kills the currently active worker. The active
+render returns `STEMTEX_ERROR_CANCELLED`, and the renderer promotes/rebuilds a
+worker for subsequent queued requests.
 
 If primary and all spares are unavailable, the renderer falls back to creating a
 new primary synchronously. That is the degraded path and can pay cold-start
