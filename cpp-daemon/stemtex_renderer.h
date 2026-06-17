@@ -65,6 +65,15 @@ typedef struct StemTeXPdfBytes {
   size_t size;
 } StemTeXPdfBytes;
 
+typedef struct StemTeXEngineSnapshot {
+  StemTeXRendererStatus status;
+  int primary_ready;
+  int spare_ready;
+  int spare_target;
+  int spare_rebuilding;
+  StemTeXErrorCode last_error;
+} StemTeXEngineSnapshot;
+
 typedef struct StemTeXRenderer StemTeXRenderer;
 
 typedef void (*StemTeXRenderCallback)(int ok, const StemTeXRenderResult *result, StemTeXErrorCode error_code,
@@ -85,6 +94,7 @@ STEMTEX_API int stemtex_renderer_restart(StemTeXRenderer *renderer, StemTeXError
 STEMTEX_API int stemtex_renderer_cancel_current(StemTeXRenderer *renderer, StemTeXErrorCode *error_code,
                                                 char **error_utf8);
 STEMTEX_API StemTeXRendererStatus stemtex_renderer_status(StemTeXRenderer *renderer);
+STEMTEX_API int stemtex_renderer_engine_snapshot(StemTeXRenderer *renderer, StemTeXEngineSnapshot *snapshot);
 STEMTEX_API StemTeXErrorCode stemtex_renderer_last_error_code(StemTeXRenderer *renderer);
 STEMTEX_API char *stemtex_renderer_get_log_tail(StemTeXRenderer *renderer, int max_bytes);
 STEMTEX_API const char *stemtex_renderer_version(void);

@@ -23,6 +23,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -74,6 +75,15 @@ std::wstring widen_utf8(const std::string &s) {
   if (n <= 0) throw std::runtime_error("MultiByteToWideChar failed");
   std::wstring out(n, L'\0');
   MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), out.data(), n);
+  return out;
+}
+
+std::string narrow_utf8(const std::wstring &s) {
+  if (s.empty()) return "";
+  int n = WideCharToMultiByte(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0, nullptr, nullptr);
+  if (n <= 0) throw std::runtime_error("WideCharToMultiByte failed");
+  std::string out(n, '\0');
+  WideCharToMultiByte(CP_UTF8, 0, s.data(), (int)s.size(), out.data(), n, nullptr, nullptr);
   return out;
 }
 
@@ -428,11 +438,6 @@ std::string installed_warmup_body(const RendererConfig &cfg) {
   return warmup;
 }
 
-std::string light_prime_body() {
-  return R"(hot spare prime $E=mc^2$ {\color{blue}blue}
-)";
-}
-
 fs::path default_runtime(const fs::path &repo_root) {
   const char *env = std::getenv("XETEX_RUNTIME");
   if (env && *env) return fs::absolute(env);
@@ -511,6 +516,125 @@ std::vector<wchar_t> worker_environment(const RendererConfig &cfg) {
   fs::path icu = bin / "icu-data";
   if (has_file_with_prefix_suffix(icu, L"icudt", L"l.dat")) env[L"ICU_DATA"] = path_to_wstring(icu);
   return build_environment_block(env);
+}
+
+struct ScopedEnvironment {
+  explicit ScopedEnvironment(const std::map<std::wstring, std::wstring> &overrides) {
+    for (const auto &kv : overrides) {
+      Entry entry;
+      entry.name = kv.first;
+      DWORD needed = GetEnvironmentVariableW(kv.first.c_str(), nullptr, 0);
+      if (needed > 0) {
+        entry.had_value = true;
+        entry.value.resize(needed - 1);
+        GetEnvironmentVariableW(kv.first.c_str(), entry.value.data(), needed);
+      }
+      entries.push_back(std::move(entry));
+      SetEnvironmentVariableW(kv.first.c_str(), kv.second.c_str());
+    }
+  }
+
+  ~ScopedEnvironment() {
+    for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
+      SetEnvironmentVariableW(it->name.c_str(), it->had_value ? it->value.c_str() : nullptr);
+    }
+  }
+
+  ScopedEnvironment(const ScopedEnvironment &) = delete;
+  ScopedEnvironment &operator=(const ScopedEnvironment &) = delete;
+
+  struct Entry {
+    std::wstring name;
+    bool had_value = false;
+    std::wstring value;
+  };
+  std::vector<Entry> entries;
+};
+
+std::map<std::wstring, std::wstring> runtime_environment_overrides(const RendererConfig &cfg) {
+  fs::path bin = cfg.runtime_root / "bin" / "windows";
+  fs::path texmfcnf = cfg.runtime_root / "texmf-dist" / "web2c";
+  fs::path fmt = cfg.runtime_root / "texmf-var" / "web2c" / "xetex";
+  fs::path fontconf = cfg.runtime_root / "texmf-var" / "fonts" / "conf";
+  fs::path fontcache = cfg.runtime_root / "texmf-var" / "fonts" / "cache";
+  std::wstring system_root;
+  wchar_t sysroot[MAX_PATH]{};
+  DWORD n = GetEnvironmentVariableW(L"SystemRoot", sysroot, MAX_PATH);
+  if (n > 0 && n < MAX_PATH) system_root = sysroot;
+  std::wstring path = path_to_wstring(bin);
+  if (!system_root.empty()) path += L";" + system_root + L"\\System32";
+
+  std::map<std::wstring, std::wstring> env = {
+      {L"PATH", path},
+      {L"TEXMFROOT", path_to_wstring(cfg.runtime_root)},
+      {L"TEXMFCNF", path_to_wstring(texmfcnf)},
+      {L"TEXFORMATS", path_to_wstring(fmt) + L";" + path_to_wstring(fmt) + L"\\"},
+      {L"XE_FONTCONFIG_PATH", path_to_wstring(fontconf)},
+      {L"FONTCONFIG_PATH", path_to_wstring(fontconf)},
+      {L"XE_FC_CACHEDIR", path_to_wstring(fontcache)},
+      {L"FC_CACHEDIR", path_to_wstring(fontcache)},
+      {L"TEXMF", L""},
+      {L"TEXMFDIST", path_to_wstring(cfg.runtime_root / "texmf-dist")},
+      {L"TEXMFLOCAL", L""},
+      {L"TEXMFSYSVAR", path_to_wstring(cfg.runtime_root / "texmf-var")},
+      {L"TEXMFSYSCONFIG", path_to_wstring(cfg.runtime_root / "texmf-config")},
+      {L"TEXMFVAR", path_to_wstring(cfg.runtime_root / "texmf-var")},
+      {L"TEXMFCONFIG", path_to_wstring(cfg.runtime_root / "texmf-config")},
+      {L"TEXMFHOME", L""},
+      {L"TEXINPUTS", L""},
+      {L"LUAINPUTS", L""},
+      {L"BIBINPUTS", L""},
+      {L"BSTINPUTS", L""},
+      {L"MFINPUTS", L""},
+      {L"MPINPUTS", L""},
+      {L"TFMFONTS", L""},
+      {L"T1FONTS", L""},
+      {L"OPENTYPEFONTS", L""},
+      {L"TTFONTS", L""},
+      {L"TEXFONTMAPS", L""},
+      {L"ENCFONTS", L""},
+      {L"VFFONTS", L""},
+      {L"WEB2C", path_to_wstring(cfg.runtime_root / "texmf-dist" / "web2c")},
+      {L"W32TEX", path_to_wstring(cfg.runtime_root)},
+      {L"command_line_encoding", L""},
+  };
+  fs::path icu = bin / "icu-data";
+  if (has_file_with_prefix_suffix(icu, L"icudt", L"l.dat")) env[L"ICU_DATA"] = path_to_wstring(icu);
+  return env;
+}
+
+std::string run_dvipdfmx_dll(const RendererConfig &cfg, const fs::path &final_path, const fs::path &pdf_path,
+                             const std::string &page_range) {
+  fs::path dll_path = cfg.runtime_root / "bin" / "windows" / "dvipdfmx.dll";
+  if (!fs::exists(dll_path)) throw std::runtime_error("dvipdfmx.dll missing");
+
+  ScopedEnvironment env(runtime_environment_overrides(cfg));
+  using MainFn = int(__cdecl *)(int, char **);
+  HMODULE dll = LoadLibraryW(dll_path.wstring().c_str());
+  if (!dll) throw std::runtime_error("LoadLibrary dvipdfmx.dll failed: " + std::to_string(GetLastError()));
+  auto free_dll = std::unique_ptr<std::remove_pointer<HMODULE>::type, decltype(&FreeLibrary)>(dll, FreeLibrary);
+  auto fn = reinterpret_cast<MainFn>(GetProcAddress(dll, "dlldvipdfmxmain"));
+  if (!fn) throw std::runtime_error("GetProcAddress dlldvipdfmxmain failed: " + std::to_string(GetLastError()));
+
+  std::vector<std::string> args = {
+      "xdvipdfmx",
+      "-q",
+      "-z",
+      "1",
+      "-C",
+      "64",
+      "-s",
+      page_range,
+      "-o",
+      slash_path(pdf_path),
+      slash_path(final_path),
+  };
+  std::vector<char *> av;
+  for (auto &arg : args) av.push_back(arg.data());
+  int code = fn((int)av.size(), av.data());
+  if (code != 0) throw std::runtime_error("dvipdfmx.dll returned " + std::to_string(code));
+  if (!fs::exists(pdf_path)) throw std::runtime_error("dvipdfmx.dll did not write PDF: " + pdf_path.string());
+  return "dll";
 }
 
 void run_sync(const std::string &command, const fs::path &cwd, const std::vector<wchar_t> &environment,
@@ -852,13 +976,13 @@ struct StemTeXRenderer {
       throw ApiException(STEMTEX_ERROR_WORKER_STARTUP, "Live worker did not become ready: " + name);
     }
     lock.unlock();
-    if (prime) prime_worker(*raw, false);
+    if (prime) prime_worker(*raw);
     return slot;
   }
 
-  void prime_worker(WorkerSlot &slot, bool full_warmup) {
+  void prime_worker(WorkerSlot &slot) {
     fs::path req_path = cfg.state_root / "workers" / slot.name / "warmup-request" / "req1.tex";
-    write_text_file(req_path, full_warmup ? installed_warmup_body(cfg) : light_prime_body());
+    write_text_file(req_path, installed_warmup_body(cfg));
     {
       std::lock_guard<std::mutex> lock(slot.mu);
       slot.done = false;
@@ -927,8 +1051,14 @@ struct StemTeXRenderer {
           spare_rebuilding = false;
           return;
         }
-        if (built && (int)spares.size() < cfg.spare_worker_count) {
-          spares.push_back(std::move(built));
+        if (built) {
+          if (!primary || !primary->child.is_running()) {
+            if (primary) primary->child.stop();
+            primary = std::move(built);
+            primary->name = "primary";
+          } else if ((int)spares.size() < cfg.spare_worker_count) {
+            spares.push_back(std::move(built));
+          }
         }
       }
     });
@@ -1015,8 +1145,9 @@ struct StemTeXRenderer {
     status.store(STEMTEX_STATUS_RENDERING);
     if (!primary || !primary->child.is_running()) {
       if (!promote_if_available_locked()) {
-        primary = create_ready_worker("primary");
         schedule_spare_rebuild_locked();
+        status.store(STEMTEX_STATUS_RESTARTING);
+        throw ApiException(STEMTEX_ERROR_WORKER_RESTARTING, "No ready XeTeX worker; engine is rebuilding");
       }
     }
     WorkerSlot &slot = *primary;
@@ -1100,11 +1231,19 @@ struct StemTeXRenderer {
     size_t final_bytes = finalize_xdv_body(cumulative, final_path, parts, (uint16_t)request_no, last_bop);
     int64_t convert_start = now_ms();
     fs::path xdvipdfmx = cfg.runtime_root / "bin" / "windows" / "xdvipdfmx.exe";
-    std::ostringstream cmd;
-    cmd << quote_cmd_arg(xdvipdfmx.string()) << " -q -s " << request_no << "-" << request_no
-        << " -o " << quote_cmd_arg(pdf_path.string()) << " " << quote_cmd_arg(final_path.string());
+    std::string xdvipdfmx_options = "-q -z 1 -C 64";
+    std::string page_range = std::to_string(request_no) + "-" + std::to_string(request_no);
+    std::string xdvipdfmx_mode = "dll";
     try {
-      run_sync(cmd.str(), cfg.repo_root, worker_env, (DWORD)cfg.xdvipdfmx_timeout_ms);
+      try {
+        xdvipdfmx_mode = run_dvipdfmx_dll(cfg, final_path, pdf_path, page_range);
+      } catch (const std::exception &) {
+        xdvipdfmx_mode = "exe-fallback";
+        std::ostringstream cmd;
+        cmd << quote_cmd_arg(xdvipdfmx.string()) << " " << xdvipdfmx_options << " -s " << page_range
+            << " -o " << quote_cmd_arg(pdf_path.string()) << " " << quote_cmd_arg(final_path.string());
+        run_sync(cmd.str(), cfg.repo_root, worker_env, (DWORD)cfg.xdvipdfmx_timeout_ms);
+      }
     } catch (const std::exception &e) {
       status.store(STEMTEX_STATUS_READY);
       throw ApiException(STEMTEX_ERROR_XDVIPDFMX, e.what());
@@ -1114,6 +1253,8 @@ struct StemTeXRenderer {
     std::ostringstream summary;
     summary << "{"
             << "\"pdfMode\":\"cpp-dll-live-worker-latest-page\","
+            << "\"xdvipdfmxOptions\":\"" << json_escape(xdvipdfmx_options) << "\","
+            << "\"xdvipdfmxMode\":\"" << json_escape(xdvipdfmx_mode) << "\","
             << "\"widthPt\":" << clamp_width(cfg, width_pt) << ","
             << "\"requestToPdfMs\":" << (end - start) << ","
             << "\"finalizeXdvMs\":" << (convert_start - finalize_start) << ","
@@ -1288,6 +1429,24 @@ STEMTEX_API int stemtex_renderer_cancel_current(StemTeXRenderer *renderer, StemT
 STEMTEX_API StemTeXRendererStatus stemtex_renderer_status(StemTeXRenderer *renderer) {
   if (!renderer) return STEMTEX_STATUS_DEAD;
   return renderer->status.load();
+}
+
+STEMTEX_API int stemtex_renderer_engine_snapshot(StemTeXRenderer *renderer, StemTeXEngineSnapshot *snapshot) {
+  if (!renderer || !snapshot) return 0;
+  snapshot->status = renderer->status.load();
+  snapshot->last_error = STEMTEX_OK;
+  {
+    std::lock_guard<std::mutex> lock(renderer->diagnostic_mu);
+    snapshot->last_error = renderer->last_error;
+  }
+  {
+    std::lock_guard<std::mutex> lock(renderer->render_mu);
+    snapshot->primary_ready = renderer->primary && renderer->primary->child.is_running() ? 1 : 0;
+    snapshot->spare_ready = renderer->spare_ready_count_locked();
+    snapshot->spare_target = renderer->cfg.spare_worker_count;
+    snapshot->spare_rebuilding = renderer->spare_rebuilding ? 1 : 0;
+  }
+  return 1;
 }
 
 STEMTEX_API StemTeXErrorCode stemtex_renderer_last_error_code(StemTeXRenderer *renderer) {

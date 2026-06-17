@@ -29,6 +29,7 @@
 #include <QString>
 #include <QStringList>
 #include <QTextBrowser>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -98,6 +99,14 @@ QString oneLineJsonMetric(const QString &summaryJson) {
       .arg(obj.value("spareTarget").toInt());
 }
 
+int jsonIntValue(const QString &summaryJson, const QString &key, int fallback) {
+  QJsonParseError err{};
+  QJsonDocument doc = QJsonDocument::fromJson(summaryJson.toUtf8(), &err);
+  if (err.error != QJsonParseError::NoError || !doc.isObject()) return fallback;
+  QJsonValue value = doc.object().value(key);
+  return value.isDouble() ? value.toInt() : fallback;
+}
+
 QByteArray encodeWithCodePage(const QString &text, UINT codePage) {
   std::wstring wide = text.toStdWString();
   if (wide.empty()) return QByteArray();
@@ -118,12 +127,9 @@ QByteArray encodeSnippetForTeX(const QString &text, const QString &encoding) {
   return text.toUtf8();
 }
 
-QRect expandRectToWidth(QRect rect, int minWidth, const QRect &limit) {
+QRect expandRectRightToWidth(QRect rect, int minWidth, const QRect &limit) {
   if (rect.width() >= minWidth) return rect.intersected(limit);
-  int extra = minWidth - rect.width();
-  rect.adjust(-(extra / 2), 0, extra - (extra / 2), 0);
-  if (rect.left() < limit.left()) rect.translate(limit.left() - rect.left(), 0);
-  if (rect.right() > limit.right()) rect.translate(limit.right() - rect.right(), 0);
+  rect.setRight(rect.left() + minWidth - 1);
   return rect.intersected(limit);
 }
 
@@ -154,7 +160,7 @@ QImage renderCroppedPdfPreview(const QString &pdfPath, int minWidthPt) {
   if (bounds.isNull()) return rgba;
 
   int pad = 24;
-  bounds = expandRectToWidth(bounds, qMax(1, int(minWidthPt * pixelsPerPoint)), rgba.rect());
+  bounds = expandRectRightToWidth(bounds, qMax(1, int(minWidthPt * pixelsPerPoint)), rgba.rect());
   bounds = bounds.adjusted(-pad, -pad, pad, pad).intersected(rgba.rect());
   QImage cropped = rgba.copy(bounds);
   QImage white(cropped.size(), QImage::Format_RGB32);
@@ -292,6 +298,13 @@ class MainWindow : public QMainWindow {
     splitter->setStretchFactor(1, 1);
     rootLayout->addWidget(splitter, 1);
     setCentralWidget(central);
+    engineStatusLabel_ = new QLabel(this);
+    engineStatusLabel_->setTextFormat(Qt::RichText);
+    engineStatusLabel_->setMinimumWidth(180);
+    statusBar()->addWidget(engineStatusLabel_, 1);
+    enginePollTimer_ = new QTimer(this);
+    enginePollTimer_->setInterval(500);
+    connect(enginePollTimer_, &QTimer::timeout, this, [this]() { refreshEngineStatus(); });
 
     connect(widthSlider_, &QSlider::valueChanged, widthSpin_, &QSpinBox::setValue);
     connect(widthSpin_, &QSpinBox::valueChanged, widthSlider_, &QSlider::setValue);
@@ -306,7 +319,8 @@ class MainWindow : public QMainWindow {
       if (!lastPdf_.isEmpty()) QDesktopServices::openUrl(QUrl::fromLocalFile(lastPdf_));
     });
 
-    setUiReady(false, "正在初始化 StemTeX renderer...");
+    updateEngineStatus(false, spareReady_, spareTarget_);
+    setUiReady(false);
     updatePreviewMinimumWidth(widthSpin_->value());
     initializeRenderer();
   }
@@ -317,9 +331,8 @@ class MainWindow : public QMainWindow {
   }
 
  private:
-  void setUiReady(bool ready, const QString &message) {
+  void setUiReady(bool ready) {
     renderButton_->setEnabled(ready);
-    statusBar()->showMessage(message);
   }
 
   void setPreviewImageReady(bool ready) {
@@ -327,8 +340,36 @@ class MainWindow : public QMainWindow {
     saveImageButton_->setEnabled(ready);
   }
 
+  QString lightHtml(bool ok) const {
+    return QString("<span style=\"color:%1;font-size:14px;\">&#9679;</span>").arg(ok ? "#179c48" : "#c62828");
+  }
+
+  void updateEngineStatus(bool primaryOk, int spareReady, int spareTarget, const QString &note = QString()) {
+    spareReady_ = qMax(0, spareReady);
+    spareTarget_ = qMax(0, spareTarget);
+    QString text = lightHtml(primaryOk);
+    for (int i = 0; i < spareTarget_; ++i) {
+      text += lightHtml(i < spareReady_);
+    }
+    QString shownNote = note.isEmpty() ? engineNote_ : note;
+    if (!shownNote.isEmpty()) {
+      engineNote_ = shownNote;
+      text += "<span style=\"color:transparent;font-size:14px;\">&#9679;</span>";
+      text += shownNote.toHtmlEscaped();
+    }
+    engineStatusLabel_->setText(text);
+  }
+
+  void refreshEngineStatus() {
+    if (!renderer_) return;
+    StemTeXEngineSnapshot snapshot{};
+    if (!stemtex_renderer_engine_snapshot(renderer_, &snapshot)) return;
+    updateEngineStatus(snapshot.primary_ready != 0, snapshot.spare_ready, snapshot.spare_target);
+  }
+
   void initializeRenderer() {
     std::thread([this]() {
+      auto start = std::chrono::steady_clock::now();
       QByteArray repo = QDir::cleanPath(repo_root_).toUtf8();
       QByteArray runtime = QDir::cleanPath(runtime_root_).toUtf8();
       StemTeXConfig cfg{};
@@ -340,20 +381,24 @@ class MainWindow : public QMainWindow {
       StemTeXErrorCode code = STEMTEX_OK;
       char *error = nullptr;
       StemTeXRenderer *renderer = stemtex_renderer_create(&cfg, &code, &error);
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
       QString errorText = error ? QString::fromUtf8(error) : QString();
       stemtex_renderer_free_string(error);
-      QMetaObject::invokeMethod(this, [this, renderer, code, errorText]() {
+      QMetaObject::invokeMethod(this, [this, renderer, code, errorText, elapsed]() {
         if (shuttingDown_.load()) {
           if (renderer) stemtex_renderer_destroy(renderer);
           return;
         }
         renderer_ = renderer;
         if (!renderer_) {
-          setUiReady(false, QString("初始化失败 code=%1").arg((int)code));
+          setUiReady(false);
+          updateEngineStatus(false, 0, spareTarget_, QString("init failed code=%1").arg((int)code));
           details_->setPlainText(errorText);
           return;
         }
-        setUiReady(true, QString("renderer ready: %1").arg(runtime_root_));
+        setUiReady(true);
+        updateEngineStatus(true, 0, spareTarget_, QString("init %1 ms").arg(elapsed));
+        enginePollTimer_->start();
       }, Qt::QueuedConnection);
     }).detach();
   }
@@ -363,7 +408,8 @@ class MainWindow : public QMainWindow {
     QString snippet = editor_->toPlainText();
     QString encoding = encodingCombo_->currentText();
     int width = widthSpin_->value();
-    setUiReady(false, "正在排版...");
+    setUiReady(false);
+    updateEngineStatus(true, spareReady_, spareTarget_);
     setPreviewImageReady(false);
     details_->clear();
     auto start = std::chrono::steady_clock::now();
@@ -381,12 +427,18 @@ class MainWindow : public QMainWindow {
       auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
       QMetaObject::invokeMethod(this, [this, ok, code, pdfPath, summary, errorText, elapsed]() {
         if (shuttingDown_.load()) return;
-        setUiReady(true, ok ? QString("完成，用时 %1 ms").arg(elapsed)
-                            : QString("失败 code=%1，用时 %2 ms").arg((int)code).arg(elapsed));
+        setUiReady(true);
         if (!ok) {
+          engineNote_ = code == STEMTEX_ERROR_WORKER_RESTARTING
+                            ? QString("recovering")
+                            : QString("render failed code=%1").arg((int)code);
+          refreshEngineStatus();
           details_->setPlainText(errorText);
           return;
         }
+        int spareReady = jsonIntValue(summary, "spareReady", spareReady_);
+        int spareTarget = jsonIntValue(summary, "spareTarget", spareTarget_);
+        updateEngineStatus(true, spareReady, spareTarget);
         lastPdf_ = pdfPath;
         openButton_->setEnabled(true);
         showCroppedPreview(pdfPath, widthSpin_->value());
@@ -410,7 +462,7 @@ class MainWindow : public QMainWindow {
   void copyPreviewImage() {
     if (lastPreview_.isNull()) return;
     QApplication::clipboard()->setImage(lastPreview_);
-    statusBar()->showMessage(QString("Copied image: %1 x %2 px").arg(lastPreview_.width()).arg(lastPreview_.height()));
+    updateEngineStatus(renderer_ != nullptr, spareReady_, spareTarget_);
   }
 
   void savePreviewImage() {
@@ -419,10 +471,10 @@ class MainWindow : public QMainWindow {
                                                 "PNG image (*.png);;JPEG image (*.jpg *.jpeg);;BMP image (*.bmp)");
     if (path.isEmpty()) return;
     if (!lastPreview_.save(path)) {
-      statusBar()->showMessage("Failed to save image");
+      updateEngineStatus(renderer_ != nullptr, spareReady_, spareTarget_, "save failed");
       return;
     }
-    statusBar()->showMessage(QString("Saved image: %1").arg(QDir::toNativeSeparators(path)));
+    updateEngineStatus(renderer_ != nullptr, spareReady_, spareTarget_);
   }
 
   void updatePreviewPixmap() {
@@ -458,6 +510,11 @@ class MainWindow : public QMainWindow {
   QLabel *croppedPreview_ = nullptr;
   QImage lastPreview_;
   QTextBrowser *details_ = nullptr;
+  QLabel *engineStatusLabel_ = nullptr;
+  QTimer *enginePollTimer_ = nullptr;
+  int spareReady_ = 0;
+  int spareTarget_ = 1;
+  QString engineNote_;
 };
 
 int main(int argc, char **argv) {
