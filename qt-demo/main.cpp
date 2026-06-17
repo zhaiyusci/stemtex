@@ -3,11 +3,13 @@
 #include <QApplication>
 #include <QByteArray>
 #include <QClipboard>
+#include <QColor>
 #include <QDesktopServices>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFont>
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -18,7 +20,6 @@
 #include <QImage>
 #include <QPainter>
 #include <QPixmap>
-#include <QPlainTextEdit>
 #include <QProcessEnvironment>
 #include <QPushButton>
 #include <QComboBox>
@@ -33,6 +34,9 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
+
+#include <Qsci/qscilexertex.h>
+#include <Qsci/qsciscintilla.h>
 
 #include <atomic>
 #include <chrono>
@@ -178,7 +182,7 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot) {
   printf("repoRoot=%s\nruntimeRoot=%s\nruntimeHasXetexdaemon=%d runtimeHasDvipdfmxDll=%d runtimeHasWarmup=%d\n",
          repo.constData(), runtime.constData(),
          QFileInfo::exists(runtimeDir.filePath("bin/windows/xetexdaemon.exe")) ? 1 : 0,
-         QFileInfo::exists(runtimeDir.filePath("bin/windows/dvipdfmx.dll")) ? 1 : 0,
+         QFileInfo::exists(runtimeDir.filePath("bin/windows/dvipdfmxdaemon.dll")) ? 1 : 0,
          QFileInfo::exists(runtimeDir.filePath("texmf-var/cache-warmup/warmup.xdv")) ? 1 : 0);
   StemTeXConfig cfg{};
   cfg.repo_root_utf8 = repo.constData();
@@ -275,9 +279,31 @@ class MainWindow : public QMainWindow {
     rootLayout->addLayout(toolbar);
 
     auto *splitter = new QSplitter(Qt::Horizontal, central);
-    editor_ = new QPlainTextEdit(splitter);
-    editor_->setPlainText(defaultSnippet());
-    editor_->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    editor_ = new QsciScintilla(splitter);
+    editor_->setUtf8(true);
+    editor_->setText(defaultSnippet());
+    editor_->setWrapMode(QsciScintilla::WrapWord);
+    editor_->setMarginLineNumbers(0, true);
+    editor_->setMarginWidth(0, "0000");
+    editor_->setBraceMatching(QsciScintilla::SloppyBraceMatch);
+    editor_->setCaretLineVisible(true);
+    editor_->setCaretLineBackgroundColor(QColor(245, 248, 255));
+    editor_->setAutoIndent(true);
+    editor_->setIndentationsUseTabs(false);
+    editor_->setIndentationWidth(2);
+    editor_->setTabWidth(2);
+    editor_->setFolding(QsciScintilla::BoxedTreeFoldStyle);
+    QFont editorFont("Consolas", 11);
+    editor_->setFont(editorFont);
+    auto *lexer = new QsciLexerTeX(editor_);
+    lexer->setDefaultFont(editorFont);
+    lexer->setColor(QColor(34, 34, 34), QsciLexerTeX::Default);
+    lexer->setColor(QColor(0, 92, 175), QsciLexerTeX::Command);
+    lexer->setColor(QColor(105, 58, 8), QsciLexerTeX::Special);
+    lexer->setColor(QColor(100, 70, 160), QsciLexerTeX::Group);
+    lexer->setColor(QColor(20, 120, 70), QsciLexerTeX::Symbol);
+    lexer->setColor(QColor(34, 34, 34), QsciLexerTeX::Text);
+    editor_->setLexer(lexer);
 
     auto *previewShell = new QWidget(splitter);
     auto *previewLayout = new QVBoxLayout(previewShell);
@@ -405,7 +431,7 @@ class MainWindow : public QMainWindow {
 
   void renderSnippet() {
     if (!renderer_) return;
-    QString snippet = editor_->toPlainText();
+    QString snippet = editor_->text();
     QString encoding = encodingCombo_->currentText();
     int width = widthSpin_->value();
     setUiReady(false);
@@ -499,7 +525,7 @@ class MainWindow : public QMainWindow {
   StemTeXRenderer *renderer_ = nullptr;
   std::atomic<bool> shuttingDown_{false};
   QString lastPdf_;
-  QPlainTextEdit *editor_ = nullptr;
+  QsciScintilla *editor_ = nullptr;
   QSlider *widthSlider_ = nullptr;
   QSpinBox *widthSpin_ = nullptr;
   QComboBox *encodingCombo_ = nullptr;

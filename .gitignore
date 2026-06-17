@@ -15,3 +15,14 @@ texlive-source/
 *.xdv
 *.synctex.gz
 node_modules/
+third_party/downloads/
+third_party/qscintilla-src/Python/
+third_party/qscintilla-src/designer/
+third_party/qscintilla-src/doc/
+third_party/qscintilla-src/example/
+third_party/qscintilla-src/qsci/
+third_party/qscintilla-build/*
+!third_party/qscintilla-build/release/
+third_party/qscintilla-build/release/*
+!third_party/qscintilla-build/release/qscintilla2_qt6.dll
+!third_party/qscintilla-build/release/qscintilla2_qt6.lib
