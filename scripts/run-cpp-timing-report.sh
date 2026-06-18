@@ -3,14 +3,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT_WIN="$(cygpath -w "$ROOT")"
-RUNTIME_ROOT="${1:-C:\\StemTeX}"
+RUNTIME_ROOT="${1:-$(cygpath -w "$ROOT/dist/stemtex-texlive-daemon-static")}"
 RUNS="${RUNS:-5}"
+TIMEOUT_S="${TIMEOUT:-90}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 OUT_DIR="$ROOT/out/timing/cpp-renderer-$STAMP"
 RAW_DIR="$OUT_DIR/raw"
-BUILD_DIR="$ROOT/dist/cpp-daemon/build"
-BUILD_DIR_WIN="$(cygpath -w "$BUILD_DIR")"
-EXE="$BUILD_DIR/stemtex-renderer-smoke.exe"
+EXE="$ROOT/build/cpp-daemon/Release/stemtex-renderer-smoke.exe"
 
 mkdir -p "$RAW_DIR"
 
@@ -42,7 +41,7 @@ run_case() {
   local log_file="$RAW_DIR/$name.log"
   log "case=$name runs=$runs"
   set +e
-  "$EXE" "$ROOT_WIN" "$RUNTIME_ROOT" "$runs" "$@" >"$log_file" 2>&1
+  timeout "${TIMEOUT_S}s" "$EXE" --repo "$ROOT_WIN" --runtime "$RUNTIME_ROOT" --runs "$runs" "$@" >"$log_file" 2>&1
   local code=$?
   set -e
   printf '%s\n' "$code" >"$RAW_DIR/$name.exit"
@@ -59,17 +58,16 @@ log "runtime=$RUNTIME_ROOT"
 log "output=$OUT_DIR"
 
 log "building C++ renderer"
-source "$ROOT/scripts/env-msvc-ucrt64.sh"
-cmake --build "$BUILD_DIR_WIN" --config Release
+"$ROOT/scripts/build-cpp-daemon.sh"
 
 rm -rf "$ROOT/out/cpp-renderer-state" "$ROOT/out/cpp-renderer-renders"
 
 run_case default_hot "$RUNS"
-run_case physics 1 --physics
-run_case fonts 1 --fonts
-run_case chem_text 1 --chem-text
-run_case bad_error 1 --bad
-run_case bad_then_good 2 --bad-then-good-wait
+run_case physics 1 --case physics
+run_case fonts 1 --case fonts
+run_case chem_text 1 --case chem-text
+run_case bad_error 1 --case bad
+run_case bad_then_good 2 --case bad-then-good-wait
 
 log "generating report"
 NODE_JS="$(find_node)"

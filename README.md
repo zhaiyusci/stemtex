@@ -66,6 +66,7 @@ installer/
 scripts/
   build-cpp-daemon.sh             Build stemtex-renderer.dll.
   build-gui.sh                    Build StemTeX Renderer GUI.
+  smoke-cpp-renderer.sh           Canonical C++ renderer smoke entrypoint.
   build-stemtex-installer.sh      Stage runtime/GUI/SDK and build installer.
   generate-gui-icon.py            Regenerate GUI PNG/ICO from SVG.
   refresh-static-runtime-cache.sh Rebuild runtime warmup/cache data.
@@ -105,6 +106,13 @@ Build the renderer and GUI:
 ./scripts/build-cpp-daemon.sh
 ./scripts/sync-renderer-sdk-to-runtime.sh
 ./scripts/build-gui.sh
+```
+
+Run the C++ renderer smoke suite:
+
+```sh
+./scripts/smoke-cpp-renderer.sh quick
+./scripts/smoke-cpp-renderer.sh errors
 ```
 
 Run a native GUI smoke test:

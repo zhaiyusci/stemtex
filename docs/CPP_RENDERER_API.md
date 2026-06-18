@@ -374,23 +374,38 @@ global TeX Live or old StemTeX install does not leak into the render.
 
 ## Smoke Tests
 
-The smoke executable supports these cases:
+Use the script wrapper rather than invoking the smoke executable by hand. The
+wrapper fixes the repo/runtime paths, builds the current target, applies a
+timeout, and uses named arguments so flags cannot be mistaken for positional
+paths.
 
-```text
-stemtex-renderer-smoke.exe <repo-root> <runtime-root> <runs>
-stemtex-renderer-smoke.exe <repo-root> <runtime-root> 1 --physics
-stemtex-renderer-smoke.exe <repo-root> <runtime-root> 1 --fonts
-stemtex-renderer-smoke.exe <repo-root> <runtime-root> 1 --chem-text
-stemtex-renderer-smoke.exe <repo-root> <runtime-root> 1 --bad
-stemtex-renderer-smoke.exe <repo-root> <runtime-root> 2 --bad-then-good
+```bash
+cd /c/Users/jairy/Documents/xetex/stemtex
+./scripts/smoke-cpp-renderer.sh quick
+./scripts/smoke-cpp-renderer.sh errors
+./scripts/smoke-cpp-renderer.sh timing
+./scripts/smoke-cpp-renderer.sh case physics
 ```
 
-`--bad` is expected to fail quickly. It verifies the TeX-error path instead of
-PDF output.
+Useful environment variables:
 
-`--bad-then-good` first sends a bad snippet and then immediately sends a good
-snippet. The second render should succeed through the promoted spare worker
-without cold-start latency.
+```text
+STEMTEX_RUNTIME  Runtime tree, defaulting to dist/stemtex-texlive-daemon-static.
+RUNS             Number of repeated renders for applicable cases.
+SPARES           Hot spare target for the renderer.
+TIMEOUT          Per smoke command timeout in seconds.
+BUILD=0          Reuse an existing build instead of rebuilding first.
+```
+
+The underlying executable still accepts named options for diagnostics:
+
+```text
+stemtex-renderer-smoke.exe --repo PATH --runtime PATH --runs N --case physics --spares 2
+stemtex-renderer-smoke.exe --async --runs 5 --spares 2
+```
+
+Legacy positional arguments are accepted only for old logs and ad-hoc debugging;
+new scripts and docs should not use them.
 
 ## Timing Report
 
@@ -398,7 +413,7 @@ Run the timing report from MSYS2:
 
 ```bash
 cd /c/Users/jairy/Documents/xetex/stemtex
-./scripts/run-cpp-timing-report.sh 'C:\StemTeX'
+./scripts/run-cpp-timing-report.sh
 ```
 
 The script writes:

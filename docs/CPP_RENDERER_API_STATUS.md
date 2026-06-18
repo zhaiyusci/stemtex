@@ -22,6 +22,9 @@ tracked here as TODO:
 - Concurrent render calls on one renderer are serialized by the renderer.
 - Spare workers are failover capacity only; they are not a throughput pool.
 - Async render is a convenience wrapper around the same serialized render path.
+- `stemtex_renderer_engine_snapshot` is a synchronous cached-state read. It does
+  not take the render lock and should be the single source of truth for GUI
+  status indicators.
 - Cancellation kills the active worker and makes that active render fail with
   `STEMTEX_ERROR_CANCELLED`; queued work continues after failover/rebuild.
 - Default request and `xdvipdfmx` timeouts are both 90000 ms.

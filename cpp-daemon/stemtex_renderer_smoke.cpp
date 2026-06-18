@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -19,12 +20,103 @@ static long long now_ms() {
 static fs::path default_runtime_root(const fs::path &repo_root) {
   const char *env = std::getenv("STEMTEX_RUNTIME");
   if (env && *env) return fs::path(env);
-  fs::path side_tree = repo_root / "dist" / "stemtex-texlive-daemon";
+  fs::path side_tree = repo_root / "dist" / "stemtex-texlive-daemon-static";
   if (fs::exists(side_tree / "bin" / "windows" / "xetexdaemon.exe") &&
       fs::exists(side_tree / "texmf-var" / "cache-warmup" / "warmup.xdv")) {
     return side_tree;
   }
   return fs::path("C:/StemTeX");
+}
+
+struct SmokeOptions {
+  fs::path repo_root = fs::current_path();
+  fs::path runtime_root;
+  int runs = 1;
+  std::string case_name;
+  int spare_workers = 1;
+  std::string warmup_tex;
+  std::string worker_template;
+  std::string preamble_tex;
+  bool allow_exe = false;
+};
+
+static void print_usage(const char *argv0) {
+  std::fprintf(stderr,
+               "Usage:\n"
+               "  %s [--repo PATH] [--runtime PATH] [--runs N] [--case NAME] [--spares N]\n"
+               "  %s --async --runs 5 --spares 2\n"
+               "\n"
+               "Cases: default, validate, refresh, physics, fonts, chem-text, bad,\n"
+               "       bad-then-good, bad-then-good-wait, bad-then-good-wait-long,\n"
+               "       bad-stress, latin-math, latin-text, restart, async, cancel,\n"
+               "       recover-no-worker, bytes\n",
+               argv0, argv0);
+}
+
+static std::string canonical_case(std::string value) {
+  if (value.empty() || value == "default") return "";
+  if (value.rfind("--", 0) != 0) value = "--" + value;
+  return value;
+}
+
+static SmokeOptions parse_options(int argc, char **argv) {
+  SmokeOptions opts;
+  bool legacy_positional = argc > 1 && argv[1] && std::string(argv[1]).rfind("--", 0) != 0;
+  if (legacy_positional) {
+    opts.repo_root = argc > 1 && argv[1] && *argv[1] ? fs::absolute(argv[1]) : fs::current_path();
+    opts.runtime_root = argc > 2 && argv[2] && *argv[2] ? fs::absolute(argv[2]) : fs::absolute(default_runtime_root(opts.repo_root));
+    opts.runs = argc > 3 ? std::atoi(argv[3]) : 1;
+    opts.case_name = argc > 4 ? canonical_case(argv[4]) : "";
+    opts.spare_workers = argc > 5 ? std::atoi(argv[5]) : 1;
+    opts.warmup_tex = argc > 6 ? argv[6] : "";
+    opts.worker_template = argc > 7 ? argv[7] : "";
+    opts.preamble_tex = argc > 8 ? argv[8] : "";
+    return opts;
+  }
+
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i] ? argv[i] : "";
+    auto need_value = [&](const char *name) -> const char * {
+      if (i + 1 >= argc || !argv[i + 1]) {
+        print_usage(argv[0]);
+        throw std::runtime_error(std::string("missing value for ") + name);
+      }
+      return argv[++i];
+    };
+    if (arg == "--help" || arg == "-h") {
+      print_usage(argv[0]);
+      std::exit(0);
+    } else if (arg == "--repo") {
+      opts.repo_root = fs::absolute(need_value("--repo"));
+    } else if (arg == "--runtime") {
+      opts.runtime_root = fs::absolute(need_value("--runtime"));
+    } else if (arg == "--runs") {
+      opts.runs = std::atoi(need_value("--runs"));
+    } else if (arg == "--case") {
+      opts.case_name = canonical_case(need_value("--case"));
+    } else if (arg == "--spares") {
+      opts.spare_workers = std::atoi(need_value("--spares"));
+    } else if (arg == "--warmup") {
+      opts.warmup_tex = need_value("--warmup");
+    } else if (arg == "--worker-template") {
+      opts.worker_template = need_value("--worker-template");
+    } else if (arg == "--preamble") {
+      opts.preamble_tex = need_value("--preamble");
+    } else if (arg == "--allow-exe") {
+      opts.allow_exe = true;
+    } else if (arg.rfind("--", 0) == 0) {
+      opts.case_name = canonical_case(arg);
+    } else if (opts.case_name.empty()) {
+      opts.case_name = canonical_case(arg);
+    } else {
+      print_usage(argv[0]);
+      throw std::runtime_error("unexpected argument: " + arg);
+    }
+  }
+
+  opts.repo_root = fs::absolute(opts.repo_root);
+  if (opts.runtime_root.empty()) opts.runtime_root = fs::absolute(default_runtime_root(opts.repo_root));
+  return opts;
 }
 
 static bool summary_has_dll_mode(const char *summary) {
@@ -37,8 +129,10 @@ static void print_snapshot(StemTeXRenderer *renderer, const char *label) {
     std::printf("%s snapshot=unavailable\n", label);
     return;
   }
-  std::printf("%s status=%d primary=%d spare=%d/%d rebuilding=%d lastError=%d\n", label, (int)snapshot.status,
-              snapshot.primary_ready, snapshot.spare_ready, snapshot.spare_target, snapshot.spare_rebuilding,
+  std::printf("%s status=%d stage=%d primary=%d spare=%d/%d rebuilding=%d async=%d pending=%d runningJob=%llu pendingJob=%llu lastError=%d\n",
+              label, (int)snapshot.status, (int)snapshot.stage, snapshot.primary_ready, snapshot.spare_ready,
+              snapshot.spare_target, snapshot.spare_rebuilding, snapshot.async_running, snapshot.async_pending,
+              (unsigned long long)snapshot.running_job_id, (unsigned long long)snapshot.pending_job_id,
               (int)snapshot.last_error);
 }
 
@@ -58,25 +152,31 @@ static void wait_for_spares(StemTeXRenderer *renderer, int seconds) {
 }
 
 int main(int argc, char **argv) {
-  fs::path repo_root = argc > 1 && argv[1] && *argv[1] ? fs::absolute(argv[1]) : fs::current_path();
-  fs::path runtime_root = argc > 2 && argv[2] && *argv[2] ? fs::absolute(argv[2]) : fs::absolute(default_runtime_root(repo_root));
+  SmokeOptions opts;
+  try {
+    opts = parse_options(argc, argv);
+  } catch (const std::exception &e) {
+    std::fprintf(stderr, "%s\n", e.what());
+    return 2;
+  }
+  fs::path repo_root = opts.repo_root;
+  fs::path runtime_root = opts.runtime_root;
   std::string repo_root_utf8 = repo_root.generic_string();
   std::string runtime_root_utf8 = runtime_root.generic_string();
 
   StemTeXConfig cfg{};
   cfg.repo_root_utf8 = repo_root_utf8.c_str();
   cfg.runtime_root_utf8 = runtime_root_utf8.c_str();
-  int runs = argc > 3 ? std::atoi(argv[3]) : 1;
-  std::string case_name = argc > 4 ? argv[4] : "";
-  cfg.spare_worker_count = argc > 5 ? std::atoi(argv[5]) : 1;
-  cfg.warmup_tex_utf8 = argc > 6 ? argv[6] : nullptr;
-  cfg.worker_template_utf8 = argc > 7 ? argv[7] : nullptr;
-  cfg.preamble_tex_utf8 = argc > 8 ? argv[8] : nullptr;
+  int runs = opts.runs;
+  std::string case_name = opts.case_name;
+  cfg.spare_worker_count = opts.spare_workers;
+  cfg.warmup_tex_utf8 = opts.warmup_tex.empty() ? nullptr : opts.warmup_tex.c_str();
+  cfg.worker_template_utf8 = opts.worker_template.empty() ? nullptr : opts.worker_template.c_str();
+  cfg.preamble_tex_utf8 = opts.preamble_tex.empty() ? nullptr : opts.preamble_tex.c_str();
   cfg.request_timeout_ms = 90000;
   cfg.xdvipdfmx_timeout_ms = 90000;
   if (runs <= 0) runs = 1;
-  bool expect_dll = case_name != "--allow-exe";
-  if (case_name == "--allow-exe") case_name.clear();
+  bool expect_dll = !opts.allow_exe;
 
   std::printf("repoRoot=%s\n", repo_root_utf8.c_str());
   std::printf("runtimeRoot=%s\n", runtime_root_utf8.c_str());
