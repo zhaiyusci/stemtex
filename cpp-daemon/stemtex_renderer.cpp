@@ -31,7 +31,7 @@ namespace fs = std::filesystem;
 namespace {
 
 const char *kWorkerStop = "\\workerstop";
-const char *kRendererVersion = "0.1.0";
+const char *kRendererVersion = "0.2.0";
 const char *kRendererAbiVersion = "0.2.0";
 
 char *alloc_c_string(const std::string &s);

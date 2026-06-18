@@ -13,7 +13,7 @@ $stemTeXVersionFile = Join-Path $scriptRoot "VERSION"
 $stemTeXVersion = if (Test-Path -LiteralPath $stemTeXVersionFile) {
   (Get-Content -LiteralPath $stemTeXVersionFile -TotalCount 1).Trim()
 } else {
-  "0.1.0"
+  "0.2.0"
 }
 
 function Resolve-ExistingPath {
@@ -129,8 +129,11 @@ function Write-CacheWarmupTemplate {
 \usepackage{physics}
 \usepackage{xcolor}
 \usepackage{cancel}
+\usepackage[active,tightpage]{preview}
+\PreviewBorder=1pt
 
 \begin{document}
+\begin{preview}
 中文缓存预热，标点测试：，。！？；：“”
 
 English warmup: Times New Roman, \textbf{bold}, \textit{italic},
@@ -196,6 +199,7 @@ Script-size warmup:
   x_{i_j}^{k_\ell} + \frac{\frac{a}{b}}{\sqrt{c_d}}
 \]
 
+\end{preview}
 \end{document}
 '@
 
@@ -673,6 +677,7 @@ $texmfDirs = @(
   "tex\latex\l3packages\xtemplate",
   "tex\latex\mathtools",
   "tex\latex\mhchem",
+  "tex\latex\preview",
   "tex\latex\siunitx",
   "tex\latex\physics",
   "tex\latex\tools",

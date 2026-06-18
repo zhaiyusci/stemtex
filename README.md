@@ -1,7 +1,7 @@
 # StemTeX
 
 StemTeX is a Windows-native XeLaTeX daemon runtime for low-latency rendering of
-short STEM snippets.  The current version is `0.1.0`.
+short STEM snippets.  The current version is `0.2.0`.
 
 The project is no longer organized around the old Node worker/web preview
 experiments.  The supported path is:
@@ -17,9 +17,11 @@ experiments.  The supported path is:
 The renderer keeps one XeTeX worker hot with a fixed preamble.  Render requests
 send a small snippet body and a text-block width to that worker.  XeTeX runs with
 `-no-pdf --flush-output-on-shipout --no-font-cache-refresh`, writes cumulative
-XDV output, and flushes it after each `\shipout`.  The renderer then synthesizes
-a valid final XDV postamble and asks `xdvipdfmxdaemon` to convert only the newest
-page.
+XDV output, and flushes it after each `\shipout`.  Each snippet is wrapped in
+LaTeX's `preview` environment, so the emitted page box is tightened around the
+typeset content instead of staying at a full paper size.  The renderer then
+synthesizes a valid final XDV postamble and asks `xdvipdfmxdaemon` to convert
+only the newest page.
 
 This is deliberately not a general LaTeX sandbox.  The intended input is short
 Chinese/English STEM text with math, chemistry, physics, color, and ordinary
@@ -120,7 +122,7 @@ Build the installer:
 The installer is written under:
 
 ```text
-dist/installer/StemTeX-0.1.0-Setup.exe
+dist/installer/StemTeX-0.2.0-Setup.exe
 ```
 
 The installer intentionally does not ship generated font cache files.  During

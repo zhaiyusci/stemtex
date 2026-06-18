@@ -70,15 +70,20 @@ On render, it:
 
 1. Writes the snippet body to a request file.
 2. Sends width and request path to the primary live worker.
-3. Waits for `WORKER_DONE:N`.
-4. Reads the current cumulative live XDV.
-5. Synthesizes a valid final XDV postamble.
-6. Calls `xdvipdfmx -s N-N` to convert only the newest page.
-7. Returns the PDF path and a JSON timing summary.
+3. Wraps the snippet in a fixed-width `preview` page inside XeTeX.
+4. Waits for `WORKER_DONE:N`.
+5. Reads the current cumulative live XDV.
+6. Synthesizes a valid final XDV postamble.
+7. Calls `xdvipdfmx -s N-N` to convert only the newest page.
+8. Returns the PDF path and a JSON timing summary.
 
 The current conversion path is deliberately conservative: cumulative XDV plus
 latest-page conversion. The earlier standalone-delta XDV experiment is not part
 of this API.
+
+The `preview` package owns the tight page box.  The GUI may still crop the
+rendered bitmap for display convenience, but the PDF itself is already cropped
+to the snippet content plus the configured preview border.
 
 ## Public API
 

@@ -5,6 +5,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$root/.." && pwd)"
 standalone="${STANDALONE_DIR:-$root/out/standalone-msvc}"
 tree="${STEMTEX_SIDE_TREE:-$repo/dist/stemtex-texlive-daemon-static}"
+texlive_root="${TEXLIVE_ROOT:-/c/texlive/2026}"
 bin="$tree/bin/windows"
 
 die() {
@@ -39,6 +40,16 @@ cp -p "$icu_data" "$bin/icu-data/icudt78l.dat"
 
 need_file "$tree/texmf-dist/web2c/texmf.cnf"
 need_file "$tree/texmf-dist/dvipdfmx/dvipdfmx.cfg"
+
+preview_src="$texlive_root/texmf-dist/tex/latex/preview"
+preview_dst="$tree/texmf-dist/tex/latex/preview"
+if [[ -d "$preview_src" ]]; then
+  mkdir -p "$(dirname "$preview_dst")"
+  rm -rf "$preview_dst"
+  cp -a "$preview_src" "$preview_dst"
+elif [[ ! -f "$preview_dst/preview.sty" ]]; then
+  die "preview package missing; set TEXLIVE_ROOT to a TeX Live tree containing texmf-dist/tex/latex/preview"
+fi
 
 if [[ "${PRUNE_OLD_RUNTIME_DLLS:-0}" == "1" ]]; then
   rm -f \

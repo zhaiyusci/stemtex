@@ -146,6 +146,10 @@ It is copied into the runtime as:
 runtime/preamble.tex
 ```
 
+The preamble loads `preview` with `active,tightpage`; the live worker wraps each
+request in a `preview` environment so the resulting PDF page is already cropped
+to the snippet content.
+
 ## Historical Routes
 
 The earlier W32TeX source route produced `ptx/texk/web2c/xetex.dll` and patched

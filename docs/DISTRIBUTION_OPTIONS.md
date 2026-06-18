@@ -66,7 +66,9 @@ Costs:
 - The runtime is intentionally narrower than a full TeX Live installation.
 
 Use this path for applications with a known preamble and short snippets using
-ordinary CJK, English, math, chemistry, physics, and color content.
+ordinary CJK, English, math, chemistry, physics, and color content.  The default
+preamble includes LaTeX's `preview` package so snippet PDFs are emitted as tight
+content pages instead of full paper pages.
 
 ## Conceptual: User TeX Integration
 

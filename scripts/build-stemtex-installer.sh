@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-app_version="${APP_VERSION:-0.1.0}"
+app_version="${APP_VERSION:-0.2.0}"
 stage_root="${STAGE_ROOT:-$repo_root/dist/stemtex-installer/StemTeX}"
 output_dir="${OUTPUT_DIR:-$repo_root/dist/installer}"
 runtime_root="${RUNTIME_ROOT:-$repo_root/dist/stemtex-texlive-daemon-static}"
@@ -20,6 +20,10 @@ if [[ ! -f "$gui_root/stemtex-renderer-gui.exe" ]]; then
 fi
 if [[ ! -f "$cpp_daemon_root/stemtex-renderer.dll" || ! -f "$cpp_daemon_root/stemtex-renderer.lib" ]]; then
   echo "C++ renderer build not found under: $cpp_daemon_root" >&2
+  exit 1
+fi
+if [[ ! -f "$runtime_root/texmf-dist/tex/latex/preview/preview.sty" ]]; then
+  echo "Runtime is missing preview package: $runtime_root/texmf-dist/tex/latex/preview/preview.sty" >&2
   exit 1
 fi
 
