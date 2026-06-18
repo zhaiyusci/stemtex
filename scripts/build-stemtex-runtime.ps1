@@ -13,7 +13,7 @@ $stemTeXVersionFile = Join-Path $scriptRoot "VERSION"
 $stemTeXVersion = if (Test-Path -LiteralPath $stemTeXVersionFile) {
   (Get-Content -LiteralPath $stemTeXVersionFile -TotalCount 1).Trim()
 } else {
-  "0.2.0"
+  "0.2.1"
 }
 
 function Resolve-ExistingPath {

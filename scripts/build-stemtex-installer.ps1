@@ -17,7 +17,7 @@ if (-not $AppVersion) {
   if (Test-Path -LiteralPath $versionFile) {
     $AppVersion = (Get-Content -LiteralPath $versionFile -TotalCount 1).Trim()
   } else {
-    $AppVersion = "0.2.0"
+    $AppVersion = "0.2.1"
   }
 }
 if (-not $SourceRoot) {

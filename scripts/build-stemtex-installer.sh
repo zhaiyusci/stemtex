@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-app_version="${APP_VERSION:-0.2.0}"
+app_version="${APP_VERSION:-0.2.1}"
 stage_root="${STAGE_ROOT:-$repo_root/dist/stemtex-installer/StemTeX}"
 output_dir="${OUTPUT_DIR:-$repo_root/dist/installer}"
 runtime_root="${RUNTIME_ROOT:-$repo_root/dist/stemtex-texlive-daemon-static}"

@@ -31,8 +31,8 @@ namespace fs = std::filesystem;
 namespace {
 
 const char *kWorkerStop = "\\workerstop";
-const char *kRendererVersion = "0.2.0";
-const char *kRendererAbiVersion = "0.2.0";
+const char *kRendererVersion = "0.2.1";
+const char *kRendererAbiVersion = "0.2.1";
 
 char *alloc_c_string(const std::string &s);
 
@@ -422,8 +422,8 @@ struct RendererConfig {
   fs::path preamble_tex;
   int request_timeout_ms = 90000;
   int xdvipdfmx_timeout_ms = 90000;
-  int min_width_pt = 180;
-  int max_width_pt = 430;
+  int min_width_pt = 0;
+  int max_width_pt = 0;
   int default_width_pt = 360;
   int spare_worker_count = 1;
   bool auto_restart = true;
@@ -817,18 +817,13 @@ int normalize_timeout_ms(int value) {
   return value > 0 ? value : 90000;
 }
 
-int normalize_width_bound(int value, int fallback) {
-  return value > 0 ? value : fallback;
+int normalize_default_width(int value) {
+  return value > 0 ? value : 360;
 }
 
-int clamp_width(const RendererConfig &cfg, int width) {
-  int min_width = normalize_width_bound(cfg.min_width_pt, 180);
-  int max_width = normalize_width_bound(cfg.max_width_pt, 430);
-  if (max_width < min_width) std::swap(max_width, min_width);
-  int default_width = normalize_width_bound(cfg.default_width_pt, 360);
-  default_width = std::max(min_width, std::min(max_width, default_width));
-  if (width <= 0) return default_width;
-  return std::max(min_width, std::min(max_width, width));
+int effective_width(const RendererConfig &cfg, int width) {
+  if (width > 0) return width;
+  return normalize_default_width(cfg.default_width_pt);
 }
 
 int normalize_spare_worker_count(int count) {
@@ -870,9 +865,9 @@ RendererConfig config_from_api(const StemTeXConfig *config) {
   if (config) {
     cfg.request_timeout_ms = normalize_timeout_ms(config->request_timeout_ms);
     cfg.xdvipdfmx_timeout_ms = normalize_timeout_ms(config->xdvipdfmx_timeout_ms);
-    cfg.min_width_pt = normalize_width_bound(config->min_width_pt, 180);
-    cfg.max_width_pt = normalize_width_bound(config->max_width_pt, 430);
-    cfg.default_width_pt = normalize_width_bound(config->default_width_pt, 360);
+    cfg.min_width_pt = config->min_width_pt;
+    cfg.max_width_pt = config->max_width_pt;
+    cfg.default_width_pt = normalize_default_width(config->default_width_pt);
     cfg.spare_worker_count = normalize_spare_worker_count(config->spare_worker_count);
     cfg.auto_restart = config->auto_restart == 0 ? true : config->auto_restart != 0;
     cfg.delete_intermediates = config->delete_intermediates != 0;
@@ -1185,7 +1180,8 @@ struct StemTeXRenderer {
       active_slot = &slot;
       cancel_requested = false;
     }
-    slot.child.write_stdin(std::to_string(clamp_width(cfg, width_pt)) + "pt\n");
+    int resolved_width_pt = effective_width(cfg, width_pt);
+    slot.child.write_stdin(std::to_string(resolved_width_pt) + "pt\n");
     slot.child.write_stdin(slash_path(fs::relative(req_path, cfg.repo_root)) + "\n");
 
     {
@@ -1274,7 +1270,7 @@ struct StemTeXRenderer {
             << "\"pdfMode\":\"cpp-dll-live-worker-latest-page\","
             << "\"xdvipdfmxOptions\":\"" << json_escape(xdvipdfmx_options) << "\","
             << "\"xdvipdfmxMode\":\"" << json_escape(xdvipdfmx_mode) << "\","
-            << "\"widthPt\":" << clamp_width(cfg, width_pt) << ","
+            << "\"widthPt\":" << resolved_width_pt << ","
             << "\"requestToPdfMs\":" << (end - start) << ","
             << "\"finalizeXdvMs\":" << (convert_start - finalize_start) << ","
             << "\"xdvipdfmxMs\":" << (end - convert_start) << ","

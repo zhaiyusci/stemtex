@@ -123,8 +123,10 @@ Fields:
   uses a unique directory under the system temporary directory.
 - `request_timeout_ms`: worker request timeout. `0` uses `90000`.
 - `xdvipdfmx_timeout_ms`: PDF conversion timeout. `0` uses `90000`.
-- `min_width_pt`, `max_width_pt`, `default_width_pt`: width policy. `0` uses
-  `180`, `430`, and `360`.
+- `default_width_pt`: width used when a render call passes `width_pt <= 0`.
+  `0` uses `360`.
+- `min_width_pt`, `max_width_pt`: retained in the ABI for host-side policy, but
+  the renderer no longer clamps `width_pt`.
 - `spare_worker_count`: number of hot spare workers to maintain. `0` means the
   default, currently `1`. Positive values are clamped internally; the current
   maximum is `4`.
@@ -256,10 +258,11 @@ int main() {
 
 `width_pt` is the snippet text block width in TeX points.
 
-The renderer clamps invalid or extreme values internally:
+The renderer does not clamp positive width values:
 
 ```text
-180pt <= width <= 430pt
+The C API sends positive `width_pt` values to TeX unchanged. GUI frontends may
+still impose their own control ranges.
 ```
 
 If `width_pt <= 0`, the renderer uses `360pt`.

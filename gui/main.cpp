@@ -271,12 +271,12 @@ class MainWindow : public QMainWindow {
     toolbar->setSpacing(8);
     auto *widthLabel = new QLabel("版心宽度", central);
     widthSlider_ = new QSlider(Qt::Horizontal, central);
-    widthSlider_->setRange(180, 430);
+    widthSlider_->setRange(30, 450);
     widthSlider_->setSingleStep(10);
     widthSlider_->setPageStep(20);
     widthSlider_->setValue(360);
     widthSpin_ = new QSpinBox(central);
-    widthSpin_->setRange(180, 430);
+    widthSpin_->setRange(30, 450);
     widthSpin_->setSingleStep(10);
     widthSpin_->setSuffix(" pt");
     widthSpin_->setValue(360);
