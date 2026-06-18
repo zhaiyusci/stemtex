@@ -91,7 +91,7 @@ but the orchestration is shell-based.
 Build the daemon engine bundle:
 
 ```sh
-cd /c/Users/jairy/Documents/xetex/xetex-live-worker
+cd /c/Users/jairy/Documents/xetex/stemtex
 ./texlive-xetex/build-standalone-msvc.sh
 ./texlive-xetex/install-msvc-standalone-to-side-tree.sh
 ./scripts/refresh-static-runtime-cache.sh

@@ -370,7 +370,7 @@ build_fontconfig() {
 
 write_manifest() {
   cat >"$prefix/VERSIONS.txt" <<EOF
-MSVC static third-party libraries for xetex-live-worker
+MSVC static third-party libraries for StemTeX
 
 zlib       $zlib_version
 libpng     $libpng_version

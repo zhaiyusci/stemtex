@@ -9,7 +9,7 @@ dependencies.
 Build from MSYS2, using the installed Visual Studio toolchain:
 
 ```sh
-cd /c/Users/jairy/Documents/xetex/xetex-live-worker
+cd /c/Users/jairy/Documents/xetex/stemtex
 ./texlive-xetex/build-standalone-msvc.sh
 ```
 

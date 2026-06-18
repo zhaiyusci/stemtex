@@ -218,7 +218,7 @@ void stemtex_renderer_destroy(StemTeXRenderer *renderer);
 
 int main() {
   StemTeXConfig cfg{};
-  cfg.repo_root_utf8 = "C:\\Users\\jairy\\Documents\\xetex\\xetex-live-worker";
+  cfg.repo_root_utf8 = "C:\\Users\\jairy\\Documents\\xetex\\stemtex";
   cfg.runtime_root_utf8 = "C:\\StemTeX\\runtime";
 
   char *error = nullptr;
@@ -369,7 +369,7 @@ without cold-start latency.
 Run the timing report from MSYS2:
 
 ```bash
-cd /c/Users/jairy/Documents/xetex/xetex-live-worker
+cd /c/Users/jairy/Documents/xetex/stemtex
 ./scripts/run-cpp-timing-report.sh 'C:\StemTeX'
 ```
 
