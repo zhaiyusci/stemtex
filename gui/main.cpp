@@ -41,6 +41,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -99,9 +100,12 @@ QString defaultSnippet() {
 }
 
 void configureRendererDllSearch(const QString &runtimeRoot) {
+  QString appDir = QCoreApplication::applicationDirPath();
   QString sdkDir = QDir(runtimeRoot).filePath("bin/sdk");
+  std::wstring appDirWide = QDir::toNativeSeparators(QDir::cleanPath(appDir)).toStdWString();
   std::wstring sdkDirWide = QDir::toNativeSeparators(QDir::cleanPath(sdkDir)).toStdWString();
   SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_USER_DIRS);
+  AddDllDirectory(appDirWide.c_str());
   AddDllDirectory(sdkDirWide.c_str());
 }
 
@@ -124,14 +128,6 @@ QString oneLineJsonMetric(const QString &summaryJson) {
       .arg(obj.value("pdfBytes").toInt())
       .arg(obj.value("spareReady").toInt())
       .arg(obj.value("spareTarget").toInt());
-}
-
-int jsonIntValue(const QString &summaryJson, const QString &key, int fallback) {
-  QJsonParseError err{};
-  QJsonDocument doc = QJsonDocument::fromJson(summaryJson.toUtf8(), &err);
-  if (err.error != QJsonParseError::NoError || !doc.isObject()) return fallback;
-  QJsonValue value = doc.object().value(key);
-  return value.isDouble() ? value.toInt() : fallback;
 }
 
 QByteArray encodeWithCodePage(const QString &text, UINT codePage) {
@@ -369,7 +365,7 @@ class MainWindow : public QMainWindow {
     });
 
     updateEngineStatus(false, spareReady_, spareTarget_);
-    setUiReady(false);
+    setUiReady(true);
     updatePreviewMinimumWidth(widthSpin_->value());
     initializeRenderer();
   }
@@ -396,24 +392,54 @@ class MainWindow : public QMainWindow {
   void updateEngineStatus(bool primaryOk, int spareReady, int spareTarget, const QString &note = QString()) {
     spareReady_ = qMax(0, spareReady);
     spareTarget_ = qMax(0, spareTarget);
+    QString engineText = primaryOk ? "primary ready" : "primary unavailable";
     QString text = lightHtml(primaryOk);
+    text += QString(" <span style=\"color:#333;\">%1</span>").arg(engineText);
+    text += QString(" <span style=\"color:#777;\">spares %1/%2</span>").arg(spareReady_).arg(spareTarget_);
+    text += " ";
     for (int i = 0; i < spareTarget_; ++i) {
       text += lightHtml(i < spareReady_);
     }
-    QString shownNote = note.isEmpty() ? engineNote_ : note;
+    QString shownNote = note;
     if (!shownNote.isEmpty()) {
       engineNote_ = shownNote;
-      text += "<span style=\"color:transparent;font-size:14px;\">&#9679;</span>";
-      text += shownNote.toHtmlEscaped();
+      text += QString(" <span style=\"color:#555;\">%1</span>").arg(shownNote.toHtmlEscaped());
+    } else {
+      engineNote_.clear();
     }
     engineStatusLabel_->setText(text);
   }
 
-  void refreshEngineStatus() {
+  QString snapshotNote(const StemTeXEngineSnapshot &snapshot, const QString &overrideNote = QString()) const {
+    if (!overrideNote.isEmpty()) return overrideNote;
+    QString note;
+    switch (snapshot.stage) {
+      case STEMTEX_STAGE_QUEUED: note = "latest request queued"; break;
+      case STEMTEX_STAGE_TYPESETTING: note = "XeTeX typesetting"; break;
+      case STEMTEX_STAGE_CONVERTING: note = "xdvipdfmx converting PDF"; break;
+      case STEMTEX_STAGE_REBUILDING: note = "worker rebuilding"; break;
+      case STEMTEX_STAGE_STOPPING: note = "renderer stopping"; break;
+      case STEMTEX_STAGE_IDLE:
+      default: note = "idle"; break;
+    }
+    if (snapshot.async_running) {
+      note += QString(", running job %1").arg(QString::number(static_cast<qulonglong>(snapshot.running_job_id)));
+    }
+    if (snapshot.async_pending) {
+      note += QString(", pending job %1").arg(QString::number(static_cast<qulonglong>(snapshot.pending_job_id)));
+    }
+    if (snapshot.spare_rebuilding) {
+      note += ", rebuilding spare";
+    }
+    return note;
+  }
+
+  void refreshEngineStatus(const QString &overrideNote = QString()) {
     if (!renderer_) return;
     StemTeXEngineSnapshot snapshot{};
     if (!stemtex_renderer_engine_snapshot(renderer_, &snapshot)) return;
-    updateEngineStatus(snapshot.primary_ready != 0, snapshot.spare_ready, snapshot.spare_target);
+    updateEngineStatus(snapshot.primary_ready != 0, snapshot.spare_ready, snapshot.spare_target,
+                       snapshotNote(snapshot, overrideNote));
   }
 
   void initializeRenderer() {
@@ -441,60 +467,88 @@ class MainWindow : public QMainWindow {
         renderer_ = renderer;
         if (!renderer_) {
           setUiReady(false);
-          updateEngineStatus(false, 0, spareTarget_, QString("init failed code=%1").arg((int)code));
+          updateEngineStatus(false, 0, spareTarget_, QString("renderer init failed, code %1").arg((int)code));
           details_->setPlainText(errorText);
           return;
         }
         setUiReady(true);
-        updateEngineStatus(true, 0, spareTarget_, QString("init %1 ms").arg(elapsed));
+        refreshEngineStatus(QString("renderer initialized in %1 ms").arg(elapsed));
         enginePollTimer_->start();
+        if (pendingStartupRender_) {
+          pendingStartupRender_ = false;
+          renderSnippet();
+        }
       }, Qt::QueuedConnection);
     }).detach();
   }
 
   void renderSnippet() {
-    if (!renderer_) return;
+    if (!renderer_) {
+      pendingStartupRender_ = true;
+      updateEngineStatus(false, spareReady_, spareTarget_, "renderer is still starting; this request will run after init");
+      setPreviewImageReady(false);
+      details_->clear();
+      return;
+    }
     QString snippet = editor_->text();
     QString encoding = encodingCombo_->currentText();
     int width = widthSpin_->value();
-    setUiReady(false);
-    updateEngineStatus(true, spareReady_, spareTarget_);
+    refreshEngineStatus("render request submitted; waiting for renderer scheduler");
     setPreviewImageReady(false);
     details_->clear();
-    auto start = std::chrono::steady_clock::now();
-    std::thread([this, snippet, encoding, width, start]() {
-      QByteArray text = encodeSnippetForTeX(snippet, encoding);
-      StemTeXRenderResult result{};
-      StemTeXErrorCode code = STEMTEX_OK;
-      char *error = nullptr;
-      int ok = stemtex_renderer_render(renderer_, text.constData(), width, &result, &code, &error);
-      QString pdfPath = result.pdf_path_utf8 ? QString::fromUtf8(result.pdf_path_utf8) : QString();
-      QString summary = result.summary_json_utf8 ? QString::fromUtf8(result.summary_json_utf8) : QString();
+    QByteArray text = encodeSnippetForTeX(snippet, encoding);
+    uint64_t uiRequestId = ++latestUiRequestId_;
+    struct CallbackContext {
+      MainWindow *self = nullptr;
+      uint64_t uiRequestId = 0;
+    };
+    auto *context = new CallbackContext{this, uiRequestId};
+    auto callback = [](uint64_t rendererJobId, int ok, const StemTeXRenderResult *result, StemTeXErrorCode code,
+                       const char *error, void *userData) {
+      std::unique_ptr<CallbackContext> context(static_cast<CallbackContext *>(userData));
+      MainWindow *self = context->self;
+      uint64_t uiRequestId = context->uiRequestId;
+      QString pdfPath = result && result->pdf_path_utf8 ? QString::fromUtf8(result->pdf_path_utf8) : QString();
+      QString summary = result && result->summary_json_utf8 ? QString::fromUtf8(result->summary_json_utf8) : QString();
       QString errorText = error ? QString::fromUtf8(error) : QString();
-      stemtex_renderer_free_string(error);
-      stemtex_renderer_free_result(&result);
-      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-      QMetaObject::invokeMethod(this, [this, ok, code, pdfPath, summary, errorText, elapsed]() {
-        if (shuttingDown_.load()) return;
-        setUiReady(true);
+      QMetaObject::invokeMethod(self, [self, uiRequestId, rendererJobId, ok, code, pdfPath, summary, errorText]() {
+        if (self->shuttingDown_.load() || uiRequestId != self->latestUiRequestId_) return;
         if (!ok) {
-          engineNote_ = code == STEMTEX_ERROR_WORKER_RESTARTING
-                            ? QString("recovering")
-                            : QString("render failed code=%1").arg((int)code);
-          refreshEngineStatus();
-          details_->setPlainText(errorText);
+          self->refreshEngineStatus(code == STEMTEX_ERROR_CANCELLED
+                                        ? QString("older request skipped because a newer request was submitted")
+                                        : QString("render failed, code %1").arg((int)code));
+          if (code != STEMTEX_ERROR_CANCELLED) self->details_->setPlainText(errorText);
           return;
         }
-        int spareReady = jsonIntValue(summary, "spareReady", spareReady_);
-        int spareTarget = jsonIntValue(summary, "spareTarget", spareTarget_);
-        updateEngineStatus(true, spareReady, spareTarget);
-        lastPdf_ = pdfPath;
-        openButton_->setEnabled(true);
-        showCroppedPreview(pdfPath, widthSpin_->value());
-        setPreviewImageReady(!lastPreview_.isNull());
-        details_->setPlainText(QString("cropped preview: %1 x %2 px\n").arg(lastPreview_.width()).arg(lastPreview_.height()) +
-                               oneLineJsonMetric(summary) + "\n\n" + summary);
+        self->refreshEngineStatus();
+        self->lastPdf_ = pdfPath;
+        self->openButton_->setEnabled(true);
+        self->showCroppedPreview(pdfPath, self->widthSpin_->value());
+        self->setPreviewImageReady(!self->lastPreview_.isNull());
+        self->details_->setPlainText(
+            QString("cropped preview: %1 x %2 px\n").arg(self->lastPreview_.width()).arg(self->lastPreview_.height()) +
+            QString("renderer job: %1\n").arg(rendererJobId) + oneLineJsonMetric(summary) + "\n\n" + summary);
       }, Qt::QueuedConnection);
+    };
+    std::thread([this, text, width, callback, context, uiRequestId]() {
+      StemTeXErrorCode code = STEMTEX_OK;
+      char *error = nullptr;
+      uint64_t rendererJobId = 0;
+      int submitted = 0;
+      if (!shuttingDown_.load()) {
+        submitted = stemtex_renderer_render_async(renderer_, text.constData(), width, &rendererJobId, callback, context,
+                                                  &code, &error);
+      }
+      QString errorText = error ? QString::fromUtf8(error) : QString();
+      stemtex_renderer_free_string(error);
+      if (!submitted) {
+        delete context;
+        QMetaObject::invokeMethod(this, [this, uiRequestId, code, errorText]() {
+          if (shuttingDown_.load() || uiRequestId != latestUiRequestId_) return;
+          refreshEngineStatus(QString("failed to submit request, code %1").arg((int)code));
+          details_->setPlainText(errorText);
+        }, Qt::QueuedConnection);
+      }
     }).detach();
   }
 
@@ -564,6 +618,8 @@ class MainWindow : public QMainWindow {
   int spareReady_ = 0;
   int spareTarget_ = 2;
   QString engineNote_;
+  bool pendingStartupRender_ = false;
+  uint64_t latestUiRequestId_ = 0;
 };
 
 int main(int argc, char **argv) {

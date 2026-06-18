@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdint.h>
 #include <stddef.h>
 
 #ifdef STEMTEX_RENDERER_EXPORTS
@@ -54,6 +55,15 @@ typedef enum StemTeXRendererStatus {
   STEMTEX_STATUS_DEAD
 } StemTeXRendererStatus;
 
+typedef enum StemTeXRenderStage {
+  STEMTEX_STAGE_IDLE = 0,
+  STEMTEX_STAGE_QUEUED,
+  STEMTEX_STAGE_TYPESETTING,
+  STEMTEX_STAGE_CONVERTING,
+  STEMTEX_STAGE_REBUILDING,
+  STEMTEX_STAGE_STOPPING
+} StemTeXRenderStage;
+
 typedef struct StemTeXRenderResult {
   char *request_id_utf8;
   char *pdf_path_utf8;
@@ -67,17 +77,22 @@ typedef struct StemTeXPdfBytes {
 
 typedef struct StemTeXEngineSnapshot {
   StemTeXRendererStatus status;
+  StemTeXRenderStage stage;
   int primary_ready;
   int spare_ready;
   int spare_target;
   int spare_rebuilding;
+  int async_running;
+  int async_pending;
+  uint64_t running_job_id;
+  uint64_t pending_job_id;
   StemTeXErrorCode last_error;
 } StemTeXEngineSnapshot;
 
 typedef struct StemTeXRenderer StemTeXRenderer;
 
-typedef void (*StemTeXRenderCallback)(int ok, const StemTeXRenderResult *result, StemTeXErrorCode error_code,
-                                      const char *error_utf8, void *user_data);
+typedef void (*StemTeXRenderCallback)(uint64_t job_id, int ok, const StemTeXRenderResult *result,
+                                      StemTeXErrorCode error_code, const char *error_utf8, void *user_data);
 
 STEMTEX_API StemTeXRenderer *stemtex_renderer_create(const StemTeXConfig *config, StemTeXErrorCode *error_code,
                                                      char **error_utf8);
@@ -88,7 +103,7 @@ STEMTEX_API int stemtex_renderer_render_pdf_bytes(StemTeXRenderer *renderer, con
                                                   StemTeXPdfBytes *pdf, StemTeXRenderResult *result,
                                                   StemTeXErrorCode *error_code, char **error_utf8);
 STEMTEX_API int stemtex_renderer_render_async(StemTeXRenderer *renderer, const char *snippet_utf8, int width_pt,
-                                              StemTeXRenderCallback callback, void *user_data,
+                                              uint64_t *job_id, StemTeXRenderCallback callback, void *user_data,
                                               StemTeXErrorCode *error_code, char **error_utf8);
 STEMTEX_API int stemtex_renderer_restart(StemTeXRenderer *renderer, StemTeXErrorCode *error_code, char **error_utf8);
 STEMTEX_API int stemtex_renderer_cancel_current(StemTeXRenderer *renderer, StemTeXErrorCode *error_code,

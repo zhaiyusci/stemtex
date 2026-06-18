@@ -190,34 +190,45 @@ int main(int argc, char **argv) {
       std::condition_variable cv;
       int callbacks = 0;
       int failures = 0;
+      uint64_t latest_job = 0;
+      uint64_t latest_success = 0;
     } state;
-    auto callback = [](int ok, const StemTeXRenderResult *result, StemTeXErrorCode code, const char *err, void *data) {
+    auto callback = [](uint64_t job_id, int ok, const StemTeXRenderResult *result, StemTeXErrorCode code, const char *err, void *data) {
       auto *state = static_cast<AsyncState *>(data);
       if (ok) {
-        std::printf("async pdf=%s\n", result && result->pdf_path_utf8 ? result->pdf_path_utf8 : "");
+        std::printf("async job=%llu pdf=%s\n", (unsigned long long)job_id,
+                    result && result->pdf_path_utf8 ? result->pdf_path_utf8 : "");
       } else {
-        std::printf("async failed code=%d err=%s\n", (int)code, err ? err : "");
+        std::printf("async job=%llu failed code=%d err=%s\n", (unsigned long long)job_id, (int)code, err ? err : "");
       }
       {
         std::lock_guard<std::mutex> lock(state->mu);
         state->callbacks += 1;
         if (!ok) state->failures += 1;
+        if (ok) state->latest_success = job_id;
       }
       state->cv.notify_all();
     };
     for (int i = 0; i < runs; ++i) {
-      if (!stemtex_renderer_render_async(renderer, snippet, 360, callback, &state, &error_code, &error)) {
+      uint64_t job_id = 0;
+      if (!stemtex_renderer_render_async(renderer, snippet, 360, &job_id, callback, &state, &error_code, &error)) {
         std::fprintf(stderr, "async submit failed code=%d: %s\n", (int)error_code, error ? error : "");
         stemtex_renderer_free_string(error);
         stemtex_renderer_destroy(renderer);
         return 1;
       }
+      {
+        std::lock_guard<std::mutex> lock(state.mu);
+        state.latest_job = job_id;
+      }
     }
     std::unique_lock<std::mutex> lock(state.mu);
     state.cv.wait_for(lock, std::chrono::seconds(90), [&]() { return state.callbacks >= runs; });
-    std::printf("async callbacks=%d failures=%d\n", state.callbacks, state.failures);
+    std::printf("async callbacks=%d failures=%d latestJob=%llu latestSuccess=%llu\n", state.callbacks, state.failures,
+                (unsigned long long)state.latest_job, (unsigned long long)state.latest_success);
+    int ok = state.callbacks == runs && state.latest_success == state.latest_job;
     stemtex_renderer_destroy(renderer);
-    return state.callbacks == runs && state.failures == 0 ? 0 : 1;
+    return ok ? 0 : 1;
   } else if (case_name == "--cancel") {
     struct CancelState {
       std::mutex mu;
@@ -225,9 +236,10 @@ int main(int argc, char **argv) {
       int callbacks = 0;
       StemTeXErrorCode code = STEMTEX_OK;
     } state;
-    auto callback = [](int ok, const StemTeXRenderResult *, StemTeXErrorCode code, const char *err, void *data) {
+    auto callback = [](uint64_t job_id, int ok, const StemTeXRenderResult *, StemTeXErrorCode code, const char *err, void *data) {
       auto *state = static_cast<CancelState *>(data);
-      std::printf("cancel callback ok=%d code=%d err=%s\n", ok, (int)code, err ? err : "");
+      std::printf("cancel callback job=%llu ok=%d code=%d err=%s\n", (unsigned long long)job_id, ok, (int)code,
+                  err ? err : "");
       {
         std::lock_guard<std::mutex> lock(state->mu);
         state->callbacks += 1;
@@ -236,7 +248,8 @@ int main(int argc, char **argv) {
       state->cv.notify_all();
     };
     const char *hang = "\\loop\\iftrue\\repeat";
-    if (!stemtex_renderer_render_async(renderer, hang, 360, callback, &state, &error_code, &error)) {
+    uint64_t job_id = 0;
+    if (!stemtex_renderer_render_async(renderer, hang, 360, &job_id, callback, &state, &error_code, &error)) {
       std::fprintf(stderr, "cancel submit failed code=%d: %s\n", (int)error_code, error ? error : "");
       stemtex_renderer_free_string(error);
       stemtex_renderer_destroy(renderer);
@@ -255,6 +268,26 @@ int main(int argc, char **argv) {
     lock.unlock();
     stemtex_renderer_destroy(renderer);
     return ok ? 0 : 1;
+  } else if (case_name == "--recover-no-worker") {
+    stemtex_renderer_cancel_current(renderer, &error_code, &error);
+    stemtex_renderer_free_string(error);
+    error = nullptr;
+    StemTeXRenderResult result{};
+    long long render_start = now_ms();
+    int ok = stemtex_renderer_render(renderer, snippet, 360, &result, &error_code, &error);
+    long long render_end = now_ms();
+    if (!ok) {
+      std::fprintf(stderr, "recover render failed code=%d: %s\n", (int)error_code, error ? error : "");
+      stemtex_renderer_free_string(error);
+      stemtex_renderer_destroy(renderer);
+      return 1;
+    }
+    std::printf("recover renderMs=%lld pdf=%s summary=%s\n", render_end - render_start,
+                result.pdf_path_utf8 ? result.pdf_path_utf8 : "",
+                result.summary_json_utf8 ? result.summary_json_utf8 : "");
+    stemtex_renderer_free_result(&result);
+    stemtex_renderer_destroy(renderer);
+    return 0;
   }
 
   for (int i = 0; i < runs; ++i) {

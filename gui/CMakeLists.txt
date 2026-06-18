@@ -35,6 +35,9 @@ add_custom_command(TARGET stemtex-renderer-gui POST_BUILD
           ${CMAKE_CURRENT_SOURCE_DIR}/qt.conf
           $<TARGET_FILE_DIR:stemtex-renderer-gui>/qt.conf
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          $<TARGET_FILE:stemtex-renderer>
+          $<TARGET_FILE_DIR:stemtex-renderer-gui>
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
           ${QSCINTILLA_DLL}
           $<TARGET_FILE_DIR:stemtex-renderer-gui>
 )

@@ -177,6 +177,7 @@ int stemtex_renderer_render_async(
   StemTeXRenderer *renderer,
   const char *snippet_utf8,
   int width_pt,
+  uint64_t *job_id,
   StemTeXRenderCallback callback,
   void *user_data,
   StemTeXErrorCode *error_code,
@@ -196,6 +197,25 @@ int stemtex_renderer_validate_config(const StemTeXConfig *config, StemTeXErrorCo
 int stemtex_refresh_font_cache(const char *runtime_root_utf8, const char *warmup_tex_utf8,
                                StemTeXErrorCode *error_code, char **error_utf8);
 ```
+
+`stemtex_renderer_render_async` returns a monotonically increasing `job_id`.
+The callback receives the same id, so hosts can associate a completion with the
+input version that created it.
+
+Async rendering is latest-only for work that has not started yet. If a pending
+async job is superseded by a newer submission, its callback is still invoked
+with `STEMTEX_ERROR_CANCELLED` and the message `Async render superseded by a
+newer request`. A job that has already started is allowed to finish; hosts that
+only care about live preview should display only the callback whose `job_id`
+matches the latest submitted id.
+
+`stemtex_renderer_engine_snapshot` is the status API intended for UI indicators.
+It reads a cached snapshot maintained by the renderer and does not take the
+render lock. The snapshot includes the renderer status, current stage
+(`idle`, `queued`, `typesetting`, `converting`, `rebuilding`, or `stopping`),
+primary/spare readiness, spare rebuild state, and the running/pending async job
+ids. Hosts should use this snapshot as the single source of truth for status
+lights instead of inferring readiness from render callbacks or summary JSON.
 
 Render result:
 

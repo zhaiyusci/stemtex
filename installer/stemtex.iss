@@ -7,7 +7,7 @@
 #endif
 
 #ifndef AppVersion
-  #define AppVersion "0.2.1"
+  #error AppVersion must be passed with /DAppVersion=...
 #endif
 
 [Setup]

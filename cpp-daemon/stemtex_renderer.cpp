@@ -31,8 +31,11 @@ namespace fs = std::filesystem;
 namespace {
 
 const char *kWorkerStop = "\\workerstop";
-const char *kRendererVersion = "0.2.1";
-const char *kRendererAbiVersion = "0.2.1";
+#ifndef STEMTEX_RENDERER_VERSION
+#define STEMTEX_RENDERER_VERSION "0.0.0-dev"
+#endif
+const char *kRendererVersion = STEMTEX_RENDERER_VERSION;
+const char *kRendererAbiVersion = STEMTEX_RENDERER_VERSION;
 
 char *alloc_c_string(const std::string &s);
 
@@ -907,11 +910,12 @@ void validate_or_throw(const RendererConfig &cfg) {
 
 struct StemTeXRenderer {
   explicit StemTeXRenderer(RendererConfig c) : cfg(std::move(c)), parts(load_or_run_warmup(cfg)) {
-    status.store(STEMTEX_STATUS_STARTING);
+    snapshot_spare_target.store(cfg.spare_worker_count);
+    publish_status(STEMTEX_STATUS_STARTING, STEMTEX_STAGE_REBUILDING);
     worker_env = worker_environment(cfg);
     primary = create_ready_worker("primary");
     schedule_spare_rebuild_locked();
-    status.store(STEMTEX_STATUS_READY);
+    publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
   }
 
   struct WorkerSlot {
@@ -948,6 +952,23 @@ struct StemTeXRenderer {
     std::lock_guard<std::mutex> lock(diagnostic_mu);
     if (max_bytes <= 0 || (size_t)max_bytes >= log_tail.size()) return log_tail;
     return log_tail.substr(log_tail.size() - (size_t)max_bytes);
+  }
+
+  void publish_status(StemTeXRendererStatus next_status, StemTeXRenderStage next_stage) {
+    status.store(next_status);
+    snapshot_stage.store(next_stage);
+  }
+
+  void publish_counts_locked() {
+    snapshot_primary_ready.store(primary && primary->child.is_running() ? 1 : 0);
+    snapshot_spare_ready.store(spare_ready_count_locked());
+    snapshot_spare_target.store(cfg.spare_worker_count);
+    snapshot_spare_rebuilding.store(spare_rebuilding ? 1 : 0);
+  }
+
+  void publish_status_and_counts_locked(StemTeXRendererStatus next_status, StemTeXRenderStage next_stage) {
+    publish_status(next_status, next_stage);
+    publish_counts_locked();
   }
 
   std::unique_ptr<WorkerSlot> create_ready_worker(const std::string &name, bool prime = true) {
@@ -1027,6 +1048,8 @@ struct StemTeXRenderer {
 
   ~StemTeXRenderer() {
     shutting_down = true;
+    publish_status(STEMTEX_STATUS_DEAD, STEMTEX_STAGE_STOPPING);
+    stop_async_worker();
     join_spare_builder();
     if (primary) primary->child.stop();
     for (auto &slot : spares) {
@@ -1040,8 +1063,9 @@ struct StemTeXRenderer {
 
   void schedule_spare_rebuild_locked() {
     if (shutting_down || spare_rebuilding || (int)spares.size() >= cfg.spare_worker_count) return;
-    if (spare_builder.joinable()) spare_builder.join();
+    if (spare_builder.joinable()) spare_builder.detach();
     spare_rebuilding = true;
+    publish_counts_locked();
     spare_builder = std::thread([this]() {
       while (true) {
         int slot_index = 0;
@@ -1049,6 +1073,7 @@ struct StemTeXRenderer {
           std::lock_guard<std::mutex> lock(render_mu);
           if (shutting_down || (int)spares.size() >= cfg.spare_worker_count) {
             spare_rebuilding = false;
+            publish_counts_locked();
             return;
           }
           slot_index = next_spare_index++;
@@ -1058,11 +1083,13 @@ struct StemTeXRenderer {
         try {
           built = create_ready_worker("spare-" + std::to_string(slot_index));
         } catch (...) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
         std::lock_guard<std::mutex> lock(render_mu);
         if (shutting_down) {
           spare_rebuilding = false;
+          publish_counts_locked();
           return;
         }
         if (built) {
@@ -1070,8 +1097,10 @@ struct StemTeXRenderer {
             if (primary) primary->child.stop();
             primary = std::move(built);
             primary->name = "primary";
+            publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
           } else if ((int)spares.size() < cfg.spare_worker_count) {
             spares.push_back(std::move(built));
+            publish_counts_locked();
           }
         }
       }
@@ -1087,11 +1116,13 @@ struct StemTeXRenderer {
         primary = std::move(candidate);
         primary->name = "primary";
         schedule_spare_rebuild_locked();
+        publish_counts_locked();
         return;
       }
     }
     primary.reset();
     schedule_spare_rebuild_locked();
+    publish_counts_locked();
   }
 
   bool promote_if_available_locked() {
@@ -1102,10 +1133,23 @@ struct StemTeXRenderer {
         primary = std::move(candidate);
         primary->name = "primary";
         schedule_spare_rebuild_locked();
+        publish_counts_locked();
         return true;
       }
     }
+    publish_counts_locked();
     return false;
+  }
+
+  void update_status_after_worker_loss_locked() {
+    publish_status_and_counts_locked(primary && primary->child.is_running() ? STEMTEX_STATUS_READY : STEMTEX_STATUS_RESTARTING,
+                                     primary && primary->child.is_running() ? STEMTEX_STAGE_IDLE : STEMTEX_STAGE_REBUILDING);
+  }
+
+  void update_status_after_render_exception() {
+    if (status.load() == STEMTEX_STATUS_DEAD) return;
+    std::lock_guard<std::mutex> lock(render_mu);
+    update_status_after_worker_loss_locked();
   }
 
   int spare_ready_count_locked() const {
@@ -1117,7 +1161,7 @@ struct StemTeXRenderer {
   }
 
   void restart() {
-    status.store(STEMTEX_STATUS_RESTARTING);
+    publish_status(STEMTEX_STATUS_RESTARTING, STEMTEX_STAGE_REBUILDING);
     {
       std::lock_guard<std::mutex> lock(control_mu);
       active_slot = nullptr;
@@ -1136,12 +1180,13 @@ struct StemTeXRenderer {
     primary.reset();
     spares.clear();
     spare_rebuilding = false;
+    publish_counts_locked();
     shutting_down = false;
     parts = load_or_run_warmup(cfg);
     worker_env = worker_environment(cfg);
     primary = create_ready_worker("primary");
     schedule_spare_rebuild_locked();
-    status.store(STEMTEX_STATUS_READY);
+    publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
     set_last_error(STEMTEX_OK, "");
   }
 
@@ -1149,19 +1194,126 @@ struct StemTeXRenderer {
     std::lock_guard<std::mutex> lock(control_mu);
     if (!active_slot || !active_slot->child.is_running()) return false;
     cancel_requested = true;
-    status.store(STEMTEX_STATUS_RESTARTING);
+    publish_status(STEMTEX_STATUS_RESTARTING, STEMTEX_STAGE_REBUILDING);
+    snapshot_primary_ready.store(0);
     active_slot->child.stop();
     return true;
   }
 
+  struct AsyncJob {
+    uint64_t id = 0;
+    std::string snippet;
+    int width_pt = 0;
+    StemTeXRenderCallback callback = nullptr;
+    void *user_data = nullptr;
+  };
+
+  uint64_t submit_async(std::string snippet, int width_pt, uint64_t *job_id, StemTeXRenderCallback callback, void *user_data) {
+    std::lock_guard<std::mutex> lock(async_mu);
+    uint64_t id = ++next_async_job_id;
+    if (job_id) *job_id = id;
+    if (async_pending) {
+      async_cancelled.push_back(std::move(*async_pending));
+    }
+    async_pending = AsyncJob{id, std::move(snippet), width_pt, callback, user_data};
+    snapshot_async_pending.store(1);
+    snapshot_pending_job_id.store(id);
+    if (status.load() == STEMTEX_STATUS_READY && !snapshot_async_running.load()) {
+      snapshot_stage.store(STEMTEX_STAGE_QUEUED);
+    }
+    if (!async_worker.joinable()) {
+      async_worker = std::thread([this]() { async_loop(); });
+    }
+    async_cv.notify_all();
+    return id;
+  }
+
+  void stop_async_worker() {
+    {
+      std::lock_guard<std::mutex> lock(async_mu);
+      async_stop = true;
+      if (async_pending) {
+        async_cancelled.push_back(std::move(*async_pending));
+        async_pending.reset();
+      }
+      snapshot_async_pending.store(0);
+      snapshot_pending_job_id.store(0);
+    }
+    async_cv.notify_all();
+    cancel_current();
+    if (async_worker.joinable()) async_worker.join();
+  }
+
+  void callback_cancelled(const AsyncJob &job, const char *message) {
+    if (job.callback) job.callback(job.id, 0, nullptr, STEMTEX_ERROR_CANCELLED, message, job.user_data);
+  }
+
+  void async_loop() {
+    while (true) {
+      std::optional<AsyncJob> job;
+      std::optional<AsyncJob> cancelled;
+      {
+        std::unique_lock<std::mutex> lock(async_mu);
+        async_cv.wait(lock, [this]() { return async_stop || async_pending || !async_cancelled.empty(); });
+        if (!async_cancelled.empty()) {
+          cancelled = std::move(async_cancelled.front());
+          async_cancelled.erase(async_cancelled.begin());
+        } else if (async_pending) {
+          job = std::move(*async_pending);
+          async_pending.reset();
+          snapshot_async_pending.store(0);
+          snapshot_pending_job_id.store(0);
+          snapshot_async_running.store(1);
+          snapshot_running_job_id.store(job->id);
+          if (status.load() == STEMTEX_STATUS_READY) snapshot_stage.store(STEMTEX_STAGE_QUEUED);
+        } else if (async_stop) {
+          return;
+        }
+      }
+
+      if (cancelled) {
+        callback_cancelled(*cancelled, "Async render superseded by a newer request");
+        continue;
+      }
+      if (!job) continue;
+
+      StemTeXRenderResult result{};
+      StemTeXErrorCode code = STEMTEX_OK;
+      std::string error;
+      int ok = 0;
+      try {
+        result = render(job->snippet, job->width_pt);
+        ok = 1;
+      } catch (const std::exception &e) {
+        code = exception_code(e);
+        set_last_error(code, e.what());
+        update_status_after_render_exception();
+        error = e.what();
+      }
+      if (job->callback) job->callback(job->id, ok, ok ? &result : nullptr, code, error.c_str(), job->user_data);
+      stemtex_renderer_free_result(&result);
+      snapshot_async_running.store(0);
+      snapshot_running_job_id.store(0);
+      if (!snapshot_async_pending.load() && status.load() == STEMTEX_STATUS_READY) snapshot_stage.store(STEMTEX_STAGE_IDLE);
+    }
+  }
+
   StemTeXRenderResult render(const std::string &snippet, int width_pt) {
     std::lock_guard<std::mutex> render_lock(render_mu);
-    status.store(STEMTEX_STATUS_RENDERING);
+    publish_status_and_counts_locked(STEMTEX_STATUS_RENDERING, STEMTEX_STAGE_TYPESETTING);
     if (!primary || !primary->child.is_running()) {
       if (!promote_if_available_locked()) {
-        schedule_spare_rebuild_locked();
-        status.store(STEMTEX_STATUS_RESTARTING);
-        throw ApiException(STEMTEX_ERROR_WORKER_RESTARTING, "No ready XeTeX worker; engine is rebuilding");
+        publish_status_and_counts_locked(STEMTEX_STATUS_RESTARTING, STEMTEX_STAGE_REBUILDING);
+        if (primary) primary->child.stop();
+        primary.reset();
+        try {
+          primary = create_ready_worker("primary");
+          schedule_spare_rebuild_locked();
+        } catch (const std::exception &e) {
+          schedule_spare_rebuild_locked();
+          throw ApiException(STEMTEX_ERROR_WORKER_STARTUP, std::string("Cannot start XeTeX worker: ") + e.what());
+        }
+        publish_status_and_counts_locked(STEMTEX_STATUS_RENDERING, STEMTEX_STAGE_TYPESETTING);
       }
     }
     WorkerSlot &slot = *primary;
@@ -1202,7 +1354,7 @@ struct StemTeXRenderer {
           active_slot = nullptr;
         }
         promote_spare_locked();
-        status.store(STEMTEX_STATUS_READY);
+        update_status_after_worker_loss_locked();
         throw ApiException(STEMTEX_ERROR_WORKER_TIMEOUT, "Worker request timed out");
       }
       if (!slot.done) {
@@ -1216,7 +1368,7 @@ struct StemTeXRenderer {
         }
         lock.unlock();
         promote_spare_locked();
-        status.store(STEMTEX_STATUS_READY);
+        update_status_after_worker_loss_locked();
         if (was_cancelled) throw ApiException(STEMTEX_ERROR_CANCELLED, "Render cancelled");
         throw ApiException(STEMTEX_ERROR_TEX_SNIPPET, "Worker exited before WORKER_DONE. TeX output tail:\n" + tail);
       }
@@ -1245,6 +1397,7 @@ struct StemTeXRenderer {
     int64_t finalize_start = now_ms();
     size_t final_bytes = finalize_xdv_body(cumulative, final_path, parts, (uint16_t)request_no, last_bop);
     int64_t convert_start = now_ms();
+    publish_status_and_counts_locked(STEMTEX_STATUS_RENDERING, STEMTEX_STAGE_CONVERTING);
     fs::path xdvipdfmx = cfg.runtime_root / "bin" / "windows" / "xdvipdfmxdaemon.exe";
     std::string xdvipdfmx_options = "-q -z 1 -C 64";
     std::string page_range = std::to_string(request_no) + "-" + std::to_string(request_no);
@@ -1260,7 +1413,7 @@ struct StemTeXRenderer {
         run_sync(cmd.str(), cfg.repo_root, worker_env, (DWORD)cfg.xdvipdfmx_timeout_ms);
       }
     } catch (const std::exception &e) {
-      status.store(STEMTEX_STATUS_READY);
+      publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
       throw ApiException(STEMTEX_ERROR_XDVIPDFMX, e.what());
     }
     int64_t end = now_ms();
@@ -1296,7 +1449,7 @@ struct StemTeXRenderer {
     result.request_id_utf8 = alloc_c_string(id);
     result.pdf_path_utf8 = alloc_c_string(pdf_path.string());
     result.summary_json_utf8 = alloc_c_string(summary.str());
-    status.store(STEMTEX_STATUS_READY);
+    publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
     set_last_error(STEMTEX_OK, "");
     return result;
   }
@@ -1308,6 +1461,15 @@ struct StemTeXRenderer {
   std::mutex control_mu;
   std::mutex diagnostic_mu;
   std::atomic<StemTeXRendererStatus> status{STEMTEX_STATUS_STARTING};
+  std::atomic<StemTeXRenderStage> snapshot_stage{STEMTEX_STAGE_IDLE};
+  std::atomic<int> snapshot_primary_ready{0};
+  std::atomic<int> snapshot_spare_ready{0};
+  std::atomic<int> snapshot_spare_target{0};
+  std::atomic<int> snapshot_spare_rebuilding{0};
+  std::atomic<int> snapshot_async_running{0};
+  std::atomic<int> snapshot_async_pending{0};
+  std::atomic<uint64_t> snapshot_running_job_id{0};
+  std::atomic<uint64_t> snapshot_pending_job_id{0};
   StemTeXErrorCode last_error = STEMTEX_OK;
   std::string log_tail;
   WorkerSlot *active_slot = nullptr;
@@ -1315,6 +1477,13 @@ struct StemTeXRenderer {
   std::unique_ptr<WorkerSlot> primary;
   std::vector<std::unique_ptr<WorkerSlot>> spares;
   std::thread spare_builder;
+  std::mutex async_mu;
+  std::condition_variable async_cv;
+  std::thread async_worker;
+  std::optional<AsyncJob> async_pending;
+  std::vector<AsyncJob> async_cancelled;
+  bool async_stop = false;
+  uint64_t next_async_job_id = 0;
   bool spare_rebuilding = false;
   bool shutting_down = false;
   int next_spare_index = 0;
@@ -1351,7 +1520,7 @@ STEMTEX_API int stemtex_renderer_render(StemTeXRenderer *renderer, const char *s
   } catch (const std::exception &e) {
     StemTeXErrorCode code = exception_code(e);
     renderer->set_last_error(code, e.what());
-    if (renderer->status.load() != STEMTEX_STATUS_DEAD) renderer->status.store(STEMTEX_STATUS_READY);
+    renderer->update_status_after_render_exception();
     set_error_outputs(code, e.what(), error_code, error_utf8);
     return 0;
   }
@@ -1387,23 +1556,14 @@ STEMTEX_API int stemtex_renderer_render_pdf_bytes(StemTeXRenderer *renderer, con
 }
 
 STEMTEX_API int stemtex_renderer_render_async(StemTeXRenderer *renderer, const char *snippet_utf8, int width_pt,
-                                              StemTeXRenderCallback callback, void *user_data,
+                                              uint64_t *job_id, StemTeXRenderCallback callback, void *user_data,
                                               StemTeXErrorCode *error_code, char **error_utf8) {
   if (!renderer || !snippet_utf8 || !callback) {
     set_error_outputs(STEMTEX_ERROR_INVALID_ARGUMENT, "Invalid argument", error_code, error_utf8);
     return 0;
   }
   try {
-    std::string snippet = snippet_utf8;
-    std::thread([renderer, snippet, width_pt, callback, user_data]() {
-      StemTeXRenderResult result{};
-      StemTeXErrorCode code = STEMTEX_OK;
-      char *error = nullptr;
-      int ok = stemtex_renderer_render(renderer, snippet.c_str(), width_pt, &result, &code, &error);
-      callback(ok, ok ? &result : nullptr, code, error, user_data);
-      stemtex_renderer_free_result(&result);
-      stemtex_renderer_free_string(error);
-    }).detach();
+    renderer->submit_async(snippet_utf8, width_pt, job_id, callback, user_data);
     if (error_code) *error_code = STEMTEX_OK;
     return 1;
   } catch (const std::exception &e) {
@@ -1424,7 +1584,7 @@ STEMTEX_API int stemtex_renderer_restart(StemTeXRenderer *renderer, StemTeXError
   } catch (const std::exception &e) {
     StemTeXErrorCode code = exception_code(e);
     renderer->set_last_error(code, e.what());
-    renderer->status.store(STEMTEX_STATUS_DEAD);
+    renderer->publish_status(STEMTEX_STATUS_DEAD, STEMTEX_STAGE_STOPPING);
     set_error_outputs(code, e.what(), error_code, error_utf8);
     return 0;
   }
@@ -1449,17 +1609,19 @@ STEMTEX_API StemTeXRendererStatus stemtex_renderer_status(StemTeXRenderer *rende
 STEMTEX_API int stemtex_renderer_engine_snapshot(StemTeXRenderer *renderer, StemTeXEngineSnapshot *snapshot) {
   if (!renderer || !snapshot) return 0;
   snapshot->status = renderer->status.load();
+  snapshot->stage = renderer->snapshot_stage.load();
   snapshot->last_error = STEMTEX_OK;
+  snapshot->primary_ready = renderer->snapshot_primary_ready.load();
+  snapshot->spare_ready = renderer->snapshot_spare_ready.load();
+  snapshot->spare_target = renderer->snapshot_spare_target.load();
+  snapshot->spare_rebuilding = renderer->snapshot_spare_rebuilding.load();
+  snapshot->async_running = renderer->snapshot_async_running.load();
+  snapshot->async_pending = renderer->snapshot_async_pending.load();
+  snapshot->running_job_id = renderer->snapshot_running_job_id.load();
+  snapshot->pending_job_id = renderer->snapshot_pending_job_id.load();
   {
     std::lock_guard<std::mutex> lock(renderer->diagnostic_mu);
     snapshot->last_error = renderer->last_error;
-  }
-  {
-    std::lock_guard<std::mutex> lock(renderer->render_mu);
-    snapshot->primary_ready = renderer->primary && renderer->primary->child.is_running() ? 1 : 0;
-    snapshot->spare_ready = renderer->spare_ready_count_locked();
-    snapshot->spare_target = renderer->cfg.spare_worker_count;
-    snapshot->spare_rebuilding = renderer->spare_rebuilding ? 1 : 0;
   }
   return 1;
 }

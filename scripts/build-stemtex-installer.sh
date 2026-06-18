@@ -2,7 +2,15 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-app_version="${APP_VERSION:-0.2.1}"
+if [[ -n "${APP_VERSION:-}" ]]; then
+  app_version="$APP_VERSION"
+else
+  app_version="$(tr -d '\r\n[:space:]' < "$repo_root/VERSION")"
+fi
+if [[ -z "$app_version" ]]; then
+  echo "VERSION is empty" >&2
+  exit 1
+fi
 stage_root="${STAGE_ROOT:-$repo_root/dist/stemtex-installer/StemTeX}"
 output_dir="${OUTPUT_DIR:-$repo_root/dist/installer}"
 runtime_root="${RUNTIME_ROOT:-$repo_root/dist/stemtex-texlive-daemon-static}"

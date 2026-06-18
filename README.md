@@ -1,7 +1,7 @@
 # StemTeX
 
 StemTeX is a Windows-native XeLaTeX daemon runtime for low-latency rendering of
-short STEM snippets.  The current version is `0.2.1`.
+short STEM snippets.  The current version is recorded in `VERSION`.
 
 The project is no longer organized around the old Node worker/web preview
 experiments.  The supported path is:
@@ -122,7 +122,7 @@ Build the installer:
 The installer is written under:
 
 ```text
-dist/installer/StemTeX-0.2.1-Setup.exe
+dist/installer/StemTeX-<version>-Setup.exe
 ```
 
 The installer intentionally does not ship generated font cache files.  During

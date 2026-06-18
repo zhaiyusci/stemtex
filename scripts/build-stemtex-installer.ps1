@@ -17,8 +17,11 @@ if (-not $AppVersion) {
   if (Test-Path -LiteralPath $versionFile) {
     $AppVersion = (Get-Content -LiteralPath $versionFile -TotalCount 1).Trim()
   } else {
-    $AppVersion = "0.2.1"
+    throw "VERSION not found: $versionFile"
   }
+}
+if (-not $AppVersion) {
+  throw "VERSION is empty."
 }
 if (-not $SourceRoot) {
   $repoParent = Split-Path -Parent $repoRoot
