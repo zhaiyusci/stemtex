@@ -14,7 +14,7 @@ conf_dir="$runtime_root/texmf-var/fonts/conf"
 
 mkdir -p "$output_dir" "$cache_dir" "$conf_dir/conf.d"
 
-root_xml="${runtime_root//\\//}"
+root_xml="$(/usr/bin/cygpath -m "$runtime_root")"
 cat >"$conf_dir/fonts.conf" <<EOF
 <?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
