@@ -91,6 +91,23 @@ profiles/
 Generated build/package directories such as `build/`, `dist/`, and
 `texlive-xetex/out/` are local artifacts and are not part of the source tree.
 
+## Bundled Profiles
+
+Each profile is a directory with `preamble.tex` and `warmup.tex`.  The GUI scans
+these directories and passes the selected one to the renderer.
+
+Current source profiles:
+
+| Profile | Intended use |
+| --- | --- |
+| `math_light` | Latin text plus Unicode math, matrices, cases, color. |
+| `cjk_math_light` | Chinese/English text plus Unicode math and simple CJK fonts. |
+| `stem_units` | CJK STEM text with `siunitx`, `mhchem`, Unicode math, and color. |
+| `chemistry` | CJK chemistry snippets focused on `mhchem`. |
+| `physics_cjk` | CJK physics snippets with `physics`, Unicode math, color, and `cancel`. |
+| `unicodemath` | Broad Latin STEM profile with math, chemistry, physics, color, and cancel. |
+| `unicodemath_cjk` | Broad CJK STEM profile with the same package set. |
+
 ## Build
 
 Run from MSYS2.  The scripts may call Visual Studio, CMake, Qt, and Inno Setup,
