@@ -30,13 +30,18 @@ resolve_cmake_bin() {
     /c/Qt/Tools/CMake_64/bin/cmake.exe \
     /mnt/c/Qt/Tools/CMake_64/bin/cmake.exe \
     "C:/Qt/Tools/CMake_64/bin/cmake.exe" \
+    cmake.exe \
     cmake; do
-    if command -v "$candidate" >/dev/null 2>&1 || [[ -x "$candidate" ]]; then
+    if command -v "$candidate" >/dev/null 2>&1; then
+      command -v "$candidate"
+      return
+    fi
+    if [[ -x "$candidate" ]]; then
       printf '%s\n' "$candidate"
       return
     fi
   done
-  printf '%s\n' /c/Qt/Tools/CMake_64/bin/cmake.exe
+  printf '%s\n' cmake
 }
 
 cmake_bin="$(resolve_cmake_bin)"

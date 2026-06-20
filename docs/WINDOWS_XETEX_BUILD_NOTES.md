@@ -9,7 +9,7 @@ dependencies.
 Build from MSYS2, using the installed Visual Studio toolchain:
 
 ```sh
-cd /c/Users/jairy/Documents/xetex/stemtex
+cd /path/to/stemtex
 ./texlive-xetex/build-standalone-msvc.sh
 ```
 
@@ -30,6 +30,20 @@ xetexdaemon.exe     -> xetexdaemon.dll:dllxetexmain
 xdvipdfmxdaemon.exe -> dvipdfmxdaemon.dll:dlldvipdfmxmain
 ```
 
+`dvipdfmxdaemon.dll` also exports a StemTeX hot-start API:
+
+```text
+dvipdfmxdaemon_init
+dvipdfmxdaemon_convert
+dvipdfmxdaemon_shutdown
+```
+
+The C++ renderer uses this API instead of repeatedly calling
+`dlldvipdfmxmain`.  `init` performs the expensive kpathsea/config/fontmap setup
+once; each `convert` handles one XDV-to-PDF request; `shutdown` closes the
+cached fontmaps.  The old `dlldvipdfmxmain` export remains for the command-line
+wrapper.
+
 Install the built binaries into the static StemTeX side tree:
 
 ```sh
@@ -39,7 +53,7 @@ Install the built binaries into the static StemTeX side tree:
 Then refresh the runtime warmup/cache data:
 
 ```sh
-./scripts/refresh-static-runtime-cache.sh
+./scripts/refresh-static-runtime-cache.sh ./dist/stemtex-texlive-daemon-static ./profiles/unicodemath_cjk
 ```
 
 ## Source Inputs
@@ -109,6 +123,11 @@ page by flushing pending XDV bytes at `\shipout`.
 fontconfig cache generation instead of refreshing cache during interactive
 requests.
 
+`src/dvipdfm-x` also carries a small hot-start fix in `dvi_close()`: after
+freeing `def_fonts` and `loaded_fonts`, it resets both the count and capacity
+fields.  Without this, the second `dvipdfmxdaemon_convert` can reuse stale
+capacity values and crash in `dvi_init()`.
+
 ## StemTeX Runtime Tree
 
 The build/install scripts assemble:
@@ -120,7 +139,7 @@ dist/stemtex-texlive-daemon-static/
     xetexdaemon.dll
     xdvipdfmxdaemon.exe
     dvipdfmxdaemon.dll
-  cache-warmup/warmup.tex
+  profiles/
   texmf-dist/
   texmf-var/
 ```
@@ -134,18 +153,14 @@ The daemon format is named:
 texmf-var/web2c/xetex/xelatexdaemon.fmt
 ```
 
-The default fixed preamble is:
+Preambles and matching warmup files live in profile directories:
 
 ```text
-test/preamble.tex
+profiles/<name>/preamble.tex
+profiles/<name>/warmup.tex
 ```
 
-It is copied into the runtime as:
-
-```text
-runtime/preamble.tex
-```
-
+The renderer requires the host or GUI to pass a profile directory explicitly.
 The preamble loads `preview` with `active,tightpage`; the live worker wraps each
 request in a `preview` environment so the resulting PDF page is already cropped
 to the snippet content.

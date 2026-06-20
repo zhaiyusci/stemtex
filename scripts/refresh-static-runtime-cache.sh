@@ -4,11 +4,18 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 runtime_root="${1:-$repo_root/dist/stemtex-texlive-daemon-static}"
 runtime_root="$(cd "$runtime_root" && pwd)"
+profile_root="${2:-${STEMTEX_PROFILE:-}}"
+if [[ -z "$profile_root" ]]; then
+  echo "usage: $0 <runtime-root> <profile-root>" >&2
+  echo "or set STEMTEX_PROFILE=/path/to/profile" >&2
+  exit 2
+fi
+profile_root="$(cd "$profile_root" && pwd)"
 
 bin="$runtime_root/bin/windows"
 fmt_dir="$runtime_root/texmf-var/web2c/xetex"
-warmup_dir="$runtime_root/cache-warmup"
-output_dir="$runtime_root/texmf-var/cache-warmup"
+warmup_dir="$profile_root"
+output_dir="$profile_root"
 cache_dir="$runtime_root/texmf-var/fonts/cache"
 conf_dir="$runtime_root/texmf-var/fonts/conf"
 

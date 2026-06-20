@@ -36,10 +36,15 @@ if [[ ! -f "$runtime_root/texmf-dist/tex/latex/preview/preview.sty" ]]; then
 fi
 
 if [[ -z "$iscc" ]]; then
+  local_appdata_candidate=""
+  if [[ -n "${LOCALAPPDATA:-}" ]]; then
+    local_appdata_candidate="$(cygpath -u "$LOCALAPPDATA")/Programs/Inno Setup 6/ISCC.exe"
+  fi
   for candidate in \
+    "$local_appdata_candidate" \
     "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \
-    "/c/Program Files/Inno Setup 6/ISCC.exe" \
-    "/c/Users/${USERNAME:-jairy}/AppData/Local/Programs/Inno Setup 6/ISCC.exe"; do
+    "/c/Program Files/Inno Setup 6/ISCC.exe"; do
+    [[ -z "$candidate" ]] && continue
     if [[ -x "$candidate" ]]; then
       iscc="$candidate"
       break
@@ -58,7 +63,10 @@ cp -a "$runtime_root/." "$stage_root/runtime/"
 cp -a "$gui_root/." "$stage_root/gui/"
 rm -f "$stage_root/gui/stemtex-renderer.dll" "$stage_root/gui/stemtex-renderer.lib" "$stage_root/gui/stemtex-renderer.exp"
 cp -f "$repo_root/cpp-daemon/worker-template.tex" "$stage_root/runtime/worker-template.tex"
-cp -f "$repo_root/test/preamble.tex" "$stage_root/runtime/preamble.tex"
+rm -rf "$stage_root/runtime/profiles"
+mkdir -p "$stage_root/runtime/profiles"
+cp -a "$repo_root/profiles/." "$stage_root/runtime/profiles/"
+find "$stage_root/runtime/profiles" -type f \( -name '*.aux' -o -name '*.log' -o -name '*.pdf' -o -name '*.synctex.gz' \) -delete
 mkdir -p "$stage_root/runtime/sdk/include" "$stage_root/runtime/sdk/lib" "$stage_root/runtime/bin/sdk"
 cp -f "$cpp_daemon_root/stemtex-renderer.dll" "$stage_root/runtime/bin/sdk/stemtex-renderer.dll"
 cp -f "$cpp_daemon_root/stemtex-renderer.lib" "$stage_root/runtime/sdk/lib/stemtex-renderer.lib"

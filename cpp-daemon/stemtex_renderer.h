@@ -16,6 +16,8 @@ extern "C" {
 typedef struct StemTeXConfig {
   const char *repo_root_utf8;
   const char *runtime_root_utf8;
+  const char *texmf_root_utf8;
+  const char *profile_root_utf8;
   const char *state_root_utf8;
   const char *renders_root_utf8;
   int request_timeout_ms;
@@ -27,9 +29,7 @@ typedef struct StemTeXConfig {
   int spare_worker_count;
   int auto_restart;
   int delete_intermediates;
-  const char *warmup_tex_utf8;
   const char *worker_template_utf8;
-  const char *preamble_tex_utf8;
 } StemTeXConfig;
 
 typedef enum StemTeXErrorCode {
@@ -115,9 +115,11 @@ STEMTEX_API char *stemtex_renderer_get_log_tail(StemTeXRenderer *renderer, int m
 STEMTEX_API const char *stemtex_renderer_version(void);
 STEMTEX_API const char *stemtex_renderer_abi_version(void);
 STEMTEX_API char *stemtex_renderer_runtime_version(StemTeXRenderer *renderer);
+STEMTEX_API char *stemtex_renderer_profile_info_json(const char *profile_root_utf8, StemTeXErrorCode *error_code,
+                                                     char **error_utf8);
 STEMTEX_API int stemtex_renderer_validate_config(const StemTeXConfig *config, StemTeXErrorCode *error_code,
                                                  char **diagnostics_utf8);
-STEMTEX_API int stemtex_refresh_font_cache(const char *runtime_root_utf8, const char *warmup_tex_utf8,
+STEMTEX_API int stemtex_refresh_font_cache(const char *runtime_root_utf8, const char *profile_root_utf8,
                                            StemTeXErrorCode *error_code, char **error_utf8);
 STEMTEX_API void stemtex_renderer_free_result(StemTeXRenderResult *result);
 STEMTEX_API void stemtex_renderer_free_pdf_bytes(StemTeXPdfBytes *pdf);

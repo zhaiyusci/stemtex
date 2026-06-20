@@ -12,6 +12,7 @@
 #include <QFont>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
@@ -34,6 +35,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QVector>
 #include <QWidget>
 
 #include <Qsci/qscilexertex.h>
@@ -55,7 +57,7 @@ namespace {
 QString defaultRepoRoot() {
   QDir dir(QCoreApplication::applicationDirPath());
   for (int i = 0; i < 8; ++i) {
-    if (QFileInfo::exists(dir.filePath("cpp-daemon/worker-template.tex")) && QFileInfo::exists(dir.filePath("test/preamble.tex"))) {
+    if (QFileInfo::exists(dir.filePath("cpp-daemon/worker-template.tex")) && QFileInfo::exists(dir.filePath("profiles"))) {
       return dir.absolutePath();
     }
     if (!dir.cdUp()) break;
@@ -88,6 +90,75 @@ QString defaultRuntimeRoot() {
     return defaultInstallRuntime;
   }
   return "C:/StemTeX";
+}
+
+QString normalizeRuntimeRoot(const QString &path) {
+  QDir dir(QDir::cleanPath(QDir(path).absolutePath()));
+  QString nestedRuntime = dir.filePath("runtime");
+  if (QFileInfo::exists(QDir(nestedRuntime).filePath("bin/windows/xetexdaemon.exe"))) {
+    return QDir::cleanPath(nestedRuntime);
+  }
+  return QDir::cleanPath(dir.absolutePath());
+}
+
+QString normalizeTexmfRoot(const QString &path) {
+  return QDir::cleanPath(QDir(path).absolutePath());
+}
+
+QString defaultTexmfRoot(const QString &runtimeRoot) {
+  QString env = QProcessEnvironment::systemEnvironment().value("STEMTEX_TEXMF_ROOT");
+  if (!env.isEmpty()) return normalizeTexmfRoot(env);
+  return normalizeTexmfRoot(runtimeRoot);
+}
+
+struct ProfileEntry {
+  QString name;
+  QString path;
+};
+
+bool rendererProfileInfo(const QString &profileRoot, ProfileEntry *entry, QString *errorText) {
+  QByteArray profile = QDir::cleanPath(profileRoot).toUtf8();
+  StemTeXErrorCode code = STEMTEX_OK;
+  char *error = nullptr;
+  char *json = stemtex_renderer_profile_info_json(profile.constData(), &code, &error);
+  if (!json) {
+    if (errorText) *errorText = error ? QString::fromUtf8(error) : QString("profile scan failed");
+    stemtex_renderer_free_string(error);
+    return false;
+  }
+  QJsonParseError parseError{};
+  QJsonDocument doc = QJsonDocument::fromJson(QByteArray(json), &parseError);
+  stemtex_renderer_free_string(json);
+  stemtex_renderer_free_string(error);
+  if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+    if (errorText) *errorText = QString("profile parser returned invalid JSON");
+    return false;
+  }
+  QJsonObject obj = doc.object();
+  if (!obj.value("valid").toBool()) return false;
+  QString path = obj.value("path").toString();
+  if (path.isEmpty()) return false;
+  QString name = obj.value("name").toString();
+  if (name.isEmpty()) name = QFileInfo(path).fileName();
+  if (entry) *entry = {name, QDir::cleanPath(path)};
+  return true;
+}
+
+QVector<ProfileEntry> profileRoots(const QString &repoRoot, const QString &runtimeRoot, QString *errorText) {
+  QVector<ProfileEntry> profiles;
+  QStringList seen;
+  for (const QString &base : {QDir(repoRoot).filePath("profiles"), QDir(runtimeRoot).filePath("profiles")}) {
+    QDir dir(base);
+    if (!dir.exists()) continue;
+    for (const QFileInfo &candidate : dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
+      ProfileEntry profile;
+      if (!rendererProfileInfo(candidate.absoluteFilePath(), &profile, errorText)) continue;
+      if (seen.contains(profile.path)) continue;
+      seen << profile.path;
+      profiles.push_back(profile);
+    }
+  }
+  return profiles;
 }
 
 QString defaultSnippet() {
@@ -194,18 +265,22 @@ QImage renderCroppedPdfPreview(const QString &pdfPath, int minWidthPt) {
   return white;
 }
 
-int runSmoke(const QString &repoRoot, const QString &runtimeRoot) {
+int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString &profileRoot, const QString &texmfRoot) {
   QByteArray repo = QDir::cleanPath(repoRoot).toUtf8();
   QByteArray runtime = QDir::cleanPath(runtimeRoot).toUtf8();
+  QByteArray texmf = QDir::cleanPath(texmfRoot).toUtf8();
+  QByteArray profile = QDir::cleanPath(profileRoot).toUtf8();
   QDir runtimeDir(QString::fromUtf8(runtime));
-  printf("repoRoot=%s\nruntimeRoot=%s\nruntimeHasXetexdaemon=%d runtimeHasDvipdfmxDll=%d runtimeHasWarmup=%d\n",
-         repo.constData(), runtime.constData(),
+  printf("repoRoot=%s\nruntimeRoot=%s\ntexmfRoot=%s\nprofileRoot=%s\nruntimeHasXetexdaemon=%d runtimeHasDvipdfmxDll=%d profileHasWarmup=%d\n",
+         repo.constData(), runtime.constData(), texmf.constData(), profile.constData(),
          QFileInfo::exists(runtimeDir.filePath("bin/windows/xetexdaemon.exe")) ? 1 : 0,
          QFileInfo::exists(runtimeDir.filePath("bin/windows/dvipdfmxdaemon.dll")) ? 1 : 0,
-         QFileInfo::exists(runtimeDir.filePath("texmf-var/cache-warmup/warmup.xdv")) ? 1 : 0);
+         QFileInfo::exists(QDir(QString::fromUtf8(profile)).filePath("warmup.tex")) ? 1 : 0);
   StemTeXConfig cfg{};
   cfg.repo_root_utf8 = repo.constData();
   cfg.runtime_root_utf8 = runtime.constData();
+  cfg.texmf_root_utf8 = texmf.constData();
+  cfg.profile_root_utf8 = profile.constData();
   cfg.request_timeout_ms = 90000;
   cfg.xdvipdfmx_timeout_ms = 90000;
   cfg.spare_worker_count = 2;
@@ -239,8 +314,8 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot) {
   printf("pdf=%s\nsummary=%s\nqtPdfError=%d pages=%d pagePoints=%.2fx%.2f croppedPixels=%dx%d\n",
          pdfPath.toUtf8().constData(), summary.toUtf8().constData(),
          (int)pdfError, pages, pageSize.width(), pageSize.height(), cropped.width(), cropped.height());
-  if (!summary.contains("\"xdvipdfmxMode\":\"dll\"")) {
-    fprintf(stderr, "expected xdvipdfmxMode=dll, got summary=%s\n", summary.toUtf8().constData());
+  if (!summary.contains("\"xdvipdfmxMode\":\"daemon-dll\"") && !summary.contains("\"xdvipdfmxMode\":\"dll\"")) {
+    fprintf(stderr, "expected xdvipdfmxMode=daemon-dll, got summary=%s\n", summary.toUtf8().constData());
     stemtex_renderer_free_result(&result);
     stemtex_renderer_destroy(renderer);
     return 1;
@@ -254,7 +329,10 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot) {
 
 class MainWindow : public QMainWindow {
  public:
-  MainWindow(QString repoRoot, QString runtimeRoot) : repo_root_(std::move(repoRoot)), runtime_root_(std::move(runtimeRoot)) {
+  MainWindow(QString repoRoot, QString runtimeRoot)
+      : repo_root_(std::move(repoRoot)),
+        runtime_root_(normalizeRuntimeRoot(runtimeRoot)),
+        texmf_root_(defaultTexmfRoot(runtime_root_)) {
     setWindowTitle("StemTeX Renderer GUI");
     resize(1180, 760);
 
@@ -276,6 +354,11 @@ class MainWindow : public QMainWindow {
     widthSpin_->setSingleStep(10);
     widthSpin_->setSuffix(" pt");
     widthSpin_->setValue(360);
+    texmfLabel_ = new QLabel(QFileInfo(texmf_root_).fileName(), central);
+    texmfLabel_->setToolTip(texmf_root_);
+    texmfButton_ = new QPushButton("TeXLive...", central);
+    profileCombo_ = new QComboBox(central);
+    reloadProfiles();
     encodingCombo_ = new QComboBox(central);
     encodingCombo_->addItems({"UTF-8", "GBK", "Big5"});
     encodingCombo_->setCurrentText("UTF-8");
@@ -289,6 +372,11 @@ class MainWindow : public QMainWindow {
     toolbar->addWidget(widthLabel);
     toolbar->addWidget(widthSlider_, 1);
     toolbar->addWidget(widthSpin_);
+    toolbar->addWidget(new QLabel("TeXLive", central));
+    toolbar->addWidget(texmfLabel_);
+    toolbar->addWidget(texmfButton_);
+    toolbar->addWidget(new QLabel("Profile", central));
+    toolbar->addWidget(profileCombo_);
     toolbar->addWidget(new QLabel("输入编码", central));
     toolbar->addWidget(encodingCombo_);
     toolbar->addWidget(renderButton_);
@@ -357,6 +445,8 @@ class MainWindow : public QMainWindow {
       updatePreviewMinimumWidth(value);
       updatePreviewPixmap();
     });
+    connect(texmfButton_, &QPushButton::clicked, this, [this]() { chooseTexmfRoot(); });
+    connect(profileCombo_, &QComboBox::currentIndexChanged, this, [this](int) { switchProfile(); });
     connect(renderButton_, &QPushButton::clicked, this, [this]() { renderSnippet(); });
     connect(copyImageButton_, &QPushButton::clicked, this, [this]() { copyPreviewImage(); });
     connect(saveImageButton_, &QPushButton::clicked, this, [this]() { savePreviewImage(); });
@@ -377,7 +467,9 @@ class MainWindow : public QMainWindow {
 
  private:
   void setUiReady(bool ready) {
-    renderButton_->setEnabled(ready);
+    bool hasProfile = profileCombo_ && profileCombo_->currentIndex() >= 0;
+    renderButton_->setEnabled(ready && hasProfile);
+    if (profileCombo_) profileCombo_->setEnabled(ready);
   }
 
   void setPreviewImageReady(bool ready) {
@@ -442,14 +534,77 @@ class MainWindow : public QMainWindow {
                        snapshotNote(snapshot, overrideNote));
   }
 
+  QString selectedProfileRoot() const {
+    return profileCombo_ && profileCombo_->currentIndex() >= 0 ? profileCombo_->currentData().toString() : QString();
+  }
+
+  void reloadProfiles() {
+    QString profileError;
+    bool oldSignals = profileCombo_->blockSignals(true);
+    profileCombo_->clear();
+    for (const ProfileEntry &profile : profileRoots(repo_root_, runtime_root_, &profileError)) {
+      profileCombo_->addItem(profile.name, profile.path);
+    }
+    profileCombo_->blockSignals(oldSignals);
+    profileCombo_->setToolTip(profileCombo_->count() == 0 ? profileError : QString());
+    QString shown = QFileInfo(texmf_root_).fileName();
+    if (shown.isEmpty()) shown = texmf_root_;
+    texmfLabel_->setText(shown);
+    texmfLabel_->setToolTip(QString("TeXLive package/font tree: %1\nDaemon runtime: %2").arg(texmf_root_, runtime_root_));
+  }
+
+  void stopRenderer() {
+    ++rendererGeneration_;
+    enginePollTimer_->stop();
+    if (renderer_) {
+      stemtex_renderer_destroy(renderer_);
+      renderer_ = nullptr;
+    }
+    pendingStartupRender_ = false;
+  }
+
+  void chooseTexmfRoot() {
+    QString selected = QFileDialog::getExistingDirectory(this, "Select TeXLive package/font tree", texmf_root_);
+    if (selected.isEmpty()) return;
+    QString normalized = normalizeTexmfRoot(selected);
+    if (normalized == texmf_root_) return;
+    stopRenderer();
+    texmf_root_ = normalized;
+    reloadProfiles();
+    setUiReady(true);
+    updateEngineStatus(false, 0, spareTarget_, QString("texmf: %1").arg(texmf_root_));
+    initializeRenderer();
+  }
+
+  void switchProfile() {
+    if (!renderer_) {
+      initializeRenderer();
+      return;
+    }
+    stopRenderer();
+    refreshEngineStatus(QString("profile: %1").arg(profileCombo_->currentText()));
+    initializeRenderer();
+  }
+
   void initializeRenderer() {
-    std::thread([this]() {
+    QString profileRoot = selectedProfileRoot();
+    if (profileRoot.isEmpty()) {
+      refreshEngineStatus("choose a profile");
+      setUiReady(true);
+      return;
+    }
+    uint64_t generation = ++rendererGeneration_;
+    std::thread([this, profileRoot, generation]() {
       auto start = std::chrono::steady_clock::now();
       QByteArray repo = QDir::cleanPath(repo_root_).toUtf8();
       QByteArray runtime = QDir::cleanPath(runtime_root_).toUtf8();
+      QByteArray texmf = QDir::cleanPath(texmf_root_).toUtf8();
+      QByteArray profile = QDir::cleanPath(profileRoot).toUtf8();
       StemTeXConfig cfg{};
       cfg.repo_root_utf8 = repo.constData();
       cfg.runtime_root_utf8 = runtime.constData();
+      cfg.texmf_root_utf8 = texmf.constData();
+      cfg.profile_root_utf8 = profile.constData();
       cfg.request_timeout_ms = 90000;
       cfg.xdvipdfmx_timeout_ms = 90000;
       cfg.spare_worker_count = 2;
@@ -459,8 +614,8 @@ class MainWindow : public QMainWindow {
       auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
       QString errorText = error ? QString::fromUtf8(error) : QString();
       stemtex_renderer_free_string(error);
-      QMetaObject::invokeMethod(this, [this, renderer, code, errorText, elapsed]() {
-        if (shuttingDown_.load()) {
+      QMetaObject::invokeMethod(this, [this, renderer, code, errorText, elapsed, generation]() {
+        if (shuttingDown_.load() || generation != rendererGeneration_.load()) {
           if (renderer) stemtex_renderer_destroy(renderer);
           return;
         }
@@ -599,12 +754,17 @@ class MainWindow : public QMainWindow {
 
   QString repo_root_;
   QString runtime_root_;
+  QString texmf_root_;
   StemTeXRenderer *renderer_ = nullptr;
   std::atomic<bool> shuttingDown_{false};
+  std::atomic<uint64_t> rendererGeneration_{0};
   QString lastPdf_;
   QsciScintilla *editor_ = nullptr;
   QSlider *widthSlider_ = nullptr;
   QSpinBox *widthSpin_ = nullptr;
+  QLabel *texmfLabel_ = nullptr;
+  QPushButton *texmfButton_ = nullptr;
+  QComboBox *profileCombo_ = nullptr;
   QComboBox *encodingCombo_ = nullptr;
   QPushButton *renderButton_ = nullptr;
   QPushButton *copyImageButton_ = nullptr;
@@ -632,8 +792,12 @@ int main(int argc, char **argv) {
   args.removeAll("--smoke");
   QString repoRoot = args.size() > 1 ? args.at(1) : defaultRepoRoot();
   QString runtimeRoot = args.size() > 2 ? args.at(2) : defaultRuntimeRoot();
+  QString profileError;
+  QVector<ProfileEntry> profiles = profileRoots(repoRoot, runtimeRoot, &profileError);
+  QString profileRoot = args.size() > 3 ? args.at(3) : (profiles.isEmpty() ? QString() : profiles.first().path);
+  QString texmfRoot = args.size() > 4 ? args.at(4) : defaultTexmfRoot(runtimeRoot);
   configureRendererDllSearch(runtimeRoot);
-  if (smoke) return runSmoke(repoRoot, runtimeRoot);
+  if (smoke) return runSmoke(repoRoot, runtimeRoot, profileRoot, texmfRoot);
   MainWindow w(repoRoot, runtimeRoot);
   w.show();
   return app.exec();

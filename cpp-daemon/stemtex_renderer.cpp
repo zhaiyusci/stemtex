@@ -141,6 +141,10 @@ std::string slash_path(const fs::path &p) {
   return p.generic_string();
 }
 
+std::string path_utf8(const fs::path &p) {
+  return narrow_utf8(path_to_wstring(p));
+}
+
 bool has_file_with_prefix_suffix(const fs::path &dir, const std::wstring &prefix, const std::wstring &suffix) {
   if (!fs::exists(dir)) return false;
   for (const auto &entry : fs::directory_iterator(dir)) {
@@ -418,6 +422,8 @@ class LineWatcher {
 struct RendererConfig {
   fs::path repo_root;
   fs::path runtime_root;
+  fs::path texmf_root;
+  fs::path profile_root;
   fs::path state_root;
   fs::path renders_root;
   fs::path warmup_tex;
@@ -434,11 +440,7 @@ struct RendererConfig {
 };
 
 std::string installed_warmup_body(const RendererConfig &cfg) {
-  fs::path installed_warmup = cfg.warmup_tex.empty() ? cfg.runtime_root / "cache-warmup" / "warmup.tex" : cfg.warmup_tex;
-  if (!fs::exists(installed_warmup)) {
-    return u8"中文 warmup $E=mc^2$ \\textcolor{blue}{blue} \\[\\int_0^1 x^2\\,dx=\\frac13\\] \\ce{H2O} $\\ip{1}{0}$\n";
-  }
-  std::string warmup = read_text_file(installed_warmup);
+  std::string warmup = read_text_file(cfg.warmup_tex);
   const std::string begin = "\\begin{document}";
   const std::string end = "\\end{document}";
   size_t body_start = warmup.find(begin);
@@ -451,7 +453,9 @@ std::string installed_warmup_body(const RendererConfig &cfg) {
 }
 
 fs::path default_runtime(const fs::path &repo_root) {
-  const char *env = std::getenv("XETEX_RUNTIME");
+  const char *env = std::getenv("STEMTEX_RUNTIME");
+  if (env && *env) return fs::absolute(env);
+  env = std::getenv("XETEX_RUNTIME");
   if (env && *env) return fs::absolute(env);
   if (fs::exists("C:\\StemTeX\\run-xelatexdaemon.bat")) return "C:\\StemTeX";
   for (const char *candidate : {"stemtex", "runtime", "../stemtex"}) {
@@ -482,10 +486,15 @@ void materialize_worker_template(const RendererConfig &cfg, const fs::path &out_
 
 std::vector<wchar_t> worker_environment(const RendererConfig &cfg) {
   fs::path bin = cfg.runtime_root / "bin" / "windows";
-  fs::path texmfcnf = cfg.runtime_root / "texmf-dist" / "web2c";
+  fs::path texmfcnf = cfg.texmf_root / "texmf-dist" / "web2c";
   fs::path fmt = cfg.runtime_root / "texmf-var" / "web2c" / "xetex";
   fs::path fontconf = cfg.runtime_root / "texmf-var" / "fonts" / "conf";
   fs::path fontcache = cfg.runtime_root / "texmf-var" / "fonts" / "cache";
+  std::wstring fontmaps =
+      widen_utf8(slash_path(cfg.texmf_root / "texmf-var" / "fonts" / "map" / "pdftex" / "updmap")) + L";" +
+      widen_utf8(slash_path(cfg.texmf_root / "texmf-var" / "fonts" / "map" / "dvipdfmx" / "updmap")) + L";" +
+      widen_utf8(slash_path(cfg.texmf_root / "texmf-dist" / "fonts" / "map" / "dvipdfmx")) + L";" +
+      widen_utf8(slash_path(cfg.texmf_root / "texmf-dist" / "fonts" / "map")) + L"//";
   std::wstring system_root;
   wchar_t sysroot[MAX_PATH]{};
   DWORD n = GetEnvironmentVariableW(L"SystemRoot", sysroot, MAX_PATH);
@@ -495,35 +504,20 @@ std::vector<wchar_t> worker_environment(const RendererConfig &cfg) {
 
   std::map<std::wstring, std::wstring> env = {
       {L"PATH", path},
-      {L"TEXMFROOT", path_to_wstring(cfg.runtime_root)},
+      {L"TEXMFROOT", path_to_wstring(cfg.texmf_root)},
       {L"TEXMFCNF", path_to_wstring(texmfcnf)},
       {L"TEXFORMATS", path_to_wstring(fmt) + L";" + path_to_wstring(fmt) + L"\\"},
       {L"XE_FONTCONFIG_PATH", path_to_wstring(fontconf)},
       {L"FONTCONFIG_PATH", path_to_wstring(fontconf)},
       {L"XE_FC_CACHEDIR", path_to_wstring(fontcache)},
       {L"FC_CACHEDIR", path_to_wstring(fontcache)},
-      {L"TEXMF", L""},
-      {L"TEXMFDIST", path_to_wstring(cfg.runtime_root / "texmf-dist")},
-      {L"TEXMFLOCAL", L""},
-      {L"TEXMFSYSVAR", path_to_wstring(cfg.runtime_root / "texmf-var")},
-      {L"TEXMFSYSCONFIG", path_to_wstring(cfg.runtime_root / "texmf-config")},
-      {L"TEXMFVAR", path_to_wstring(cfg.runtime_root / "texmf-var")},
-      {L"TEXMFCONFIG", path_to_wstring(cfg.runtime_root / "texmf-config")},
-      {L"TEXMFHOME", L""},
-      {L"TEXINPUTS", L""},
-      {L"LUAINPUTS", L""},
-      {L"BIBINPUTS", L""},
-      {L"BSTINPUTS", L""},
-      {L"MFINPUTS", L""},
-      {L"MPINPUTS", L""},
-      {L"TFMFONTS", L""},
-      {L"T1FONTS", L""},
-      {L"OPENTYPEFONTS", L""},
-      {L"TTFONTS", L""},
-      {L"TEXFONTMAPS", L""},
-      {L"ENCFONTS", L""},
-      {L"VFFONTS", L""},
-      {L"WEB2C", path_to_wstring(cfg.runtime_root / "texmf-dist" / "web2c")},
+      {L"TEXMFDIST", path_to_wstring(cfg.texmf_root / "texmf-dist")},
+      {L"TEXMFSYSVAR", path_to_wstring(cfg.texmf_root / "texmf-var")},
+      {L"TEXMFSYSCONFIG", path_to_wstring(cfg.texmf_root / "texmf-config")},
+      {L"TEXMFVAR", path_to_wstring(cfg.texmf_root / "texmf-var")},
+      {L"TEXMFCONFIG", path_to_wstring(cfg.texmf_root / "texmf-config")},
+      {L"TEXFONTMAPS", fontmaps},
+      {L"WEB2C", path_to_wstring(cfg.texmf_root / "texmf-dist" / "web2c")},
       {L"W32TEX", path_to_wstring(cfg.runtime_root)},
   };
   fs::path icu = bin / "icu-data";
@@ -544,12 +538,19 @@ struct ScopedEnvironment {
       }
       entries.push_back(std::move(entry));
       SetEnvironmentVariableW(kv.first.c_str(), kv.second.c_str());
+      _wputenv_s(kv.first.c_str(), kv.second.c_str());
     }
   }
 
   ~ScopedEnvironment() {
     for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
-      SetEnvironmentVariableW(it->name.c_str(), it->had_value ? it->value.c_str() : nullptr);
+      if (it->had_value) {
+        SetEnvironmentVariableW(it->name.c_str(), it->value.c_str());
+        _wputenv_s(it->name.c_str(), it->value.c_str());
+      } else {
+        SetEnvironmentVariableW(it->name.c_str(), nullptr);
+        _wputenv_s(it->name.c_str(), L"");
+      }
     }
   }
 
@@ -566,10 +567,15 @@ struct ScopedEnvironment {
 
 std::map<std::wstring, std::wstring> runtime_environment_overrides(const RendererConfig &cfg) {
   fs::path bin = cfg.runtime_root / "bin" / "windows";
-  fs::path texmfcnf = cfg.runtime_root / "texmf-dist" / "web2c";
+  fs::path texmfcnf = cfg.texmf_root / "texmf-dist" / "web2c";
   fs::path fmt = cfg.runtime_root / "texmf-var" / "web2c" / "xetex";
   fs::path fontconf = cfg.runtime_root / "texmf-var" / "fonts" / "conf";
   fs::path fontcache = cfg.runtime_root / "texmf-var" / "fonts" / "cache";
+  std::wstring fontmaps =
+      widen_utf8(slash_path(cfg.texmf_root / "texmf-var" / "fonts" / "map" / "pdftex" / "updmap")) + L";" +
+      widen_utf8(slash_path(cfg.texmf_root / "texmf-var" / "fonts" / "map" / "dvipdfmx" / "updmap")) + L";" +
+      widen_utf8(slash_path(cfg.texmf_root / "texmf-dist" / "fonts" / "map" / "dvipdfmx")) + L";" +
+      widen_utf8(slash_path(cfg.texmf_root / "texmf-dist" / "fonts" / "map")) + L"//";
   std::wstring system_root;
   wchar_t sysroot[MAX_PATH]{};
   DWORD n = GetEnvironmentVariableW(L"SystemRoot", sysroot, MAX_PATH);
@@ -579,35 +585,20 @@ std::map<std::wstring, std::wstring> runtime_environment_overrides(const Rendere
 
   std::map<std::wstring, std::wstring> env = {
       {L"PATH", path},
-      {L"TEXMFROOT", path_to_wstring(cfg.runtime_root)},
+      {L"TEXMFROOT", path_to_wstring(cfg.texmf_root)},
       {L"TEXMFCNF", path_to_wstring(texmfcnf)},
       {L"TEXFORMATS", path_to_wstring(fmt) + L";" + path_to_wstring(fmt) + L"\\"},
       {L"XE_FONTCONFIG_PATH", path_to_wstring(fontconf)},
       {L"FONTCONFIG_PATH", path_to_wstring(fontconf)},
       {L"XE_FC_CACHEDIR", path_to_wstring(fontcache)},
       {L"FC_CACHEDIR", path_to_wstring(fontcache)},
-      {L"TEXMF", L""},
-      {L"TEXMFDIST", path_to_wstring(cfg.runtime_root / "texmf-dist")},
-      {L"TEXMFLOCAL", L""},
-      {L"TEXMFSYSVAR", path_to_wstring(cfg.runtime_root / "texmf-var")},
-      {L"TEXMFSYSCONFIG", path_to_wstring(cfg.runtime_root / "texmf-config")},
-      {L"TEXMFVAR", path_to_wstring(cfg.runtime_root / "texmf-var")},
-      {L"TEXMFCONFIG", path_to_wstring(cfg.runtime_root / "texmf-config")},
-      {L"TEXMFHOME", L""},
-      {L"TEXINPUTS", L""},
-      {L"LUAINPUTS", L""},
-      {L"BIBINPUTS", L""},
-      {L"BSTINPUTS", L""},
-      {L"MFINPUTS", L""},
-      {L"MPINPUTS", L""},
-      {L"TFMFONTS", L""},
-      {L"T1FONTS", L""},
-      {L"OPENTYPEFONTS", L""},
-      {L"TTFONTS", L""},
-      {L"TEXFONTMAPS", L""},
-      {L"ENCFONTS", L""},
-      {L"VFFONTS", L""},
-      {L"WEB2C", path_to_wstring(cfg.runtime_root / "texmf-dist" / "web2c")},
+      {L"TEXMFDIST", path_to_wstring(cfg.texmf_root / "texmf-dist")},
+      {L"TEXMFSYSVAR", path_to_wstring(cfg.texmf_root / "texmf-var")},
+      {L"TEXMFSYSCONFIG", path_to_wstring(cfg.texmf_root / "texmf-config")},
+      {L"TEXMFVAR", path_to_wstring(cfg.texmf_root / "texmf-var")},
+      {L"TEXMFCONFIG", path_to_wstring(cfg.texmf_root / "texmf-config")},
+      {L"TEXFONTMAPS", fontmaps},
+      {L"WEB2C", path_to_wstring(cfg.texmf_root / "texmf-dist" / "web2c")},
       {L"W32TEX", path_to_wstring(cfg.runtime_root)},
       {L"command_line_encoding", L""},
   };
@@ -616,39 +607,77 @@ std::map<std::wstring, std::wstring> runtime_environment_overrides(const Rendere
   return env;
 }
 
-std::string run_dvipdfmx_dll(const RendererConfig &cfg, const fs::path &final_path, const fs::path &pdf_path,
-                             const std::string &page_range) {
-  fs::path dll_path = cfg.runtime_root / "bin" / "windows" / "dvipdfmxdaemon.dll";
-  if (!fs::exists(dll_path)) throw std::runtime_error("dvipdfmxdaemon.dll missing");
+class DvipdfmxDaemon {
+ public:
+  using ApiFn = int(__cdecl *)(int, char **);
+  using ShutdownFn = int(__cdecl *)(void);
 
-  ScopedEnvironment env(runtime_environment_overrides(cfg));
-  using MainFn = int(__cdecl *)(int, char **);
-  HMODULE dll = LoadLibraryW(dll_path.wstring().c_str());
-  if (!dll) throw std::runtime_error("LoadLibrary dvipdfmxdaemon.dll failed: " + std::to_string(GetLastError()));
-  auto free_dll = std::unique_ptr<std::remove_pointer<HMODULE>::type, decltype(&FreeLibrary)>(dll, FreeLibrary);
-  auto fn = reinterpret_cast<MainFn>(GetProcAddress(dll, "dlldvipdfmxmain"));
-  if (!fn) throw std::runtime_error("GetProcAddress dlldvipdfmxmain failed: " + std::to_string(GetLastError()));
+  explicit DvipdfmxDaemon(const RendererConfig &cfg)
+      : env_(runtime_environment_overrides(cfg)) {
+    fs::path dll_path = cfg.runtime_root / "bin" / "windows" / "dvipdfmxdaemon.dll";
+    if (!fs::exists(dll_path)) throw std::runtime_error("dvipdfmxdaemon.dll missing");
+    env_scope_ = std::make_unique<ScopedEnvironment>(env_);
+    dll_ = LoadLibraryW(dll_path.wstring().c_str());
+    if (!dll_) throw std::runtime_error("LoadLibrary dvipdfmxdaemon.dll failed: " + std::to_string(GetLastError()));
+    init_ = reinterpret_cast<ApiFn>(GetProcAddress(dll_, "dvipdfmxdaemon_init"));
+    convert_ = reinterpret_cast<ApiFn>(GetProcAddress(dll_, "dvipdfmxdaemon_convert"));
+    shutdown_ = reinterpret_cast<ShutdownFn>(GetProcAddress(dll_, "dvipdfmxdaemon_shutdown"));
+    if (!init_ || !convert_ || !shutdown_) {
+      FreeLibrary(dll_);
+      dll_ = nullptr;
+      throw std::runtime_error("dvipdfmxdaemon.dll does not export hot-start API");
+    }
 
-  std::vector<std::string> args = {
-      "xdvipdfmxdaemon",
-      "-q",
-      "-z",
-      "1",
-      "-C",
-      "64",
-      "-s",
-      page_range,
-      "-o",
-      slash_path(pdf_path),
-      slash_path(final_path),
-  };
-  std::vector<char *> av;
-  for (auto &arg : args) av.push_back(arg.data());
-  int code = fn((int)av.size(), av.data());
-  if (code != 0) throw std::runtime_error("dvipdfmxdaemon.dll returned " + std::to_string(code));
-  if (!fs::exists(pdf_path)) throw std::runtime_error("dvipdfmxdaemon.dll did not write PDF: " + pdf_path.string());
-  return "dll";
-}
+    std::vector<std::string> args = {"xdvipdfmxdaemon"};
+    std::vector<char *> av;
+    for (auto &arg : args) av.push_back(arg.data());
+    int code = init_((int)av.size(), av.data());
+    if (code != 0) throw std::runtime_error("dvipdfmxdaemon_init returned " + std::to_string(code));
+  }
+
+  DvipdfmxDaemon(const DvipdfmxDaemon &) = delete;
+  DvipdfmxDaemon &operator=(const DvipdfmxDaemon &) = delete;
+
+  ~DvipdfmxDaemon() {
+    if (dll_) {
+      if (shutdown_) {
+        shutdown_();
+      }
+      FreeLibrary(dll_);
+    }
+    env_scope_.reset();
+  }
+
+  std::string convert(const fs::path &final_path, const fs::path &pdf_path, const std::string &page_range) {
+    std::vector<std::string> args = {
+        "xdvipdfmxdaemon",
+        "-q",
+        "-z",
+        "1",
+        "-C",
+        "64",
+        "-s",
+        page_range,
+        "-o",
+        slash_path(pdf_path),
+        slash_path(final_path),
+    };
+    std::vector<char *> av;
+    for (auto &arg : args) av.push_back(arg.data());
+    int code = convert_((int)av.size(), av.data());
+    if (code != 0) throw std::runtime_error("dvipdfmxdaemon_convert returned " + std::to_string(code));
+    if (!fs::exists(pdf_path)) throw std::runtime_error("dvipdfmxdaemon.dll did not write PDF: " + pdf_path.string());
+    return "daemon-dll";
+  }
+
+ private:
+  std::map<std::wstring, std::wstring> env_;
+  std::unique_ptr<ScopedEnvironment> env_scope_;
+  HMODULE dll_ = nullptr;
+  ApiFn init_ = nullptr;
+  ApiFn convert_ = nullptr;
+  ShutdownFn shutdown_ = nullptr;
+};
 
 void run_sync(const std::string &command, const fs::path &cwd, const std::vector<wchar_t> &environment,
               DWORD timeout_ms = 10000) {
@@ -724,63 +753,25 @@ void run_sync(const std::string &command, const fs::path &cwd, const std::vector
 }
 
 XdvParts run_warmup(const RendererConfig &cfg) {
-  fs::path out_dir = cfg.state_root / "fontdefs-warmup";
-  fs::path req_dir = cfg.state_root / "warmup-request";
-  fs::remove_all(out_dir);
-  fs::remove_all(req_dir);
-  fs::create_directories(out_dir);
-  fs::create_directories(req_dir);
-  fs::path req_path = req_dir / "req1.tex";
-  write_text_file(req_path, installed_warmup_body(cfg));
-
-  std::mutex mu;
-  std::condition_variable cv;
-  bool ready = false;
-  bool done = false;
-  std::string log;
-  LineWatcher lines;
-  ChildProcess child;
+  fs::create_directories(cfg.profile_root);
+  fs::path profile_xdv = cfg.profile_root / "warmup.xdv";
+  fs::remove(profile_xdv);
+  fs::remove(cfg.profile_root / "warmup.aux");
+  fs::remove(cfg.profile_root / "warmup.log");
+  fs::path exe = cfg.runtime_root / "bin" / "windows" / "xetexdaemon.exe";
   auto env = worker_environment(cfg);
-  child.start(worker_command(cfg, out_dir), cfg.repo_root, env, [&](const std::string &text) {
-    log += text;
-    lines.feed(text, [&](const std::string &line) {
-      if (line.find("WORKER_READY") != std::string::npos) {
-        std::lock_guard<std::mutex> lk(mu);
-        ready = true;
-        cv.notify_all();
-      }
-      if (line.find("WORKER_DONE:") != std::string::npos) {
-        std::lock_guard<std::mutex> lk(mu);
-        done = true;
-        cv.notify_all();
-      }
-    });
-  });
-
-  std::unique_lock<std::mutex> lock(mu);
-  if (!cv.wait_for(lock, std::chrono::seconds(30), [&]() { return ready; })) {
-    child.stop();
-    throw std::runtime_error("Warmup worker did not become ready");
-  }
-  lock.unlock();
-  child.write_stdin("360pt\n");
-  child.write_stdin(slash_path(fs::relative(req_path, cfg.repo_root)) + "\n");
-  lock.lock();
-  if (!cv.wait_for(lock, std::chrono::seconds(30), [&]() { return done; })) {
-    child.stop();
-    throw std::runtime_error("Warmup worker did not finish");
-  }
-  lock.unlock();
-  child.write_stdin(std::string(kWorkerStop) + "\n");
-  DWORD code = child.wait();
-  if (code != 0) throw std::runtime_error("Warmup worker exited with code " + std::to_string(code) + "\n" + log);
-  return read_xdv_parts(out_dir / "worker-template.xdv");
+  std::ostringstream cmd;
+  cmd << quote_cmd_arg(exe.string()) << " -fmt=xelatexdaemon -no-pdf -interaction=nonstopmode -halt-on-error"
+      << " -output-directory=" << quote_cmd_arg(cfg.profile_root.string()) << " " << quote_cmd_arg(cfg.warmup_tex.string());
+  run_sync(cmd.str(), cfg.profile_root, env, (DWORD)cfg.request_timeout_ms);
+  if (!fs::exists(profile_xdv)) throw std::runtime_error("Warmup XDV was not written: " + profile_xdv.string());
+  return read_xdv_parts(profile_xdv);
 }
 
 XdvParts load_or_run_warmup(const RendererConfig &cfg) {
   for (const fs::path &candidate : {
-           cfg.runtime_root / "texmf-var" / "cache-warmup" / "warmup.xdv",
-           cfg.runtime_root / "texmf-var" / "cache-warmup" / "worker-template.xdv",
+           cfg.profile_root / "warmup.xdv",
+           cfg.profile_root / "worker-template.xdv",
        }) {
     if (fs::exists(candidate)) {
       try {
@@ -842,6 +833,13 @@ RendererConfig config_from_api(const StemTeXConfig *config) {
   cfg.runtime_root = config && config->runtime_root_utf8 && *config->runtime_root_utf8
                          ? fs::absolute(config->runtime_root_utf8)
                          : default_runtime(cfg.repo_root);
+  cfg.texmf_root = config && config->texmf_root_utf8 && *config->texmf_root_utf8
+                       ? fs::absolute(config->texmf_root_utf8)
+                       : cfg.runtime_root;
+  if (!config || !config->profile_root_utf8 || !*config->profile_root_utf8) {
+    throw ApiException(STEMTEX_ERROR_BAD_CONFIG, "profile_root_utf8 is required");
+  }
+  cfg.profile_root = fs::absolute(config->profile_root_utf8);
   std::string instance_id = random_id();
   fs::path default_work_root = fs::temp_directory_path() / "stemtex-renderer" / instance_id;
   cfg.state_root = config && config->state_root_utf8 && *config->state_root_utf8
@@ -850,21 +848,14 @@ RendererConfig config_from_api(const StemTeXConfig *config) {
   cfg.renders_root = config && config->renders_root_utf8 && *config->renders_root_utf8
                          ? fs::absolute(config->renders_root_utf8)
                          : default_work_root / "renders";
-  cfg.warmup_tex = config && config->warmup_tex_utf8 && *config->warmup_tex_utf8
-                       ? fs::absolute(config->warmup_tex_utf8)
-                       : cfg.runtime_root / "cache-warmup" / "warmup.tex";
+  cfg.warmup_tex = cfg.profile_root / "warmup.tex";
   if (config && config->worker_template_utf8 && *config->worker_template_utf8) {
     cfg.worker_template = fs::absolute(config->worker_template_utf8);
   } else {
     fs::path repo_worker = cfg.repo_root / "cpp-daemon" / "worker-template.tex";
     cfg.worker_template = fs::exists(repo_worker) ? repo_worker : cfg.runtime_root / "worker-template.tex";
   }
-  if (config && config->preamble_tex_utf8 && *config->preamble_tex_utf8) {
-    cfg.preamble_tex = fs::absolute(config->preamble_tex_utf8);
-  } else {
-    fs::path repo_preamble = cfg.repo_root / "test" / "preamble.tex";
-    cfg.preamble_tex = fs::exists(repo_preamble) ? repo_preamble : cfg.runtime_root / "preamble.tex";
-  }
+  cfg.preamble_tex = cfg.profile_root / "preamble.tex";
   if (config) {
     cfg.request_timeout_ms = normalize_timeout_ms(config->request_timeout_ms);
     cfg.xdvipdfmx_timeout_ms = normalize_timeout_ms(config->xdvipdfmx_timeout_ms);
@@ -887,10 +878,14 @@ std::string validate_config_text(const RendererConfig &cfg) {
     if (!fs::exists(p) || !fs::is_directory(p)) out << label << " missing: " << p.string() << "\n";
   };
   require_dir(cfg.runtime_root, "runtime root");
+  require_dir(cfg.texmf_root, "texmf root");
+  require_dir(cfg.profile_root, "profile root");
   require_file(cfg.runtime_root / "run-xelatexdaemon.bat", "runtime launcher");
   require_file(cfg.runtime_root / "bin" / "windows" / "xetexdaemon.exe", "xetexdaemon.exe");
   require_file(cfg.runtime_root / "bin" / "windows" / "xdvipdfmxdaemon.exe", "xdvipdfmxdaemon.exe");
   require_file(cfg.runtime_root / "texmf-var" / "web2c" / "xetex" / "xelatexdaemon.fmt", "xelatexdaemon.fmt");
+  require_dir(cfg.texmf_root / "texmf-dist", "texmf-dist");
+  require_dir(cfg.texmf_root / "texmf-dist" / "web2c", "texmf-dist web2c");
   require_file(cfg.warmup_tex, "warmup tex");
   require_file(cfg.worker_template, "worker template");
   require_file(cfg.preamble_tex, "preamble tex");
@@ -913,6 +908,12 @@ struct StemTeXRenderer {
     snapshot_spare_target.store(cfg.spare_worker_count);
     publish_status(STEMTEX_STATUS_STARTING, STEMTEX_STAGE_REBUILDING);
     worker_env = worker_environment(cfg);
+    try {
+      converter = std::make_unique<DvipdfmxDaemon>(cfg);
+      append_log("dvipdfmx hot-start DLL initialized\n");
+    } catch (const std::exception &e) {
+      append_log(std::string("dvipdfmx hot-start DLL unavailable; using exe fallback: ") + e.what() + "\n");
+    }
     primary = create_ready_worker("primary");
     schedule_spare_rebuild_locked();
     publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
@@ -1055,6 +1056,7 @@ struct StemTeXRenderer {
     for (auto &slot : spares) {
       if (slot) slot->child.stop();
     }
+    converter.reset();
   }
 
   void join_spare_builder() {
@@ -1401,10 +1403,11 @@ struct StemTeXRenderer {
     fs::path xdvipdfmx = cfg.runtime_root / "bin" / "windows" / "xdvipdfmxdaemon.exe";
     std::string xdvipdfmx_options = "-q -z 1 -C 64";
     std::string page_range = std::to_string(request_no) + "-" + std::to_string(request_no);
-    std::string xdvipdfmx_mode = "dll";
+    std::string xdvipdfmx_mode = converter ? "daemon-dll" : "exe-fallback";
     try {
       try {
-        xdvipdfmx_mode = run_dvipdfmx_dll(cfg, final_path, pdf_path, page_range);
+        if (!converter) throw std::runtime_error("dvipdfmx hot-start DLL unavailable");
+        xdvipdfmx_mode = converter->convert(final_path, pdf_path, page_range);
       } catch (const std::exception &) {
         xdvipdfmx_mode = "exe-fallback";
         std::ostringstream cmd;
@@ -1472,6 +1475,7 @@ struct StemTeXRenderer {
   std::atomic<uint64_t> snapshot_pending_job_id{0};
   StemTeXErrorCode last_error = STEMTEX_OK;
   std::string log_tail;
+  std::unique_ptr<DvipdfmxDaemon> converter;
   WorkerSlot *active_slot = nullptr;
   bool cancel_requested = false;
   std::unique_ptr<WorkerSlot> primary;
@@ -1652,6 +1656,34 @@ STEMTEX_API char *stemtex_renderer_runtime_version(StemTeXRenderer *renderer) {
   return alloc_c_string(renderer->cfg.runtime_root.string());
 }
 
+STEMTEX_API char *stemtex_renderer_profile_info_json(const char *profile_root_utf8, StemTeXErrorCode *error_code,
+                                                     char **error_utf8) {
+  if (!profile_root_utf8 || !*profile_root_utf8) {
+    set_error_outputs(STEMTEX_ERROR_INVALID_ARGUMENT, "profile_root_utf8 is required", error_code, error_utf8);
+    return nullptr;
+  }
+  try {
+    fs::path profile = fs::absolute(profile_root_utf8).lexically_normal();
+    bool is_dir = fs::exists(profile) && fs::is_directory(profile);
+    bool has_preamble = fs::exists(profile / "preamble.tex");
+    bool has_warmup = fs::exists(profile / "warmup.tex");
+    bool has_warmup_xdv = fs::exists(profile / "warmup.xdv");
+    std::ostringstream json;
+    json << "{\"name\":\"" << json_escape(path_utf8(profile.filename())) << "\","
+         << "\"path\":\"" << json_escape(path_utf8(profile)) << "\","
+         << "\"valid\":" << (is_dir && has_preamble && has_warmup ? "true" : "false") << ","
+         << "\"hasPreamble\":" << (has_preamble ? "true" : "false") << ","
+         << "\"hasWarmup\":" << (has_warmup ? "true" : "false") << ","
+         << "\"hasWarmupXdv\":" << (has_warmup_xdv ? "true" : "false") << "}";
+    if (error_code) *error_code = STEMTEX_OK;
+    if (error_utf8) *error_utf8 = nullptr;
+    return alloc_c_string(json.str());
+  } catch (const std::exception &e) {
+    set_error_outputs(exception_code(e), e.what(), error_code, error_utf8);
+    return nullptr;
+  }
+}
+
 STEMTEX_API int stemtex_renderer_validate_config(const StemTeXConfig *config, StemTeXErrorCode *error_code,
                                                  char **diagnostics_utf8) {
   try {
@@ -1669,27 +1701,31 @@ STEMTEX_API int stemtex_renderer_validate_config(const StemTeXConfig *config, St
   }
 }
 
-STEMTEX_API int stemtex_refresh_font_cache(const char *runtime_root_utf8, const char *warmup_tex_utf8,
+STEMTEX_API int stemtex_refresh_font_cache(const char *runtime_root_utf8, const char *profile_root_utf8,
                                            StemTeXErrorCode *error_code, char **error_utf8) {
   if (!runtime_root_utf8 || !*runtime_root_utf8) {
     set_error_outputs(STEMTEX_ERROR_INVALID_ARGUMENT, "runtime_root_utf8 is required", error_code, error_utf8);
     return 0;
   }
+  if (!profile_root_utf8 || !*profile_root_utf8) {
+    set_error_outputs(STEMTEX_ERROR_INVALID_ARGUMENT, "profile_root_utf8 is required", error_code, error_utf8);
+    return 0;
+  }
   try {
     RendererConfig cfg;
     cfg.runtime_root = fs::absolute(runtime_root_utf8);
-    cfg.repo_root = warmup_tex_utf8 && *warmup_tex_utf8 ? fs::absolute(fs::path(warmup_tex_utf8)).parent_path()
-                                                        : cfg.runtime_root;
+    cfg.texmf_root = cfg.runtime_root;
+    cfg.profile_root = fs::absolute(profile_root_utf8);
+    cfg.repo_root = cfg.profile_root;
     cfg.state_root = cfg.runtime_root / "texmf-var" / "cache-warmup-state";
     cfg.renders_root = cfg.runtime_root / "texmf-var" / "cache-warmup-renders";
-    cfg.warmup_tex = warmup_tex_utf8 && *warmup_tex_utf8 ? fs::absolute(warmup_tex_utf8)
-                                                         : cfg.runtime_root / "cache-warmup" / "warmup.tex";
+    cfg.warmup_tex = cfg.profile_root / "warmup.tex";
     cfg.worker_template = cfg.repo_root / "cpp-daemon" / "worker-template.tex";
-    cfg.preamble_tex = cfg.repo_root / "test" / "preamble.tex";
+    cfg.preamble_tex = cfg.profile_root / "preamble.tex";
     cfg.request_timeout_ms = 90000;
     cfg.xdvipdfmx_timeout_ms = 90000;
     if (!fs::exists(cfg.warmup_tex)) throw ApiException(STEMTEX_ERROR_BAD_CONFIG, "Warmup tex missing: " + cfg.warmup_tex.string());
-    fs::path output_dir = cfg.runtime_root / "texmf-var" / "cache-warmup";
+    fs::path output_dir = cfg.profile_root;
     fs::create_directories(output_dir);
     auto env = worker_environment(cfg);
     fs::path exe = cfg.runtime_root / "bin" / "windows" / "xetexdaemon.exe";

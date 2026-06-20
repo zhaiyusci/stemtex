@@ -1,0 +1,68 @@
+\input{preamble.tex}
+
+\begin{document}
+\begin{preview}
+
+English warmup: Times New Roman, \textbf{bold}, \textit{italic},
+\textbf{\textit{bold italic}}, \textsf{Arial sans}, \texttt{Consolas mono}.
+
+{\ttfamily Mono warmup: abcXYZ0123 +-*/= () [] \{\}.}
+
+Inline math warmup:
+$E=mc^2$, $\alpha+\beta=\gamma$, $\symbf{\alpha}$, $\symcal{F}$,
+$\mathbb{R}$, $\mathbf{x}$, $\mathrm{d}x$, $\sin x$, $\nabla\cdot\mathbf{E}$.
+
+\[
+  \int_0^1 x^2\,dx = \frac{1}{3},\qquad
+  \sum_{n=1}^{\infty}\frac{1}{n^2}=\frac{\pi^2}{6},\qquad
+  \sqrt{x^2+y^2}
+\]
+
+\[
+  A =
+  \begin{pmatrix}
+    1 & 2\\
+    3 & 4
+  \end{pmatrix},
+  \qquad
+  f(x)=
+  \begin{cases}
+    x^2, & x \ge 0,\\
+    -x,  & x < 0,
+  \end{cases}
+\]
+
+Physics warmup:
+\[
+  \ip{\psi}{\phi}\quad
+  \dv{x}\sin x=\cos x\quad
+  \pdv{f}{x}\quad
+  \vb{v}\cdot\vu{n}\quad
+  \nabla f
+\]
+
+Chemistry warmup in text mode:
+\ce{H2O}, \ce{CO2}, \ce{Na+}, \ce{SO4^2-}, \ce{A -> B}, \ce{2H2 + O2 -> 2H2O}.
+
+Chemistry warmup in math/color context:
+{\color{blue}$\ce{H2O}$}
+{\color{red}$\ce{CO2 + C -> 2CO}$}
+\[
+  \ce{CH4 + 2O2 -> CO2 + 2H2O}
+\]
+
+Color and cancel warmup:
+{\color{blue}blue text}
+{\color{red}red text}
+{\color{green!50!black}green text}
+\[
+  \cancel{x+y}\quad \bcancel{a-b}\quad \xcancel{z}
+\]
+
+Script-size warmup:
+\[
+  x_{i_j}^{k_\ell} + \frac{\frac{a}{b}}{\sqrt{c_d}}
+\]
+
+\end{preview}
+\end{document}

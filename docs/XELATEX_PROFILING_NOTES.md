@@ -180,6 +180,48 @@ profile-format-preload\copy-timing.json
 - The largest remaining fixed cost is still the font stack:
   `unicode-math`, `fontspec`, and `xeCJK`.
 
+## `dvipdfmxdaemon` Hot Start
+
+Later full-TeX-Live tests showed that `xdvipdfmx` can become expensive when it
+initializes kpathsea against a large `ls-R` database.  The same XDV conversion
+was roughly:
+
+| Environment | Converter time |
+| --- | ---: |
+| Small runtime config | about 130 ms |
+| Full TeX Live 2026 config | about 480-530 ms |
+
+The slow part was startup/config discovery, not glyph extraction.  The converter
+must still see the same TeX tree as XeTeX: map files, CMaps, virtual fonts, and
+other backend resources come from the user-selected `texmf_root`.  StemTeX only
+provides the patched binaries and runtime cache; the kpathsea view is the
+selected TeX Live tree.
+
+`dvipdfmxdaemon.dll` now has a real hot-start API:
+
+```text
+dvipdfmxdaemon_init
+dvipdfmxdaemon_convert
+dvipdfmxdaemon_shutdown
+```
+
+The C++ renderer initializes the converter once per renderer and calls
+`dvipdfmxdaemon_convert` for each request.  A repeated-call crash was fixed in
+`dvi_close()` by resetting `num_def_fonts/max_def_fonts` and
+`num_loaded_fonts/max_loaded_fonts` after freeing their arrays.
+
+Representative current smoke results:
+
+| Test | Total request-to-PDF | `xdvipdfmx` |
+| --- | ---: | ---: |
+| C++ smoke, 5 hot renders | 107-154 ms | 45-69 ms |
+| GUI smoke with external `C:/texlive/2026` texmf | 121 ms | 55 ms |
+| C++ smoke with external `C:/texlive/2026` texmf, native Windows paths | 163-186 ms | 74-96 ms |
+
+This keeps the selected architecture: hot XeTeX worker for typesetting, hot
+`dvipdfmxdaemon` DLL for conversion, and one user-selected TeX Live tree for
+both frontend package/font lookup and backend map/CMap/font lookup.
+
 ## Delivery Option
 
 If this optimization is used, the small runtime can ship:

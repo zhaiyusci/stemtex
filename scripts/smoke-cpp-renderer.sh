@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 runtime_root="${STEMTEX_RUNTIME:-$repo_root/dist/stemtex-texlive-daemon-static}"
+profile_root="${STEMTEX_PROFILE:-$repo_root/profiles/unicodemath_cjk}"
 exe="$repo_root/build/cpp-daemon/Release/stemtex-renderer-smoke.exe"
 timeout_s="${TIMEOUT:-90}"
 runs="${RUNS:-2}"
@@ -29,6 +30,7 @@ run_smoke() {
   timeout "${timeout_s}s" "$exe" \
     --repo "$(win_path "$repo_root")" \
     --runtime "$(win_path "$runtime_root")" \
+    --profile "$(win_path "$profile_root")" \
     --spares "$spares" \
     "$@"
 }

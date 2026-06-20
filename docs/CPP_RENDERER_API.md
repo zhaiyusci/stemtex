@@ -44,8 +44,9 @@ On create, it:
 1. Reads the configured StemTeX runtime.
 2. Loads XDV font definitions from the installation-time warmup output under
    `texmf-var/cache-warmup`.
-3. Falls back to running a warmup worker with `cache-warmup/warmup.tex` only if
-   that cached XDV is missing or unreadable.
+3. Falls back to compiling the selected profile's `warmup.tex` only if that
+   profile's cached XDV is missing or unreadable. The generated XDV is saved as
+   `profile_root\warmup.xdv` for later starts.
 4. Starts and primes a primary live worker.
 5. Starts building spare live workers in the background.
 
@@ -91,6 +92,8 @@ to the snippet content plus the configured preview border.
 typedef struct StemTeXConfig {
   const char *repo_root_utf8;
   const char *runtime_root_utf8;
+  const char *texmf_root_utf8;
+  const char *profile_root_utf8;
   const char *state_root_utf8;
   const char *renders_root_utf8;
   int request_timeout_ms;
@@ -101,22 +104,25 @@ typedef struct StemTeXConfig {
   int spare_worker_count;
   int auto_restart;
   int delete_intermediates;
-  const char *warmup_tex_utf8;
   const char *worker_template_utf8;
-  const char *preamble_tex_utf8;
 } StemTeXConfig;
 ```
 
 Fields:
 
 - `repo_root_utf8`: repository/resource root. The renderer expects to find
-  `cpp-daemon/worker-template.tex` and `test/preamble.tex` under this tree in
-  a source checkout. If they are absent, it falls back to
-  `runtime_root\worker-template.tex` and `runtime_root\preamble.tex`.
+  `cpp-daemon/worker-template.tex` under this tree in a source checkout. If it
+  is absent, it falls back to `runtime_root\worker-template.tex`.
 - `runtime_root_utf8`: StemTeX runtime root, meaning the directory that directly
-  contains `bin\windows\xetexdaemon.exe`, `worker-template.tex`,
-  `preamble.tex`, and `cache-warmup\warmup.tex`. In the installer layout this
-  is normally `C:\StemTeX\runtime`.
+  contains `bin\windows\xetexdaemon.exe` and `worker-template.tex`. In the
+  installer layout this is normally `C:\StemTeX\runtime`.
+- `texmf_root_utf8`: optional TeX Live tree used for packages and TeX fonts.
+  If null, it defaults to `runtime_root_utf8`. The renderer still runs patched
+  binaries, formats, fontconfig configuration, and cache from `runtime_root_utf8`;
+  this field redirects `TEXMFROOT`, `TEXMFDIST`, `TEXMFCNF`, and `WEB2C`.
+- `profile_root_utf8`: required profile directory. It must directly contain
+  `preamble.tex` and `warmup.tex`. The renderer does not guess a default
+  profile.
 - `state_root_utf8`: optional worker state directory. If null, the renderer
   uses a unique directory under the system temporary directory.
 - `renders_root_utf8`: optional render output directory. If null, the renderer
@@ -134,8 +140,7 @@ Fields:
   recovery enabled.
 - `delete_intermediates`: delete request/XDV intermediates after successful
   render while keeping PDF and summary.
-- `warmup_tex_utf8`, `worker_template_utf8`, `preamble_tex_utf8`: optional
-  resource overrides.
+- `worker_template_utf8`: optional worker template override.
 
 Create a renderer:
 
@@ -193,10 +198,31 @@ char *stemtex_renderer_get_log_tail(StemTeXRenderer *renderer, int max_bytes);
 const char *stemtex_renderer_version(void);
 const char *stemtex_renderer_abi_version(void);
 char *stemtex_renderer_runtime_version(StemTeXRenderer *renderer);
+char *stemtex_renderer_profile_info_json(const char *profile_root_utf8,
+                                         StemTeXErrorCode *error_code, char **error_utf8);
 int stemtex_renderer_validate_config(const StemTeXConfig *config, StemTeXErrorCode *error_code, char **diagnostics_utf8);
-int stemtex_refresh_font_cache(const char *runtime_root_utf8, const char *warmup_tex_utf8,
+int stemtex_refresh_font_cache(const char *runtime_root_utf8, const char *profile_root_utf8,
                                StemTeXErrorCode *error_code, char **error_utf8);
 ```
+
+`stemtex_renderer_profile_info_json` parses one profile directory. Host
+applications may decide where to look for profile candidates, such as
+`repo_root\profiles` or `runtime_root\profiles`; the renderer library owns the
+rules for what is inside a valid profile. The returned string is JSON:
+
+```json
+{
+  "name": "unicodemath_cjk",
+  "path": "C:\\StemTeX\\runtime\\profiles\\unicodemath_cjk",
+  "valid": true,
+  "hasPreamble": true,
+  "hasWarmup": true,
+  "hasWarmupXdv": true
+}
+```
+
+The GUI scans profile candidate folders, then calls this library API for each
+candidate instead of reimplementing profile validation.
 
 `stemtex_renderer_render_async` returns a monotonically increasing `job_id`.
 The callback receives the same id, so hosts can associate a completion with the
@@ -245,8 +271,10 @@ void stemtex_renderer_destroy(StemTeXRenderer *renderer);
 
 int main() {
   StemTeXConfig cfg{};
-  cfg.repo_root_utf8 = "C:\\Users\\jairy\\Documents\\xetex\\stemtex";
+  cfg.repo_root_utf8 = "C:\\path\\to\\stemtex";
   cfg.runtime_root_utf8 = "C:\\StemTeX\\runtime";
+  cfg.texmf_root_utf8 = "C:\\texlive\\2026";
+  cfg.profile_root_utf8 = "C:\\StemTeX\\runtime\\profiles\\unicodemath_cjk";
 
   char *error = nullptr;
   StemTeXErrorCode error_code = STEMTEX_OK;
@@ -380,7 +408,7 @@ timeout, and uses named arguments so flags cannot be mistaken for positional
 paths.
 
 ```bash
-cd /c/Users/jairy/Documents/xetex/stemtex
+cd /path/to/stemtex
 ./scripts/smoke-cpp-renderer.sh quick
 ./scripts/smoke-cpp-renderer.sh errors
 ./scripts/smoke-cpp-renderer.sh timing
@@ -412,7 +440,7 @@ new scripts and docs should not use them.
 Run the timing report from MSYS2:
 
 ```bash
-cd /c/Users/jairy/Documents/xetex/stemtex
+cd /path/to/stemtex
 ./scripts/run-cpp-timing-report.sh
 ```
 
