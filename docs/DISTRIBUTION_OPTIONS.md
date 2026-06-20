@@ -28,10 +28,11 @@ StemTeX\
       stemtex_renderer.h
     sdk\lib\
       stemtex-renderer.lib
-    cache-warmup\
-      warmup.tex
     worker-template.tex
-    preamble.tex
+    profiles\
+      <name>\
+        preamble.tex
+        warmup.tex
     texmf-dist\
     texmf-var\
     refresh-font-cache.ps1
@@ -42,7 +43,7 @@ Build sequence:
 ```sh
 ./texlive-xetex/build-standalone-msvc.sh
 ./texlive-xetex/install-msvc-standalone-to-side-tree.sh
-./scripts/refresh-static-runtime-cache.sh
+./scripts/refresh-static-runtime-cache.sh ./dist/stemtex-texlive-daemon-static ./profiles/unicodemath_cjk
 ./scripts/build-cpp-daemon.sh
 ./scripts/sync-renderer-sdk-to-runtime.sh
 ./scripts/build-gui.sh
@@ -54,8 +55,7 @@ Strengths:
 - The application does not depend on a user TeX installation.
 - The runtime is controlled, reproducible, and known to match the renderer.
 - The GUI and host applications use the same `stemtex-renderer.dll`.
-- Font cache generation happens during installation, not during normal
-  interactive rendering.
+- Profile warmup can be generated ahead of normal interactive rendering.
 - The SDK files are installed next to the runtime for host integration.
 
 Costs:
@@ -65,8 +65,8 @@ Costs:
   set changes.
 - The runtime is intentionally narrower than a full TeX Live installation.
 
-Use this path for applications with a known preamble and short snippets using
-ordinary CJK, English, math, chemistry, physics, and color content.  The default
+Use this path for applications with a selected profile and short snippets using
+ordinary CJK, English, math, chemistry, physics, and color content.  The profile
 preamble includes LaTeX's `preview` package so snippet PDFs are emitted as tight
 content pages instead of full paper pages.
 
@@ -97,7 +97,7 @@ workers are hot, per-snippet latency is dominated by XeTeX page work and
 New glyphs in an already selected font are handled during PDF subsetting.  The
 important warmup boundary is new font instances: CJK fallback fonts, bold or
 italic variants, new math alphabets, or different OpenType fonts.  Those should
-be covered by `runtime/cache-warmup/warmup.tex`.
+be covered by the selected profile's `warmup.tex`.
 
-When the default preamble or supported macro usage expands, update the warmup
-document and rebuild the installer.
+When a profile preamble or supported macro usage expands, update that profile's
+warmup document and rebuild the installer.

@@ -3,7 +3,25 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_dir="${BUILD_DIR:-$repo_root/build/gui}"
-qt_prefix="${QT_PREFIX:-/c/Qt/6.11.1/msvc2022_64}"
+
+resolve_qt_prefix() {
+  if [[ -n "${QT_PREFIX:-}" ]]; then
+    printf '%s\n' "$QT_PREFIX"
+    return
+  fi
+  if [[ -n "${CMAKE_PREFIX_PATH:-}" ]]; then
+    printf '%s\n' "$CMAKE_PREFIX_PATH"
+    return
+  fi
+  local candidate
+  for candidate in /c/Qt/*/msvc2022_64; do
+    if [[ -d "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+  printf '%s\n' /c/Qt/6.11.1/msvc2022_64
+}
 
 win_path() {
   local p="$1"
@@ -31,16 +49,22 @@ resolve_cmake_bin() {
     /c/Qt/Tools/CMake_64/bin/cmake.exe \
     /mnt/c/Qt/Tools/CMake_64/bin/cmake.exe \
     "C:/Qt/Tools/CMake_64/bin/cmake.exe" \
+    cmake.exe \
     cmake; do
-    if command -v "$candidate" >/dev/null 2>&1 || [[ -x "$candidate" ]]; then
+    if command -v "$candidate" >/dev/null 2>&1; then
+      command -v "$candidate"
+      return
+    fi
+    if [[ -x "$candidate" ]]; then
       printf '%s\n' "$candidate"
       return
     fi
   done
-  printf '%s\n' /c/Qt/Tools/CMake_64/bin/cmake.exe
+  printf '%s\n' cmake
 }
 
 cmake_bin="$(resolve_cmake_bin)"
+qt_prefix="$(resolve_qt_prefix)"
 
 if [[ ! -x "$cmake_bin" ]]; then
   echo "CMake not found: $cmake_bin" >&2

@@ -14,18 +14,18 @@ experiments.  The supported path is:
 
 ## Runtime Model
 
-The renderer keeps one XeTeX worker hot with a fixed preamble.  Render requests
-send a small snippet body and a text-block width to that worker.  XeTeX runs with
+The renderer keeps one XeTeX worker hot with the selected profile preamble.
+Render requests send a small snippet body and a text-block width to that worker. XeTeX runs with
 `-no-pdf --flush-output-on-shipout --no-font-cache-refresh`, writes cumulative
 XDV output, and flushes it after each `\shipout`.  Each snippet is wrapped in
 LaTeX's `preview` environment, so the emitted page box is tightened around the
 typeset content instead of staying at a full paper size.  The renderer then
-synthesizes a valid final XDV postamble and asks `xdvipdfmxdaemon` to convert
-only the newest page.
+synthesizes a valid final XDV postamble and asks the hot
+`dvipdfmxdaemon.dll` converter to convert only the newest page.
 
 This is deliberately not a general LaTeX sandbox.  The intended input is short
 Chinese/English STEM text with math, chemistry, physics, color, and ordinary
-inline/display formulas under the fixed preamble.
+inline/display formulas under a selected StemTeX profile.
 
 ## XeTeX Changes
 
@@ -69,7 +69,7 @@ scripts/
   smoke-cpp-renderer.sh           Canonical C++ renderer smoke entrypoint.
   build-stemtex-installer.sh      Stage runtime/GUI/SDK and build installer.
   generate-gui-icon.py            Regenerate GUI PNG/ICO from SVG.
-  refresh-static-runtime-cache.sh Rebuild runtime warmup/cache data.
+  refresh-static-runtime-cache.sh Rebuild profile warmup/cache data.
   sync-renderer-sdk-to-runtime.sh Copy renderer DLL/lib/header into runtime.
 
 texlive-xetex/
@@ -80,11 +80,33 @@ texlive-xetex/
   install-msvc-standalone-to-side-tree.sh
 
 test/
-  preamble.tex                    Default fixed preamble.
+  test_*.tex                      Historical/manual test documents.
+
+profiles/
+  <name>/
+    preamble.tex                  Profile preamble selected by the host/GUI.
+    warmup.tex                    Matching warmup source.
 ```
 
 Generated build/package directories such as `build/`, `dist/`, and
 `texlive-xetex/out/` are local artifacts and are not part of the source tree.
+
+## Bundled Profiles
+
+Each profile is a directory with `preamble.tex` and `warmup.tex`.  The GUI scans
+these directories and passes the selected one to the renderer.
+
+Current source profiles:
+
+| Profile | Intended use |
+| --- | --- |
+| `math_light` | Latin text plus Unicode math, matrices, cases, color. |
+| `cjk_math_light` | Chinese/English text plus Unicode math and simple CJK fonts. |
+| `stem_units` | CJK STEM text with `siunitx`, `mhchem`, Unicode math, and color. |
+| `chemistry` | CJK chemistry snippets focused on `mhchem`. |
+| `physics_cjk` | CJK physics snippets with `physics`, Unicode math, color, and `cancel`. |
+| `unicodemath` | Broad Latin STEM profile with math, chemistry, physics, color, and cancel. |
+| `unicodemath_cjk` | Broad CJK STEM profile with the same package set. |
 
 ## Build
 
@@ -94,10 +116,10 @@ but the orchestration is shell-based.
 Build the daemon engine bundle:
 
 ```sh
-cd /c/Users/jairy/Documents/xetex/stemtex
+cd /path/to/stemtex
 ./texlive-xetex/build-standalone-msvc.sh
 ./texlive-xetex/install-msvc-standalone-to-side-tree.sh
-./scripts/refresh-static-runtime-cache.sh
+./scripts/refresh-static-runtime-cache.sh ./dist/stemtex-texlive-daemon-static ./profiles/unicodemath_cjk
 ```
 
 Build the renderer and GUI:
@@ -134,8 +156,8 @@ dist/installer/StemTeX-<version>-Setup.exe
 ```
 
 The installer intentionally does not ship generated font cache files.  During
-installation, `refresh-font-cache.ps1` compiles `runtime/cache-warmup/warmup.tex`
-to create the cache and warmup XDV for that machine.
+The installer does not pick a default profile. A host application or the GUI
+chooses a profile directory and passes it to the renderer.
 
 ## Runtime Layout
 
@@ -158,9 +180,10 @@ StemTeX/
       stemtex_renderer.h
     sdk/lib/
       stemtex-renderer.lib
-    cache-warmup/warmup.tex
     worker-template.tex
-    preamble.tex
+    profiles/
+      <name>/preamble.tex
+      <name>/warmup.tex
     texmf-dist/
     texmf-var/
 ```

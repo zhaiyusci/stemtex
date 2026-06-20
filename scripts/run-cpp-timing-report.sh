@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT_WIN="$(cygpath -w "$ROOT")"
 RUNTIME_ROOT="${1:-$(cygpath -w "$ROOT/dist/stemtex-texlive-daemon-static")}"
+PROFILE_ROOT="${STEMTEX_PROFILE:-$(cygpath -w "$ROOT/profiles/unicodemath_cjk")}"
 RUNS="${RUNS:-5}"
 TIMEOUT_S="${TIMEOUT:-90}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -26,11 +27,6 @@ find_node() {
     command -v node
     return
   fi
-  local bundled="/c/Users/jairy/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe"
-  if [ -x "$bundled" ]; then
-    printf '%s\n' "$bundled"
-    return
-  fi
   printf 'node\n'
 }
 
@@ -41,7 +37,7 @@ run_case() {
   local log_file="$RAW_DIR/$name.log"
   log "case=$name runs=$runs"
   set +e
-  timeout "${TIMEOUT_S}s" "$EXE" --repo "$ROOT_WIN" --runtime "$RUNTIME_ROOT" --runs "$runs" "$@" >"$log_file" 2>&1
+  timeout "${TIMEOUT_S}s" "$EXE" --repo "$ROOT_WIN" --runtime "$RUNTIME_ROOT" --profile "$PROFILE_ROOT" --runs "$runs" "$@" >"$log_file" 2>&1
   local code=$?
   set -e
   printf '%s\n' "$code" >"$RAW_DIR/$name.exit"
@@ -55,6 +51,7 @@ run_case() {
 
 log "repo=$ROOT"
 log "runtime=$RUNTIME_ROOT"
+log "profile=$PROFILE_ROOT"
 log "output=$OUT_DIR"
 
 log "building C++ renderer"

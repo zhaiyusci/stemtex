@@ -2417,6 +2417,8 @@ dvi_close (void)
     RELEASE(def_fonts);
   }
   def_fonts = NULL;
+  num_def_fonts = 0;
+  max_def_fonts = 0;
 
   if (page_loc)
     RELEASE(page_loc);
@@ -2435,6 +2437,7 @@ dvi_close (void)
     RELEASE(loaded_fonts);
   loaded_fonts     = NULL;
   num_loaded_fonts = 0;
+  max_loaded_fonts = 0;
 
   vf_close_all_fonts();
   tfm_close_all ();

@@ -31,19 +31,19 @@ static fs::path default_runtime_root(const fs::path &repo_root) {
 struct SmokeOptions {
   fs::path repo_root = fs::current_path();
   fs::path runtime_root;
+  fs::path texmf_root;
+  fs::path profile_root;
   int runs = 1;
   std::string case_name;
   int spare_workers = 1;
-  std::string warmup_tex;
   std::string worker_template;
-  std::string preamble_tex;
   bool allow_exe = false;
 };
 
 static void print_usage(const char *argv0) {
   std::fprintf(stderr,
                "Usage:\n"
-               "  %s [--repo PATH] [--runtime PATH] [--runs N] [--case NAME] [--spares N]\n"
+               "  %s [--repo PATH] [--runtime PATH] [--texmf PATH] --profile PATH [--runs N] [--case NAME] [--spares N]\n"
                "  %s --async --runs 5 --spares 2\n"
                "\n"
                "Cases: default, validate, refresh, physics, fonts, chem-text, bad,\n"
@@ -68,9 +68,8 @@ static SmokeOptions parse_options(int argc, char **argv) {
     opts.runs = argc > 3 ? std::atoi(argv[3]) : 1;
     opts.case_name = argc > 4 ? canonical_case(argv[4]) : "";
     opts.spare_workers = argc > 5 ? std::atoi(argv[5]) : 1;
-    opts.warmup_tex = argc > 6 ? argv[6] : "";
+    opts.profile_root = argc > 6 && argv[6] && *argv[6] ? fs::absolute(argv[6]) : fs::path();
     opts.worker_template = argc > 7 ? argv[7] : "";
-    opts.preamble_tex = argc > 8 ? argv[8] : "";
     return opts;
   }
 
@@ -90,18 +89,18 @@ static SmokeOptions parse_options(int argc, char **argv) {
       opts.repo_root = fs::absolute(need_value("--repo"));
     } else if (arg == "--runtime") {
       opts.runtime_root = fs::absolute(need_value("--runtime"));
+    } else if (arg == "--texmf") {
+      opts.texmf_root = fs::absolute(need_value("--texmf"));
+    } else if (arg == "--profile") {
+      opts.profile_root = fs::absolute(need_value("--profile"));
     } else if (arg == "--runs") {
       opts.runs = std::atoi(need_value("--runs"));
     } else if (arg == "--case") {
       opts.case_name = canonical_case(need_value("--case"));
     } else if (arg == "--spares") {
       opts.spare_workers = std::atoi(need_value("--spares"));
-    } else if (arg == "--warmup") {
-      opts.warmup_tex = need_value("--warmup");
     } else if (arg == "--worker-template") {
       opts.worker_template = need_value("--worker-template");
-    } else if (arg == "--preamble") {
-      opts.preamble_tex = need_value("--preamble");
     } else if (arg == "--allow-exe") {
       opts.allow_exe = true;
     } else if (arg.rfind("--", 0) == 0) {
@@ -116,11 +115,15 @@ static SmokeOptions parse_options(int argc, char **argv) {
 
   opts.repo_root = fs::absolute(opts.repo_root);
   if (opts.runtime_root.empty()) opts.runtime_root = fs::absolute(default_runtime_root(opts.repo_root));
+  if (opts.texmf_root.empty()) opts.texmf_root = opts.runtime_root;
   return opts;
 }
 
 static bool summary_has_dll_mode(const char *summary) {
-  return summary && std::string(summary).find("\"xdvipdfmxMode\":\"dll\"") != std::string::npos;
+  if (!summary) return false;
+  std::string text(summary);
+  return text.find("\"xdvipdfmxMode\":\"daemon-dll\"") != std::string::npos ||
+         text.find("\"xdvipdfmxMode\":\"dll\"") != std::string::npos;
 }
 
 static void print_snapshot(StemTeXRenderer *renderer, const char *label) {
@@ -161,18 +164,21 @@ int main(int argc, char **argv) {
   }
   fs::path repo_root = opts.repo_root;
   fs::path runtime_root = opts.runtime_root;
+  fs::path texmf_root = opts.texmf_root.empty() ? runtime_root : opts.texmf_root;
   std::string repo_root_utf8 = repo_root.generic_string();
   std::string runtime_root_utf8 = runtime_root.generic_string();
+  std::string texmf_root_utf8 = texmf_root.generic_string();
+  std::string profile_root_utf8 = opts.profile_root.empty() ? "" : opts.profile_root.generic_string();
 
   StemTeXConfig cfg{};
   cfg.repo_root_utf8 = repo_root_utf8.c_str();
   cfg.runtime_root_utf8 = runtime_root_utf8.c_str();
+  cfg.texmf_root_utf8 = texmf_root_utf8.c_str();
+  cfg.profile_root_utf8 = profile_root_utf8.empty() ? nullptr : profile_root_utf8.c_str();
   int runs = opts.runs;
   std::string case_name = opts.case_name;
   cfg.spare_worker_count = opts.spare_workers;
-  cfg.warmup_tex_utf8 = opts.warmup_tex.empty() ? nullptr : opts.warmup_tex.c_str();
   cfg.worker_template_utf8 = opts.worker_template.empty() ? nullptr : opts.worker_template.c_str();
-  cfg.preamble_tex_utf8 = opts.preamble_tex.empty() ? nullptr : opts.preamble_tex.c_str();
   cfg.request_timeout_ms = 90000;
   cfg.xdvipdfmx_timeout_ms = 90000;
   if (runs <= 0) runs = 1;
@@ -180,6 +186,8 @@ int main(int argc, char **argv) {
 
   std::printf("repoRoot=%s\n", repo_root_utf8.c_str());
   std::printf("runtimeRoot=%s\n", runtime_root_utf8.c_str());
+  std::printf("texmfRoot=%s\n", texmf_root_utf8.c_str());
+  std::printf("profileRoot=%s\n", profile_root_utf8.c_str());
   std::printf("runtimeHasXetexdaemon=%d runtimeHasDvipdfmxDaemonDll=%d runtimeHasWarmup=%d\n",
               fs::exists(runtime_root / "bin" / "windows" / "xetexdaemon.exe") ? 1 : 0,
               fs::exists(runtime_root / "bin" / "windows" / "dvipdfmxdaemon.dll") ? 1 : 0,
@@ -194,7 +202,7 @@ int main(int argc, char **argv) {
     return ok ? 0 : 1;
   }
   if (case_name == "--refresh") {
-    int ok = stemtex_refresh_font_cache(cfg.runtime_root_utf8, nullptr, &error_code, &error);
+    int ok = stemtex_refresh_font_cache(cfg.runtime_root_utf8, cfg.profile_root_utf8, &error_code, &error);
     std::printf("refresh=%d code=%d error=%s\n", ok, (int)error_code, error ? error : "");
     stemtex_renderer_free_string(error);
     return ok ? 0 : 1;

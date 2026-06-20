@@ -740,6 +740,36 @@ cleanup (void)
     RELEASE(filter_template);
 }
 
+static char *
+copy_string_or_null (const char *s)
+{
+  char *out;
+  if (!s)
+    return NULL;
+  out = NEW(strlen(s) + 1, char);
+  strcpy(out, s);
+  return out;
+}
+
+static void
+cleanup_document_args (void)
+{
+  if (dvi_filename) {
+    RELEASE(dvi_filename);
+    dvi_filename = NULL;
+  }
+  if (pdf_filename) {
+    RELEASE(pdf_filename);
+    pdf_filename = NULL;
+  }
+  if (page_ranges) {
+    RELEASE(page_ranges);
+    page_ranges = NULL;
+  }
+  num_page_ranges = 0;
+  max_page_ranges = 0;
+}
+
 static void
 read_config_file (const char *config)
 {
@@ -1021,6 +1051,325 @@ do_mps_pages (void)
       ERROR("No page output for \"%s\".", dvi_filename);
   }
 }
+
+struct daemon_defaults {
+  int initialized;
+  int verbose;
+  int really_quiet;
+  int opt_flags;
+  int pdf_version_major;
+  int pdf_version_minor;
+  int compression_level;
+  double annot_grow_x;
+  double annot_grow_y;
+  int bookmark_open;
+  double mag;
+  int enable_thumbnail;
+  int font_dpi;
+  int pdfdecimaldigits;
+  char ignore_colors;
+  int image_cache_life;
+  char *filter_template;
+  int do_encryption;
+  int key_bits;
+  int32_t permission;
+  double paper_width;
+  double paper_height;
+  double x_offset;
+  double y_offset;
+  int landscape_mode;
+  int dvi_ptex_with_vert;
+  int translate_origin;
+  int has_paper_option;
+  struct _dpx_conf dpx_conf;
+};
+
+static struct daemon_defaults daemon_defaults = {0};
+
+static void
+save_daemon_defaults (void)
+{
+  if (daemon_defaults.filter_template) {
+    RELEASE(daemon_defaults.filter_template);
+    daemon_defaults.filter_template = NULL;
+  }
+  daemon_defaults.verbose = verbose;
+  daemon_defaults.really_quiet = really_quiet;
+  daemon_defaults.opt_flags = opt_flags;
+  daemon_defaults.pdf_version_major = pdf_version_major;
+  daemon_defaults.pdf_version_minor = pdf_version_minor;
+  daemon_defaults.compression_level = compression_level;
+  daemon_defaults.annot_grow_x = annot_grow_x;
+  daemon_defaults.annot_grow_y = annot_grow_y;
+  daemon_defaults.bookmark_open = bookmark_open;
+  daemon_defaults.mag = mag;
+  daemon_defaults.enable_thumbnail = enable_thumbnail;
+  daemon_defaults.font_dpi = font_dpi;
+  daemon_defaults.pdfdecimaldigits = pdfdecimaldigits;
+  daemon_defaults.ignore_colors = ignore_colors;
+  daemon_defaults.image_cache_life = image_cache_life;
+  daemon_defaults.filter_template = copy_string_or_null(filter_template);
+  daemon_defaults.do_encryption = do_encryption;
+  daemon_defaults.key_bits = key_bits;
+  daemon_defaults.permission = permission;
+  daemon_defaults.paper_width = paper_width;
+  daemon_defaults.paper_height = paper_height;
+  daemon_defaults.x_offset = x_offset;
+  daemon_defaults.y_offset = y_offset;
+  daemon_defaults.landscape_mode = landscape_mode;
+  daemon_defaults.dvi_ptex_with_vert = dvi_ptex_with_vert;
+  daemon_defaults.translate_origin = translate_origin;
+  daemon_defaults.has_paper_option = has_paper_option;
+  daemon_defaults.dpx_conf = dpx_conf;
+}
+
+static void
+restore_daemon_defaults (void)
+{
+  verbose = daemon_defaults.verbose;
+  really_quiet = daemon_defaults.really_quiet;
+  opt_flags = daemon_defaults.opt_flags;
+  pdf_version_major = daemon_defaults.pdf_version_major;
+  pdf_version_minor = daemon_defaults.pdf_version_minor;
+  compression_level = daemon_defaults.compression_level;
+  annot_grow_x = daemon_defaults.annot_grow_x;
+  annot_grow_y = daemon_defaults.annot_grow_y;
+  bookmark_open = daemon_defaults.bookmark_open;
+  mag = daemon_defaults.mag;
+  enable_thumbnail = daemon_defaults.enable_thumbnail;
+  font_dpi = daemon_defaults.font_dpi;
+  pdfdecimaldigits = daemon_defaults.pdfdecimaldigits;
+  ignore_colors = daemon_defaults.ignore_colors;
+  image_cache_life = daemon_defaults.image_cache_life;
+  if (filter_template) {
+    RELEASE(filter_template);
+    filter_template = NULL;
+  }
+  filter_template = copy_string_or_null(daemon_defaults.filter_template);
+  do_encryption = daemon_defaults.do_encryption;
+  key_bits = daemon_defaults.key_bits;
+  permission = daemon_defaults.permission;
+  paper_width = daemon_defaults.paper_width;
+  paper_height = daemon_defaults.paper_height;
+  x_offset = daemon_defaults.x_offset;
+  y_offset = daemon_defaults.y_offset;
+  landscape_mode = daemon_defaults.landscape_mode;
+  dvi_ptex_with_vert = daemon_defaults.dvi_ptex_with_vert;
+  translate_origin = daemon_defaults.translate_origin;
+  has_paper_option = daemon_defaults.has_paper_option;
+  dpx_conf = daemon_defaults.dpx_conf;
+  shut_up(really_quiet);
+}
+
+static int
+dvipdfmxdaemon_convert_document (int argc, char *argv[])
+{
+  double             dvi2pts;
+  struct pdf_setting settings;
+  char               uplain[MAX_PWD_LEN+1], oplain[MAX_PWD_LEN+1];
+  const char        *creator = NULL;
+  unsigned char      id1[16], id2[16];
+  int                has_id = 0;
+
+  memset(uplain, 0, sizeof(uplain));
+  memset(oplain, 0, sizeof(oplain));
+  cleanup_document_args();
+  restore_daemon_defaults();
+  opterr = 0;
+  my_name = "xdvipdfmx";
+
+  do_args_first_pass(argc, argv, NULL, 0);
+
+  if (!dvi_filename) {
+    if (verbose)
+      MESG("No dvi filename specified, reading standard input.\n");
+  } else if (!pdf_filename)
+    set_default_pdf_filename();
+
+  if (dpx_conf.compat_mode == dpx_mode_mpost_mode) {
+    x_offset = 0.0;
+    y_offset = 0.0;
+    dvi2pts  = 0.01;
+  } else {
+    dvi2pts = dvi_init(dvi_filename, mag);
+    if (dvi2pts == 0.0)
+      ERROR("dvi_init() failed!");
+    creator = dvi_comment();
+    dvi_scan_specials(0,
+                      &paper_width, &paper_height,
+                      &x_offset, &y_offset, &landscape_mode,
+                      &pdf_version_major, &pdf_version_minor,
+                      &do_encryption, &key_bits, &permission, oplain, uplain,
+                      &has_id, id1, id2);
+  }
+
+  {
+    int has_encrypt_special = do_encryption;
+
+    do_args_second_pass(argc, argv, NULL, 0);
+    if (do_encryption && !has_encrypt_special) {
+      get_enc_password(oplain, uplain);
+    }
+  }
+
+  if (pdf_filename && !strcmp(pdf_filename, "-")) {
+    RELEASE(pdf_filename);
+    pdf_filename = NULL;
+  }
+
+  pdf_font_set_dpi(font_dpi);
+
+  MESG("%s -> %s\n", dvi_filename ? dvi_filename : "stdin",
+                     pdf_filename ? pdf_filename : "stdout");
+
+  kpse_make_tex_discard_errors = really_quiet;
+
+  settings.ver_major = pdf_version_major;
+  settings.ver_minor = pdf_version_minor;
+
+  if (!has_id) {
+    char producer[256];
+
+    sprintf(producer,
+            "%s-%s, Copyright 2002-2026 by Jin-Hwan Cho, Matthias Franz, and Shunsaku Hirata",
+            my_name, VERSION);
+    compute_id_string(id1, producer, dvi_filename, pdf_filename);
+    memcpy(id2, id1, 16);
+  }
+
+  {
+    memset(&settings.encrypt, 0, sizeof(struct pdf_enc_setting));
+    settings.enable_encrypt = do_encryption;
+    settings.encrypt.use_aes          = 1;
+    settings.encrypt.encrypt_metadata = 1;
+    settings.encrypt.key_size   = key_bits;
+    settings.encrypt.permission = permission;
+    settings.encrypt.uplain     = uplain;
+    settings.encrypt.oplain     = oplain;
+  }
+
+  settings.object.compression_level = compression_level;
+  if (opt_flags & OPT_PDFOBJ_NO_OBJSTM) {
+    settings.object.enable_objstm = 0;
+  } else {
+    settings.object.enable_objstm = 1;
+  }
+  if (opt_flags & OPT_PDFOBJ_NO_PREDICTOR) {
+    settings.object.enable_predictor = 0;
+  } else {
+    settings.object.enable_predictor = 1;
+  }
+
+  if (landscape_mode) {
+    SWAP(paper_width, paper_height);
+  }
+  settings.media_width         = paper_width;
+  settings.media_height        = paper_height;
+  settings.annot_grow_amount.x = annot_grow_x;
+  settings.annot_grow_amount.y = annot_grow_y;
+  settings.outline_open_depth  = bookmark_open;
+  settings.check_gotos         = !(opt_flags & OPT_PDFDOC_NO_DEST_REMOVE);
+  settings.enable_manual_thumb = enable_thumbnail;
+
+  settings.device.dvi2pts       = dvi2pts;
+  settings.device.precision     = pdfdecimaldigits;
+  settings.device.ignore_colors = ignore_colors;
+
+  set_distiller_template(filter_template);
+
+  pdf_open_document(pdf_filename, creator, id1, id2, settings);
+
+  if (opt_flags & OPT_CIDFONT_FIXEDPITCH)
+    CIDFont_set_flags(CIDFONT_FORCE_FIXEDPITCH);
+  if (opt_flags & OPT_TPIC_TRANSPARENT_FILL)
+    tpic_set_fill_mode(1);
+  if (translate_origin)
+    mps_set_translate_origin(1);
+
+  if (dpx_conf.compat_mode == dpx_mode_mpost_mode) {
+    do_mps_pages();
+  } else {
+    do_dvi_pages();
+  }
+
+  pdf_close_document();
+
+  if (dpx_conf.compat_mode != dpx_mode_mpost_mode)
+    dvi_close();
+
+  MESG("\n");
+  cleanup_document_args();
+  restore_daemon_defaults();
+  return 0;
+}
+
+#if defined(WIN32) && !defined(MIKTEX)
+extern __declspec(dllexport) int dvipdfmxdaemon_init (int argc, char *argv[]);
+extern __declspec(dllexport) int dvipdfmxdaemon_convert (int argc, char *argv[]);
+extern __declspec(dllexport) int dvipdfmxdaemon_shutdown (void);
+
+int
+dvipdfmxdaemon_init (int argc, char *argv[])
+{
+  const char *program_name = (argc > 0 && argv && argv[0]) ? argv[0] : "xdvipdfmxdaemon";
+
+  if (daemon_defaults.initialized)
+    return 0;
+
+  kpse_set_program_name(program_name, "dvipdfmx");
+  my_name = "xdvipdfmx";
+  opterr = 0;
+
+  paperinit();
+  system_default();
+
+  pdf_init_fontmaps();
+  read_config_file(DPX_CONFIG_FILE);
+
+  has_paper_option = 0;
+
+  kpse_init_prog("", font_dpi, NULL, NULL);
+  kpse_set_program_enabled(kpse_pk_format, true, kpse_src_texmf_cnf);
+  pdf_font_set_dpi(font_dpi);
+  dpx_delete_old_cache(image_cache_life);
+
+  save_daemon_defaults();
+  daemon_defaults.initialized = 1;
+  return 0;
+}
+
+int
+dvipdfmxdaemon_convert (int argc, char *argv[])
+{
+  if (!daemon_defaults.initialized) {
+    int code = dvipdfmxdaemon_init(1, argv);
+    if (code != 0)
+      return code;
+  }
+  return dvipdfmxdaemon_convert_document(argc, argv);
+}
+
+int
+dvipdfmxdaemon_shutdown (void)
+{
+  if (!daemon_defaults.initialized)
+    return 0;
+
+  cleanup_document_args();
+  if (filter_template) {
+    RELEASE(filter_template);
+    filter_template = NULL;
+  }
+  if (daemon_defaults.filter_template) {
+    RELEASE(daemon_defaults.filter_template);
+    daemon_defaults.filter_template = NULL;
+  }
+  pdf_close_fontmaps();
+  paperdone();
+  daemon_defaults.initialized = 0;
+  return 0;
+}
+#endif
 
 #if !defined(LIBDPX)
 /* Support to make DLL in W32TeX */
