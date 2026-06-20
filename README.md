@@ -67,6 +67,7 @@ scripts/
   build-cpp-daemon.sh             Build stemtex-renderer.dll.
   build-gui.sh                    Build StemTeX Renderer GUI.
   smoke-cpp-renderer.sh           Canonical C++ renderer smoke entrypoint.
+  stage-stemtex.sh                Stage bin/dll/include/share/texmf-dist.
   build-stemtex-installer.sh      Stage runtime/GUI/SDK and build installer.
   generate-gui-icon.py            Regenerate GUI PNG/ICO from SVG.
   refresh-static-runtime-cache.sh Rebuild profile warmup/cache data.
@@ -82,14 +83,16 @@ texlive-xetex/
 test/
   test_*.tex                      Historical/manual test documents.
 
-profiles/
+gui/profiles/
   <name>/
     preamble.tex                  Profile preamble selected by the host/GUI.
     warmup.tex                    Matching warmup source.
 ```
 
-Generated build/package directories such as `build/`, `dist/`, and
-`texlive-xetex/out/` are local artifacts and are not part of the source tree.
+Generated build/package directories such as `build/`, `staging/`, `dist/`,
+and `texlive-xetex/out/` are local artifacts and are not part of the source
+tree.  `build/` is for compiler output, `staging/` is for temporary assembly
+trees, and `dist/` is for distributable runtime/installer artifacts.
 
 ## Bundled Profiles
 
@@ -117,9 +120,10 @@ Build the daemon engine bundle:
 
 ```sh
 cd /path/to/stemtex
+./scripts/stage-stemtex.sh
 ./texlive-xetex/build-standalone-msvc.sh
 ./texlive-xetex/install-msvc-standalone-to-side-tree.sh
-./scripts/refresh-static-runtime-cache.sh ./dist/stemtex-texlive-daemon-static ./profiles/unicodemath_cjk
+./scripts/refresh-static-runtime-cache.sh ./dist/stemtex-texlive-daemon-static ./gui/profiles/unicodemath_cjk
 ```
 
 Build the renderer and GUI:
@@ -181,7 +185,7 @@ StemTeX/
     sdk/lib/
       stemtex-renderer.lib
     worker-template.tex
-    profiles/
+    gui/profiles/
       <name>/preamble.tex
       <name>/warmup.tex
     texmf-dist/

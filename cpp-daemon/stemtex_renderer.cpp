@@ -452,19 +452,6 @@ std::string installed_warmup_body(const RendererConfig &cfg) {
   return warmup;
 }
 
-fs::path default_runtime(const fs::path &repo_root) {
-  const char *env = std::getenv("STEMTEX_RUNTIME");
-  if (env && *env) return fs::absolute(env);
-  env = std::getenv("XETEX_RUNTIME");
-  if (env && *env) return fs::absolute(env);
-  if (fs::exists("C:\\StemTeX\\run-xelatexdaemon.bat")) return "C:\\StemTeX";
-  for (const char *candidate : {"stemtex", "runtime", "../stemtex"}) {
-    fs::path p = fs::absolute(repo_root / candidate);
-    if (fs::exists(p / "run-xelatexdaemon.bat")) return p;
-  }
-  return repo_root / "runtime";
-}
-
 std::wstring worker_command(const RendererConfig &cfg, const fs::path &out_dir) {
   fs::path exe = cfg.runtime_root / "bin" / "windows" / "xetexdaemon.exe";
   fs::path worker = out_dir / "worker-template.tex";
@@ -482,6 +469,30 @@ void materialize_worker_template(const RendererConfig &cfg, const fs::path &out_
   std::string text = read_text_file(cfg.worker_template);
   replace_all(text, "@@STEMTEX_PREAMBLE@@", slash_path(cfg.preamble_tex));
   write_text_file(out_dir / "worker-template.tex", text);
+}
+
+void write_fontconfig_config(const RendererConfig &cfg) {
+  fs::path conf_dir = cfg.runtime_root / "texmf-var" / "fonts" / "conf";
+  fs::path cache_dir = cfg.runtime_root / "texmf-var" / "fonts" / "cache";
+  fs::create_directories(conf_dir / "conf.d");
+  fs::create_directories(cache_dir);
+
+  std::ostringstream fonts;
+  fonts << "<?xml version=\"1.0\"?>\n"
+        << "<!DOCTYPE fontconfig SYSTEM \"fonts.dtd\">\n"
+        << "<fontconfig>\n"
+        << "  <dir>C:/Windows/fonts</dir>\n"
+        << "  <dir>" << slash_path(cfg.texmf_root / "texmf-dist" / "fonts" / "opentype") << "</dir>\n"
+        << "  <dir>" << slash_path(cfg.texmf_root / "texmf-dist" / "fonts" / "truetype") << "</dir>\n"
+        << "  <cachedir>" << slash_path(cache_dir) << "</cachedir>\n"
+        << "  <include ignore_missing=\"yes\">conf.d</include>\n"
+        << "  <config><rescan><int>30</int></rescan></config>\n"
+        << "</fontconfig>\n";
+  write_text_file(conf_dir / "fonts.conf", fonts.str());
+  write_text_file(conf_dir / "conf.d" / "51-local.conf",
+                  "<?xml version=\"1.0\"?>\n"
+                  "<!DOCTYPE fontconfig SYSTEM \"fonts.dtd\">\n"
+                  "<fontconfig></fontconfig>\n");
 }
 
 std::vector<wchar_t> worker_environment(const RendererConfig &cfg) {
@@ -830,9 +841,10 @@ RendererConfig config_from_api(const StemTeXConfig *config) {
   cfg.repo_root = config && config->repo_root_utf8 && *config->repo_root_utf8
                       ? fs::absolute(config->repo_root_utf8)
                       : fs::current_path();
-  cfg.runtime_root = config && config->runtime_root_utf8 && *config->runtime_root_utf8
-                         ? fs::absolute(config->runtime_root_utf8)
-                         : default_runtime(cfg.repo_root);
+  if (!config || !config->runtime_root_utf8 || !*config->runtime_root_utf8) {
+    throw ApiException(STEMTEX_ERROR_BAD_CONFIG, "runtime_root_utf8 is required");
+  }
+  cfg.runtime_root = fs::absolute(config->runtime_root_utf8);
   cfg.texmf_root = config && config->texmf_root_utf8 && *config->texmf_root_utf8
                        ? fs::absolute(config->texmf_root_utf8)
                        : cfg.runtime_root;
@@ -1499,6 +1511,7 @@ STEMTEX_API StemTeXRenderer *stemtex_renderer_create(const StemTeXConfig *config
                                                      char **error_utf8) {
   try {
     RendererConfig cfg = config_from_api(config);
+    write_fontconfig_config(cfg);
     validate_or_throw(cfg);
     fs::create_directories(cfg.state_root);
     fs::create_directories(cfg.renders_root);
@@ -1724,6 +1737,7 @@ STEMTEX_API int stemtex_refresh_font_cache(const char *runtime_root_utf8, const 
     cfg.preamble_tex = cfg.profile_root / "preamble.tex";
     cfg.request_timeout_ms = 90000;
     cfg.xdvipdfmx_timeout_ms = 90000;
+    write_fontconfig_config(cfg);
     if (!fs::exists(cfg.warmup_tex)) throw ApiException(STEMTEX_ERROR_BAD_CONFIG, "Warmup tex missing: " + cfg.warmup_tex.string());
     fs::path output_dir = cfg.profile_root;
     fs::create_directories(output_dir);

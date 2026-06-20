@@ -18,14 +18,11 @@ static long long now_ms() {
 }
 
 static fs::path default_runtime_root(const fs::path &repo_root) {
-  const char *env = std::getenv("STEMTEX_RUNTIME");
-  if (env && *env) return fs::path(env);
   fs::path side_tree = repo_root / "dist" / "stemtex-texlive-daemon-static";
-  if (fs::exists(side_tree / "bin" / "windows" / "xetexdaemon.exe") &&
-      fs::exists(side_tree / "texmf-var" / "cache-warmup" / "warmup.xdv")) {
+  if (fs::exists(side_tree / "bin" / "windows" / "xetexdaemon.exe")) {
     return side_tree;
   }
-  return fs::path("C:/StemTeX");
+  return fs::path();
 }
 
 struct SmokeOptions {
@@ -64,7 +61,7 @@ static SmokeOptions parse_options(int argc, char **argv) {
   bool legacy_positional = argc > 1 && argv[1] && std::string(argv[1]).rfind("--", 0) != 0;
   if (legacy_positional) {
     opts.repo_root = argc > 1 && argv[1] && *argv[1] ? fs::absolute(argv[1]) : fs::current_path();
-    opts.runtime_root = argc > 2 && argv[2] && *argv[2] ? fs::absolute(argv[2]) : fs::absolute(default_runtime_root(opts.repo_root));
+    opts.runtime_root = argc > 2 && argv[2] && *argv[2] ? fs::absolute(argv[2]) : default_runtime_root(opts.repo_root);
     opts.runs = argc > 3 ? std::atoi(argv[3]) : 1;
     opts.case_name = argc > 4 ? canonical_case(argv[4]) : "";
     opts.spare_workers = argc > 5 ? std::atoi(argv[5]) : 1;
@@ -114,7 +111,9 @@ static SmokeOptions parse_options(int argc, char **argv) {
   }
 
   opts.repo_root = fs::absolute(opts.repo_root);
-  if (opts.runtime_root.empty()) opts.runtime_root = fs::absolute(default_runtime_root(opts.repo_root));
+  if (opts.runtime_root.empty()) opts.runtime_root = default_runtime_root(opts.repo_root);
+  if (opts.runtime_root.empty()) throw std::runtime_error("runtime root is required; pass --runtime");
+  opts.runtime_root = fs::absolute(opts.runtime_root);
   if (opts.texmf_root.empty()) opts.texmf_root = opts.runtime_root;
   return opts;
 }

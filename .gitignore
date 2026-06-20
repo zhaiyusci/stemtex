@@ -1,6 +1,8 @@
 runtime/
 stemtex/
+build/
 dist/
+staging/
 out/
 .build-tools/
 ptx/

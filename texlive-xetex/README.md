@@ -84,10 +84,3 @@ The corresponding patch record is:
 ```text
 ../patches/texlive-generated-daemon-runtime-switches.patch
 ```
-
-## UCRT64 Route
-
-`build-standalone-ucrt64.sh` is kept for comparison and emergency diagnosis.
-It is not the preferred distribution route because it tends to pull in a larger
-MSYS2 runtime dependency set.  The StemTeX installer is based on the MSVC
-static-dependency build.

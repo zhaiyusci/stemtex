@@ -29,13 +29,14 @@ StemTeX\
     sdk\lib\
       stemtex-renderer.lib
     worker-template.tex
+    texmf-dist\
+    texmf-var\
+    refresh-font-cache.ps1
+  gui\
     profiles\
       <name>\
         preamble.tex
         warmup.tex
-    texmf-dist\
-    texmf-var\
-    refresh-font-cache.ps1
 ```
 
 Build sequence:
@@ -43,7 +44,7 @@ Build sequence:
 ```sh
 ./texlive-xetex/build-standalone-msvc.sh
 ./texlive-xetex/install-msvc-standalone-to-side-tree.sh
-./scripts/refresh-static-runtime-cache.sh ./dist/stemtex-texlive-daemon-static ./profiles/unicodemath_cjk
+./scripts/refresh-static-runtime-cache.sh ./dist/stemtex-texlive-daemon-static ./gui/profiles/unicodemath_cjk
 ./scripts/build-cpp-daemon.sh
 ./scripts/sync-renderer-sdk-to-runtime.sh
 ./scripts/build-gui.sh

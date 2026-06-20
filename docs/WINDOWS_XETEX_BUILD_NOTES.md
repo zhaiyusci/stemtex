@@ -53,7 +53,7 @@ Install the built binaries into the static StemTeX side tree:
 Then refresh the runtime warmup/cache data:
 
 ```sh
-./scripts/refresh-static-runtime-cache.sh ./dist/stemtex-texlive-daemon-static ./profiles/unicodemath_cjk
+./scripts/refresh-static-runtime-cache.sh ./dist/stemtex-texlive-daemon-static ./gui/profiles/unicodemath_cjk
 ```
 
 ## Source Inputs
@@ -139,7 +139,7 @@ dist/stemtex-texlive-daemon-static/
     xetexdaemon.dll
     xdvipdfmxdaemon.exe
     dvipdfmxdaemon.dll
-  profiles/
+  gui/profiles/
   texmf-dist/
   texmf-var/
 ```
@@ -156,8 +156,8 @@ texmf-var/web2c/xetex/xelatexdaemon.fmt
 Preambles and matching warmup files live in profile directories:
 
 ```text
-profiles/<name>/preamble.tex
-profiles/<name>/warmup.tex
+gui/profiles/<name>/preamble.tex
+gui/profiles/<name>/warmup.tex
 ```
 
 The renderer requires the host or GUI to pass a profile directory explicitly.

@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT_WIN="$(cygpath -w "$ROOT")"
 RUNTIME_ROOT="${1:-$(cygpath -w "$ROOT/dist/stemtex-texlive-daemon-static")}"
-PROFILE_ROOT="${STEMTEX_PROFILE:-$(cygpath -w "$ROOT/profiles/unicodemath_cjk")}"
+PROFILE_ROOT="${STEMTEX_PROFILE:-$(cygpath -w "$ROOT/gui/profiles/unicodemath_cjk")}"
 RUNS="${RUNS:-5}"
 TIMEOUT_S="${TIMEOUT:-90}"
 STAMP="$(date +%Y%m%d-%H%M%S)"

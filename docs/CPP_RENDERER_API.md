@@ -42,11 +42,10 @@ of hot spare workers:
 On create, it:
 
 1. Reads the configured StemTeX runtime.
-2. Loads XDV font definitions from the installation-time warmup output under
-   `texmf-var/cache-warmup`.
-3. Falls back to compiling the selected profile's `warmup.tex` only if that
-   profile's cached XDV is missing or unreadable. The generated XDV is saved as
-   `profile_root\warmup.xdv` for later starts.
+2. Loads XDV font definitions for the selected profile. Distributions normally
+   ship `warmup.tex`, not `warmup.xdv`; if the XDV is missing or unreadable the
+   renderer compiles `warmup.tex` and saves `profile_root\warmup.xdv` for that
+   local installation.
 4. Starts and primes a primary live worker.
 5. Starts building spare live workers in the background.
 
@@ -207,17 +206,17 @@ int stemtex_refresh_font_cache(const char *runtime_root_utf8, const char *profil
 
 `stemtex_renderer_profile_info_json` parses one profile directory. Host
 applications may decide where to look for profile candidates, such as
-`repo_root\profiles` or `runtime_root\profiles`; the renderer library owns the
+`repo_root\gui\profiles` or `gui_dir\profiles`; the renderer library owns the
 rules for what is inside a valid profile. The returned string is JSON:
 
 ```json
 {
   "name": "unicodemath_cjk",
-  "path": "C:\\StemTeX\\runtime\\profiles\\unicodemath_cjk",
+  "path": "C:\\StemTeX\\gui\\profiles\\unicodemath_cjk",
   "valid": true,
   "hasPreamble": true,
   "hasWarmup": true,
-  "hasWarmupXdv": true
+  "hasWarmupXdv": false
 }
 ```
 
@@ -274,7 +273,7 @@ int main() {
   cfg.repo_root_utf8 = "C:\\path\\to\\stemtex";
   cfg.runtime_root_utf8 = "C:\\StemTeX\\runtime";
   cfg.texmf_root_utf8 = "C:\\texlive\\2026";
-  cfg.profile_root_utf8 = "C:\\StemTeX\\runtime\\profiles\\unicodemath_cjk";
+  cfg.profile_root_utf8 = "C:\\StemTeX\\gui\\profiles\\unicodemath_cjk";
 
   char *error = nullptr;
   StemTeXErrorCode error_code = STEMTEX_OK;

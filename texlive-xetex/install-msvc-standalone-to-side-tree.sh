@@ -5,7 +5,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$root/.." && pwd)"
 standalone="${STANDALONE_DIR:-$root/out/standalone-msvc}"
 tree="${STEMTEX_SIDE_TREE:-$repo/dist/stemtex-texlive-daemon-static}"
-texlive_root="${TEXLIVE_ROOT:-/c/texlive/2026}"
+staged_texmf_dist="${STAGED_TEXMF_DIST:-$repo/staging/runtime/texmf-dist}"
 bin="$tree/bin/windows"
 
 die() {
@@ -22,7 +22,14 @@ need_dir() {
 }
 
 need_dir "$standalone"
-need_dir "$tree"
+mkdir -p "$tree"
+if [[ -d "$staged_texmf_dist" ]]; then
+  rm -rf "$tree/texmf-dist"
+  mkdir -p "$tree"
+  cp -a "$staged_texmf_dist" "$tree/"
+elif [[ ! -d "$tree/texmf-dist" ]]; then
+  die "missing staged texmf-dist: $staged_texmf_dist (run scripts/stage-stemtex.sh first)"
+fi
 mkdir -p "$bin"
 
 for name in xetexdaemon.dll xetexdaemon.exe dvipdfmxdaemon.dll xdvipdfmxdaemon.exe; do
@@ -40,16 +47,7 @@ cp -p "$icu_data" "$bin/icu-data/icudt78l.dat"
 
 need_file "$tree/texmf-dist/web2c/texmf.cnf"
 need_file "$tree/texmf-dist/dvipdfmx/dvipdfmx.cfg"
-
-preview_src="$texlive_root/texmf-dist/tex/latex/preview"
-preview_dst="$tree/texmf-dist/tex/latex/preview"
-if [[ -d "$preview_src" ]]; then
-  mkdir -p "$(dirname "$preview_dst")"
-  rm -rf "$preview_dst"
-  cp -a "$preview_src" "$preview_dst"
-elif [[ ! -f "$preview_dst/preview.sty" ]]; then
-  die "preview package missing; set TEXLIVE_ROOT to a TeX Live tree containing texmf-dist/tex/latex/preview"
-fi
+need_file "$tree/texmf-dist/tex/latex/preview/preview.sty"
 
 if [[ "${PRUNE_OLD_RUNTIME_DLLS:-0}" == "1" ]]; then
   rm -f \

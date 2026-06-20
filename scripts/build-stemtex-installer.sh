@@ -13,25 +13,16 @@ if [[ -z "$app_version" ]]; then
 fi
 stage_root="${STAGE_ROOT:-$repo_root/dist/stemtex-installer/StemTeX}"
 output_dir="${OUTPUT_DIR:-$repo_root/dist/installer}"
-runtime_root="${RUNTIME_ROOT:-$repo_root/dist/stemtex-texlive-daemon-static}"
 gui_root="${GUI_ROOT:-$repo_root/build/gui/Release}"
 cpp_daemon_root="${CPP_DAEMON_ROOT:-$repo_root/build/cpp-daemon/Release}"
 iscc="${ISCC:-}"
 
-if [[ ! -d "$runtime_root" ]]; then
-  echo "Runtime root not found: $runtime_root" >&2
-  exit 1
-fi
 if [[ ! -f "$gui_root/stemtex-renderer-gui.exe" ]]; then
   echo "Renderer GUI build not found: $gui_root/stemtex-renderer-gui.exe" >&2
   exit 1
 fi
 if [[ ! -f "$cpp_daemon_root/stemtex-renderer.dll" || ! -f "$cpp_daemon_root/stemtex-renderer.lib" ]]; then
   echo "C++ renderer build not found under: $cpp_daemon_root" >&2
-  exit 1
-fi
-if [[ ! -f "$runtime_root/texmf-dist/tex/latex/preview/preview.sty" ]]; then
-  echo "Runtime is missing preview package: $runtime_root/texmf-dist/tex/latex/preview/preview.sty" >&2
   exit 1
 fi
 
@@ -56,25 +47,9 @@ if [[ -z "$iscc" || ! -x "$iscc" ]]; then
   exit 1
 fi
 
-rm -rf "$stage_root"
-mkdir -p "$stage_root/runtime" "$stage_root/gui" "$output_dir"
-
-cp -a "$runtime_root/." "$stage_root/runtime/"
-cp -a "$gui_root/." "$stage_root/gui/"
-rm -f "$stage_root/gui/stemtex-renderer.dll" "$stage_root/gui/stemtex-renderer.lib" "$stage_root/gui/stemtex-renderer.exp"
-cp -f "$repo_root/cpp-daemon/worker-template.tex" "$stage_root/runtime/worker-template.tex"
-rm -rf "$stage_root/runtime/profiles"
-mkdir -p "$stage_root/runtime/profiles"
-cp -a "$repo_root/profiles/." "$stage_root/runtime/profiles/"
-find "$stage_root/runtime/profiles" -type f \( -name '*.aux' -o -name '*.log' -o -name '*.pdf' -o -name '*.synctex.gz' \) -delete
-mkdir -p "$stage_root/runtime/sdk/include" "$stage_root/runtime/sdk/lib" "$stage_root/runtime/bin/sdk"
-cp -f "$cpp_daemon_root/stemtex-renderer.dll" "$stage_root/runtime/bin/sdk/stemtex-renderer.dll"
-cp -f "$cpp_daemon_root/stemtex-renderer.lib" "$stage_root/runtime/sdk/lib/stemtex-renderer.lib"
-cp -f "$repo_root/cpp-daemon/stemtex_renderer.h" "$stage_root/runtime/sdk/include/stemtex_renderer.h"
-
-rm -rf "$stage_root/runtime/texmf-var/fonts/cache"/*
-rm -rf "$stage_root/runtime/texmf-var/cache-warmup"
-mkdir -p "$stage_root/runtime/texmf-var/fonts/cache"
+mkdir -p "$output_dir"
+STAGE_ROOT="$stage_root" GUI_ROOT="$gui_root" CPP_DAEMON_ROOT="$cpp_daemon_root" \
+  "$repo_root/scripts/stage-stemtex.sh" >/tmp/stemtex-installer-stage.log
 
 MSYS2_ARG_CONV_EXCL='*' "$iscc" \
   "/DSourceDir=$(cygpath -w "$stage_root")" \

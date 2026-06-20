@@ -57,7 +57,7 @@ namespace {
 QString defaultRepoRoot() {
   QDir dir(QCoreApplication::applicationDirPath());
   for (int i = 0; i < 8; ++i) {
-    if (QFileInfo::exists(dir.filePath("cpp-daemon/worker-template.tex")) && QFileInfo::exists(dir.filePath("profiles"))) {
+    if (QFileInfo::exists(dir.filePath("cpp-daemon/worker-template.tex")) && QFileInfo::exists(dir.filePath("gui/profiles"))) {
       return dir.absolutePath();
     }
     if (!dir.cdUp()) break;
@@ -70,26 +70,14 @@ QString defaultRuntimeRoot() {
   if (!env.isEmpty()) return QDir::cleanPath(QDir(env).absolutePath());
   QDir appDir(QCoreApplication::applicationDirPath());
   QString installedRuntime = appDir.filePath("../runtime");
-  if (QFileInfo::exists(QDir(installedRuntime).filePath("bin/windows/xetexdaemon.exe")) &&
-      QFileInfo::exists(QDir(installedRuntime).filePath("texmf-var/cache-warmup/warmup.xdv"))) {
+  if (QFileInfo::exists(QDir(installedRuntime).filePath("bin/windows/xetexdaemon.exe"))) {
     return QDir::cleanPath(installedRuntime);
   }
   QString portableRuntime = appDir.filePath("runtime");
-  if (QFileInfo::exists(QDir(portableRuntime).filePath("bin/windows/xetexdaemon.exe")) &&
-      QFileInfo::exists(QDir(portableRuntime).filePath("texmf-var/cache-warmup/warmup.xdv"))) {
+  if (QFileInfo::exists(QDir(portableRuntime).filePath("bin/windows/xetexdaemon.exe"))) {
     return QDir::cleanPath(portableRuntime);
   }
-  QDir repo(defaultRepoRoot());
-  QString sideTree = repo.filePath("dist/stemtex-texlive-daemon-static");
-  if (QFileInfo::exists(QDir(sideTree).filePath("bin/windows/xetexdaemon.exe")) &&
-      QFileInfo::exists(QDir(sideTree).filePath("texmf-var/cache-warmup/warmup.xdv"))) {
-    return QDir::cleanPath(sideTree);
-  }
-  QString defaultInstallRuntime = "C:/StemTeX/runtime";
-  if (QFileInfo::exists(QDir(defaultInstallRuntime).filePath("bin/windows/xetexdaemon.exe"))) {
-    return defaultInstallRuntime;
-  }
-  return "C:/StemTeX";
+  return QString();
 }
 
 QString normalizeRuntimeRoot(const QString &path) {
@@ -144,10 +132,11 @@ bool rendererProfileInfo(const QString &profileRoot, ProfileEntry *entry, QStrin
   return true;
 }
 
-QVector<ProfileEntry> profileRoots(const QString &repoRoot, const QString &runtimeRoot, QString *errorText) {
+QVector<ProfileEntry> profileRoots(const QString &repoRoot, QString *errorText) {
   QVector<ProfileEntry> profiles;
   QStringList seen;
-  for (const QString &base : {QDir(repoRoot).filePath("profiles"), QDir(runtimeRoot).filePath("profiles")}) {
+  QDir appDir(QCoreApplication::applicationDirPath());
+  for (const QString &base : {appDir.filePath("profiles"), QDir(repoRoot).filePath("gui/profiles")}) {
     QDir dir(base);
     if (!dir.exists()) continue;
     for (const QFileInfo &candidate : dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
@@ -165,7 +154,7 @@ QString defaultSnippet() {
   return QString::fromUtf8(
       "这是一段 StemTeX Renderer GUI 里的中文、数学和化学预览：$E=mc^2$，以及 \\textcolor{blue}{蓝色文字}。\n\n"
       "\\[\n"
-      "  \\int_0^1 x^2\\,dx = \\frac{1}{3},\\quad \\ip{\\psi}{\\phi}\n"
+      "  \\int_0^1 x^2\\,dx = \\frac{1}{3},\\quad \\langle\\psi,\\phi\\rangle\n"
       "\\]\n\n"
       "\\ce{2H2 + O2 -> 2H2O}\n");
 }
@@ -542,7 +531,7 @@ class MainWindow : public QMainWindow {
     QString profileError;
     bool oldSignals = profileCombo_->blockSignals(true);
     profileCombo_->clear();
-    for (const ProfileEntry &profile : profileRoots(repo_root_, runtime_root_, &profileError)) {
+    for (const ProfileEntry &profile : profileRoots(repo_root_, &profileError)) {
       profileCombo_->addItem(profile.name, profile.path);
     }
     profileCombo_->blockSignals(oldSignals);
@@ -792,11 +781,11 @@ int main(int argc, char **argv) {
   args.removeAll("--smoke");
   QString repoRoot = args.size() > 1 ? args.at(1) : defaultRepoRoot();
   QString runtimeRoot = args.size() > 2 ? args.at(2) : defaultRuntimeRoot();
+  configureRendererDllSearch(runtimeRoot);
   QString profileError;
-  QVector<ProfileEntry> profiles = profileRoots(repoRoot, runtimeRoot, &profileError);
+  QVector<ProfileEntry> profiles = profileRoots(repoRoot, &profileError);
   QString profileRoot = args.size() > 3 ? args.at(3) : (profiles.isEmpty() ? QString() : profiles.first().path);
   QString texmfRoot = args.size() > 4 ? args.at(4) : defaultTexmfRoot(runtimeRoot);
-  configureRendererDllSearch(runtimeRoot);
   if (smoke) return runSmoke(repoRoot, runtimeRoot, profileRoot, texmfRoot);
   MainWindow w(repoRoot, runtimeRoot);
   w.show();
