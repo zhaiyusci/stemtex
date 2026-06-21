@@ -309,6 +309,7 @@ stage_binaries_and_gui() {
 
   cp -p "$repo_root/cpp-daemon/worker-template.tex" "$stage_root/runtime/worker-template.tex"
   cp -p "$repo_root/VERSION" "$stage_root/runtime/VERSION"
+  cp -p "$repo_root/gui/assets/stemtex-renderer-gui.ico" "$stage_root/runtime/StemTeX.ico"
   write_run_script
   write_refresh_profile_cache_script
   write_fontconfig

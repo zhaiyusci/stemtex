@@ -17,6 +17,7 @@ AppVersion={#AppVersion}
 AppPublisher=StemTeX
 DefaultDirName=C:\StemTeX
 DisableDirPage=no
+SetupIconFile={#SourceDir}\runtime\StemTeX.ico
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
@@ -26,6 +27,7 @@ Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName=StemTeX
+UninstallDisplayIcon={app}\runtime\StemTeX.ico
 
 [Types]
 Name: "full"; Description: "Full installation"
@@ -41,6 +43,7 @@ Name: "texmf"; Description: "Bundled TeX macro and font tree"; Types: full custo
 Source: "{#SourceDir}\runtime\bin\*"; DestDir: "{app}\runtime\bin"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#SourceDir}\runtime\sdk\*"; DestDir: "{app}\runtime\sdk"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#SourceDir}\runtime\VERSION"; DestDir: "{app}\runtime"; Flags: ignoreversion
+Source: "{#SourceDir}\runtime\StemTeX.ico"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#SourceDir}\runtime\worker-template.tex"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#SourceDir}\runtime\run-xelatexdaemon.bat"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#SourceDir}\runtime\refresh-profile-cache.bat"; DestDir: "{app}\runtime"; Flags: ignoreversion
