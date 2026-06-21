@@ -6,6 +6,7 @@
 #include <QColor>
 #include <QDesktopServices>
 #include <QDir>
+#include <QDoubleSpinBox>
 #include <QElapsedTimer>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -216,16 +217,21 @@ QRect expandRectRightToWidth(QRect rect, int minWidth, const QRect &limit) {
   return rect.intersected(limit);
 }
 
-QImage renderCroppedPdfPreview(const QString &pdfPath, int minWidthPt) {
+struct CroppedPreview {
+  QImage image;
+  QSize displaySize;
+};
+
+CroppedPreview renderCroppedPdfPreview(const QString &pdfPath, int minWidthPt, int dpi, double paddingPt) {
   QPdfDocument source;
   QPdfDocument::Error error = source.load(pdfPath);
-  if (error != QPdfDocument::Error::None || source.pageCount() <= 0) return QImage();
+  if (error != QPdfDocument::Error::None || source.pageCount() <= 0) return {};
 
-  constexpr double pixelsPerPoint = 3.0;
+  double pixelsPerPoint = qBound(1.0, dpi / 72.0, 16.0);
   QSizeF points = source.pagePointSize(0);
   QSize imageSize(qMax(1, int(points.width() * pixelsPerPoint)), qMax(1, int(points.height() * pixelsPerPoint)));
   QImage page = source.render(0, imageSize);
-  if (page.isNull()) return QImage();
+  if (page.isNull()) return {};
 
   QImage rgba = page.convertToFormat(QImage::Format_ARGB32);
   QRect bounds;
@@ -240,18 +246,20 @@ QImage renderCroppedPdfPreview(const QString &pdfPath, int minWidthPt) {
       }
     }
   }
-  if (bounds.isNull()) return rgba;
+  if (bounds.isNull()) return {rgba, rgba.size()};
 
-  int pad = 24;
+  int pad = qMax(0, qRound(paddingPt * pixelsPerPoint));
   bounds = expandRectRightToWidth(bounds, qMax(1, int(minWidthPt * pixelsPerPoint)), rgba.rect());
-  bounds = bounds.adjusted(-pad, -pad, pad, pad).intersected(rgba.rect());
   QImage cropped = rgba.copy(bounds);
-  QImage white(cropped.size(), QImage::Format_RGB32);
+  QImage white(cropped.width() + pad * 2, cropped.height() + pad * 2, QImage::Format_RGB32);
   white.fill(Qt::white);
   QPainter painter(&white);
-  painter.drawImage(0, 0, cropped);
+  painter.drawImage(pad, pad, cropped);
   painter.end();
-  return white;
+  constexpr double screenPixelsPerPoint = 96.0 / 72.0;
+  QSize displaySize(qMax(1, int(white.width() / pixelsPerPoint * screenPixelsPerPoint)),
+                    qMax(1, int(white.height() / pixelsPerPoint * screenPixelsPerPoint)));
+  return {white, displaySize};
 }
 
 int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString &profileRoot, const QString &texmfRoot) {
@@ -299,10 +307,10 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
   QPdfDocument::Error pdfError = pdf.load(pdfPath);
   int pages = pdf.pageCount();
   QSizeF pageSize = pages > 0 ? pdf.pagePointSize(0) : QSizeF();
-  QImage cropped = renderCroppedPdfPreview(pdfPath, 360);
+  CroppedPreview cropped = renderCroppedPdfPreview(pdfPath, 360, 300, 8.0);
   printf("pdf=%s\nsummary=%s\nqtPdfError=%d pages=%d pagePoints=%.2fx%.2f croppedPixels=%dx%d\n",
          pdfPath.toUtf8().constData(), summary.toUtf8().constData(),
-         (int)pdfError, pages, pageSize.width(), pageSize.height(), cropped.width(), cropped.height());
+         (int)pdfError, pages, pageSize.width(), pageSize.height(), cropped.image.width(), cropped.image.height());
   if (!summary.contains("\"xdvipdfmxMode\":\"daemon-dll\"") && !summary.contains("\"xdvipdfmxMode\":\"dll\"")) {
     fprintf(stderr, "expected xdvipdfmxMode=daemon-dll, got summary=%s\n", summary.toUtf8().constData());
     stemtex_renderer_free_result(&result);
@@ -330,8 +338,12 @@ class MainWindow : public QMainWindow {
     rootLayout->setContentsMargins(10, 10, 10, 10);
     rootLayout->setSpacing(8);
 
-    auto *toolbar = new QHBoxLayout();
-    toolbar->setSpacing(8);
+    auto *toolbar = new QVBoxLayout();
+    toolbar->setSpacing(6);
+    auto *layoutRow = new QHBoxLayout();
+    layoutRow->setSpacing(8);
+    auto *runtimeRow = new QHBoxLayout();
+    runtimeRow->setSpacing(8);
     auto *widthLabel = new QLabel("版心宽度", central);
     widthSlider_ = new QSlider(Qt::Horizontal, central);
     widthSlider_->setRange(30, 450);
@@ -343,6 +355,17 @@ class MainWindow : public QMainWindow {
     widthSpin_->setSingleStep(10);
     widthSpin_->setSuffix(" pt");
     widthSpin_->setValue(360);
+    dpiSpin_ = new QSpinBox(central);
+    dpiSpin_->setRange(72, 9600);
+    dpiSpin_->setSingleStep(24);
+    dpiSpin_->setSuffix(" dpi");
+    dpiSpin_->setValue(300);
+    paddingSpin_ = new QDoubleSpinBox(central);
+    paddingSpin_->setRange(0.0, 24.0);
+    paddingSpin_->setSingleStep(0.5);
+    paddingSpin_->setDecimals(1);
+    paddingSpin_->setSuffix(" pt");
+    paddingSpin_->setValue(8.0);
     texmfLabel_ = new QLabel(QFileInfo(texmf_root_).fileName(), central);
     texmfLabel_->setToolTip(texmf_root_);
     texmfButton_ = new QPushButton("TeXLive...", central);
@@ -358,20 +381,28 @@ class MainWindow : public QMainWindow {
     saveImageButton_->setEnabled(false);
     openButton_ = new QPushButton("打开 PDF", central);
     openButton_->setEnabled(false);
-    toolbar->addWidget(widthLabel);
-    toolbar->addWidget(widthSlider_, 1);
-    toolbar->addWidget(widthSpin_);
-    toolbar->addWidget(new QLabel("TeXLive", central));
-    toolbar->addWidget(texmfLabel_);
-    toolbar->addWidget(texmfButton_);
-    toolbar->addWidget(new QLabel("Profile", central));
-    toolbar->addWidget(profileCombo_);
-    toolbar->addWidget(new QLabel("输入编码", central));
-    toolbar->addWidget(encodingCombo_);
-    toolbar->addWidget(renderButton_);
-    toolbar->addWidget(copyImageButton_);
-    toolbar->addWidget(saveImageButton_);
-    toolbar->addWidget(openButton_);
+    layoutRow->addWidget(widthLabel);
+    layoutRow->addWidget(widthSlider_, 1);
+    layoutRow->addWidget(widthSpin_);
+    layoutRow->addWidget(new QLabel("DPI", central));
+    layoutRow->addWidget(dpiSpin_);
+    layoutRow->addWidget(new QLabel("裁切余量", central));
+    layoutRow->addWidget(paddingSpin_);
+    toolbar->addLayout(layoutRow);
+
+    runtimeRow->addWidget(new QLabel("TeXLive", central));
+    runtimeRow->addWidget(texmfLabel_);
+    runtimeRow->addWidget(texmfButton_);
+    runtimeRow->addWidget(new QLabel("Profile", central));
+    runtimeRow->addWidget(profileCombo_);
+    runtimeRow->addWidget(new QLabel("输入编码", central));
+    runtimeRow->addWidget(encodingCombo_);
+    runtimeRow->addStretch(1);
+    runtimeRow->addWidget(renderButton_);
+    runtimeRow->addWidget(copyImageButton_);
+    runtimeRow->addWidget(saveImageButton_);
+    runtimeRow->addWidget(openButton_);
+    toolbar->addLayout(runtimeRow);
     rootLayout->addLayout(toolbar);
 
     auto *splitter = new QSplitter(Qt::Horizontal, central);
@@ -432,8 +463,10 @@ class MainWindow : public QMainWindow {
     connect(widthSpin_, &QSpinBox::valueChanged, widthSlider_, &QSlider::setValue);
     connect(widthSpin_, &QSpinBox::valueChanged, this, [this](int value) {
       updatePreviewMinimumWidth(value);
-      updatePreviewPixmap();
+      rerenderLastPdfPreview();
     });
+    connect(dpiSpin_, &QSpinBox::valueChanged, this, [this](int) { rerenderLastPdfPreview(); });
+    connect(paddingSpin_, &QDoubleSpinBox::valueChanged, this, [this](double) { rerenderLastPdfPreview(); });
     connect(texmfButton_, &QPushButton::clicked, this, [this]() { chooseTexmfRoot(); });
     connect(profileCombo_, &QComboBox::currentIndexChanged, this, [this](int) { switchProfile(); });
     connect(renderButton_, &QPushButton::clicked, this, [this]() { renderSnippet(); });
@@ -669,9 +702,9 @@ class MainWindow : public QMainWindow {
         self->openButton_->setEnabled(true);
         self->showCroppedPreview(pdfPath, self->widthSpin_->value());
         self->setPreviewImageReady(!self->lastPreview_.isNull());
-        self->details_->setPlainText(
-            QString("cropped preview: %1 x %2 px\n").arg(self->lastPreview_.width()).arg(self->lastPreview_.height()) +
-            QString("renderer job: %1\n").arg(rendererJobId) + oneLineJsonMetric(summary) + "\n\n" + summary);
+        self->lastSummaryText_ = QString("renderer job: %1\n").arg(rendererJobId) + oneLineJsonMetric(summary) +
+                                 "\n\n" + summary;
+        self->updateDetailsText();
       }, Qt::QueuedConnection);
     };
     std::thread([this, text, width, callback, context, uiRequestId]() {
@@ -697,13 +730,24 @@ class MainWindow : public QMainWindow {
   }
 
   void showCroppedPreview(const QString &pdfPath, int widthPt) {
-    QImage cropped = renderCroppedPdfPreview(pdfPath, widthPt);
-    if (cropped.isNull()) {
+    CroppedPreview cropped = renderCroppedPdfPreview(pdfPath, widthPt, dpiSpin_->value(), paddingSpin_->value());
+    if (cropped.image.isNull()) {
       croppedPreview_->setText("PDF preview failed");
       return;
     }
-    lastPreview_ = cropped;
+    lastPreview_ = cropped.image;
+    lastPreviewDisplaySize_ = cropped.displaySize;
     updatePreviewPixmap();
+  }
+
+  void rerenderLastPdfPreview() {
+    if (lastPdf_.isEmpty()) {
+      updatePreviewPixmap();
+      return;
+    }
+    showCroppedPreview(lastPdf_, widthSpin_->value());
+    setPreviewImageReady(!lastPreview_.isNull());
+    updateDetailsText();
   }
 
   void copyPreviewImage() {
@@ -727,8 +771,30 @@ class MainWindow : public QMainWindow {
   void updatePreviewPixmap() {
     if (lastPreview_.isNull()) return;
     QSize target(qMax(1, croppedPreview_->width() - 24), qMax(1, croppedPreview_->height() - 24));
-    croppedPreview_->setPixmap(QPixmap::fromImage(lastPreview_).scaled(target, Qt::KeepAspectRatio,
-                                                                       Qt::SmoothTransformation));
+    QSize logicalSize = lastPreviewDisplaySize_.isValid() ? lastPreviewDisplaySize_ : lastPreview_.size();
+    QSize displaySize = logicalSize;
+    if (displaySize.width() > target.width() || displaySize.height() > target.height()) {
+      displaySize.scale(target, Qt::KeepAspectRatio);
+    }
+    double dpr = croppedPreview_->devicePixelRatioF();
+    QSize physicalSize(qMax(1, qRound(displaySize.width() * dpr)), qMax(1, qRound(displaySize.height() * dpr)));
+    QImage displayImage = lastPreview_.scaled(physicalSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    QPixmap pixmap = QPixmap::fromImage(displayImage);
+    pixmap.setDevicePixelRatio(dpr);
+    croppedPreview_->setPixmap(pixmap);
+  }
+
+  void updateDetailsText() {
+    if (!details_ || lastPreview_.isNull()) return;
+    details_->setPlainText(
+        QString("cropped preview: %1 x %2 px, displayed %3 x %4 px, %5 dpi, %6 pt padding\n")
+            .arg(lastPreview_.width())
+            .arg(lastPreview_.height())
+            .arg(lastPreviewDisplaySize_.width())
+            .arg(lastPreviewDisplaySize_.height())
+            .arg(dpiSpin_->value())
+            .arg(paddingSpin_->value(), 0, 'f', 1) +
+        lastSummaryText_);
   }
 
   void updatePreviewMinimumWidth(int widthPt) {
@@ -751,6 +817,8 @@ class MainWindow : public QMainWindow {
   QsciScintilla *editor_ = nullptr;
   QSlider *widthSlider_ = nullptr;
   QSpinBox *widthSpin_ = nullptr;
+  QSpinBox *dpiSpin_ = nullptr;
+  QDoubleSpinBox *paddingSpin_ = nullptr;
   QLabel *texmfLabel_ = nullptr;
   QPushButton *texmfButton_ = nullptr;
   QComboBox *profileCombo_ = nullptr;
@@ -761,6 +829,8 @@ class MainWindow : public QMainWindow {
   QPushButton *openButton_ = nullptr;
   QLabel *croppedPreview_ = nullptr;
   QImage lastPreview_;
+  QSize lastPreviewDisplaySize_;
+  QString lastSummaryText_;
   QTextBrowser *details_ = nullptr;
   QLabel *engineStatusLabel_ = nullptr;
   QTimer *enginePollTimer_ = nullptr;
