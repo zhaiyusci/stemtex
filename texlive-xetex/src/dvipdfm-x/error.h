@@ -32,6 +32,9 @@ extern void error_cleanup (void);
 
 #define FATAL_ERROR -1
 #define NO_ERROR 0
+#define RECOVERABLE_ERROR 2
+
+#define DPX_RECOVERABLE_MISSING_FONT 0x01
 
 #include <assert.h>
 #include <setjmp.h>
@@ -47,6 +50,10 @@ extern void MESG  (const char *fmt, ...);
 extern void WARN  (const char *fmt, ...);
 extern void DPX_TRACE (const char *fmt, ...);
 extern void dpx_exit (int code);
+extern void dpx_clear_recoverable_issues (void);
+extern void dpx_record_recoverable_issue (int flag, const char *fmt, ...);
+extern int dpx_recoverable_issue_flags (void);
+extern const char *dpx_recoverable_issue_message (void);
 
 extern jmp_buf dpx_exit_env;
 extern int     dpx_exit_active;

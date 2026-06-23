@@ -1320,14 +1320,21 @@ dvipdfmxdaemon_convert_document (int argc, char *argv[])
   MESG("\n");
   cleanup_document_args();
   restore_daemon_defaults();
+  if (dpx_recoverable_issue_flags()) {
+    DPX_TRACE("convert_document: success with recoverable issues flags=%d message=%s",
+              dpx_recoverable_issue_flags(), dpx_recoverable_issue_message());
+    return RECOVERABLE_ERROR;
+  }
   DPX_TRACE("convert_document: success");
-  return 0;
+  return NO_ERROR;
 }
 
 #if defined(WIN32) && !defined(MIKTEX)
 extern __declspec(dllexport) int dvipdfmxdaemon_init (int argc, char *argv[]);
 extern __declspec(dllexport) int dvipdfmxdaemon_convert (int argc, char *argv[]);
 extern __declspec(dllexport) int dvipdfmxdaemon_shutdown (void);
+extern __declspec(dllexport) int dvipdfmxdaemon_last_issue_flags (void);
+extern __declspec(dllexport) const char *dvipdfmxdaemon_last_issue_message (void);
 
 int
 dvipdfmxdaemon_init (int argc, char *argv[])
@@ -1368,6 +1375,7 @@ dvipdfmxdaemon_convert (int argc, char *argv[])
 
   dpx_exit_active = 1;
   dpx_exit_code = 0;
+  dpx_clear_recoverable_issues();
   if (setjmp(dpx_exit_env)) {
     dpx_exit_active = 0;
     cleanup_document_args();
@@ -1390,6 +1398,18 @@ dvipdfmxdaemon_convert (int argc, char *argv[])
   dpx_exit_active = 0;
   DPX_TRACE("daemon_convert: return code=%d", code);
   return code;
+}
+
+int
+dvipdfmxdaemon_last_issue_flags (void)
+{
+  return dpx_recoverable_issue_flags();
+}
+
+const char *
+dvipdfmxdaemon_last_issue_message (void)
+{
+  return dpx_recoverable_issue_message();
 }
 
 int

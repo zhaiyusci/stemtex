@@ -442,6 +442,13 @@ class MainWindow : public QMainWindow {
     croppedPreview_->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
     croppedPreview_->setMinimumSize(240, 240);
     croppedPreview_->setStyleSheet("QLabel { background: #808080; border: 1px solid #606060; padding: 12px; }");
+    previewWarning_ = new QLabel("!", croppedPreview_);
+    previewWarning_->setAlignment(Qt::AlignCenter);
+    previewWarning_->setFixedSize(28, 28);
+    previewWarning_->setStyleSheet(
+        "QLabel { background: #b3261e; color: white; border: 1px solid #7f1d1d; border-radius: 14px; "
+        "font-weight: 700; padding: 0; }");
+    previewWarning_->hide();
     details_ = new QTextBrowser(previewShell);
     details_->setMaximumHeight(110);
     previewLayout->addWidget(croppedPreview_, 1);
@@ -606,8 +613,12 @@ class MainWindow : public QMainWindow {
     lastPreview_ = QImage();
     lastPreviewDisplaySize_ = QSize();
     lastSummaryText_.clear();
+    lastOutcomeMessage_.clear();
+    lastOutcomeCode_ = STEMTEX_RENDER_OUTCOME_OK;
+    lastIssueFlags_ = 0;
     croppedPreview_->clear();
     croppedPreview_->setText(QString());
+    setPreviewWarning(STEMTEX_RENDER_OUTCOME_OK, 0, QString());
     details_->clear();
     openButton_->setEnabled(false);
     setPreviewImageReady(false);
@@ -746,11 +757,17 @@ class MainWindow : public QMainWindow {
       uint64_t generation = context->generation;
       QString pdfPath = result && result->pdf_path_utf8 ? QString::fromUtf8(result->pdf_path_utf8) : QString();
       QString summary = result && result->summary_json_utf8 ? QString::fromUtf8(result->summary_json_utf8) : QString();
+      StemTeXRenderOutcomeCode outcomeCode = result ? result->outcome_code : STEMTEX_RENDER_OUTCOME_INTERNAL;
+      int issueFlags = result ? result->issue_flags : 0;
+      QString outcomeMessage =
+          result && result->outcome_message_utf8 ? QString::fromUtf8(result->outcome_message_utf8) : QString();
       QString errorText = error ? QString::fromUtf8(error) : QString();
-      QMetaObject::invokeMethod(self, [self, uiRequestId, generation, rendererJobId, ok, code, pdfPath, summary, errorText]() {
+      QMetaObject::invokeMethod(self, [self, uiRequestId, generation, rendererJobId, ok, code, pdfPath, summary,
+                                       outcomeCode, issueFlags, outcomeMessage, errorText]() {
         if (self->shuttingDown_.load() || generation != self->rendererGeneration_.load() ||
             uiRequestId != self->latestUiRequestId_) return;
         if (!ok) {
+          self->setPreviewWarning(STEMTEX_RENDER_OUTCOME_INTERNAL, 0, errorText);
           self->refreshEngineStatus(code == STEMTEX_ERROR_CANCELLED
                                         ? QString("older request skipped because a newer request was submitted")
                                         : QString("render failed, code %1").arg((int)code));
@@ -762,6 +779,10 @@ class MainWindow : public QMainWindow {
         self->openButton_->setEnabled(true);
         self->showCroppedPreview(pdfPath, self->widthSpin_->value());
         self->setPreviewImageReady(!self->lastPreview_.isNull());
+        self->lastOutcomeCode_ = outcomeCode;
+        self->lastIssueFlags_ = issueFlags;
+        self->lastOutcomeMessage_ = outcomeMessage;
+        self->setPreviewWarning(outcomeCode, issueFlags, outcomeMessage);
         self->lastSummaryText_ = QString("renderer job: %1\n").arg(rendererJobId) + oneLineJsonMetric(summary) +
                                  "\n\n" + summary;
         self->updateDetailsText();
@@ -845,19 +866,40 @@ class MainWindow : public QMainWindow {
     QPixmap pixmap = QPixmap::fromImage(displayImage);
     pixmap.setDevicePixelRatio(dpr);
     croppedPreview_->setPixmap(pixmap);
+    positionPreviewWarning();
+  }
+
+  void positionPreviewWarning() {
+    if (!previewWarning_) return;
+    previewWarning_->move(qMax(8, croppedPreview_->width() - previewWarning_->width() - 18), 18);
+    previewWarning_->raise();
+  }
+
+  void setPreviewWarning(StemTeXRenderOutcomeCode outcome, int issueFlags, const QString &message) {
+    if (!previewWarning_) return;
+    bool warning = outcome != STEMTEX_RENDER_OUTCOME_OK || issueFlags != 0;
+    previewWarning_->setVisible(warning);
+    previewWarning_->setToolTip(message);
+    positionPreviewWarning();
   }
 
   void updateDetailsText() {
     if (!details_ || lastPreview_.isNull()) return;
-    details_->setPlainText(
-        QString("cropped preview: %1 x %2 px, displayed %3 x %4 px, %5 dpi, %6 pt padding\n")
-            .arg(lastPreview_.width())
-            .arg(lastPreview_.height())
-            .arg(lastPreviewDisplaySize_.width())
-            .arg(lastPreviewDisplaySize_.height())
-            .arg(dpiSpin_->value())
-            .arg(paddingSpin_->value(), 0, 'f', 1) +
-        lastSummaryText_);
+    QString outcomeText;
+    if (lastOutcomeCode_ != STEMTEX_RENDER_OUTCOME_OK || lastIssueFlags_ != 0) {
+      outcomeText = QString("outcome: %1, issue flags: %2, %3\n")
+                        .arg((int)lastOutcomeCode_)
+                        .arg(lastIssueFlags_)
+                        .arg(lastOutcomeMessage_);
+    }
+    details_->setPlainText(QString("cropped preview: %1 x %2 px, displayed %3 x %4 px, %5 dpi, %6 pt padding\n")
+                               .arg(lastPreview_.width())
+                               .arg(lastPreview_.height())
+                               .arg(lastPreviewDisplaySize_.width())
+                               .arg(lastPreviewDisplaySize_.height())
+                               .arg(dpiSpin_->value())
+                               .arg(paddingSpin_->value(), 0, 'f', 1) +
+                           outcomeText + lastSummaryText_);
   }
 
   void updatePreviewMinimumWidth(int widthPt) {
@@ -868,6 +910,7 @@ class MainWindow : public QMainWindow {
   void resizeEvent(QResizeEvent *event) override {
     QMainWindow::resizeEvent(event);
     updatePreviewPixmap();
+    positionPreviewWarning();
   }
 
   QString repo_root_;
@@ -892,9 +935,13 @@ class MainWindow : public QMainWindow {
   QPushButton *saveImageButton_ = nullptr;
   QPushButton *openButton_ = nullptr;
   QLabel *croppedPreview_ = nullptr;
+  QLabel *previewWarning_ = nullptr;
   QImage lastPreview_;
   QSize lastPreviewDisplaySize_;
   QString lastSummaryText_;
+  StemTeXRenderOutcomeCode lastOutcomeCode_ = STEMTEX_RENDER_OUTCOME_OK;
+  int lastIssueFlags_ = 0;
+  QString lastOutcomeMessage_;
   QTextBrowser *details_ = nullptr;
   QLabel *engineStatusLabel_ = nullptr;
   QTimer *enginePollTimer_ = nullptr;

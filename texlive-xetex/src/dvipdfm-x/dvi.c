@@ -1442,7 +1442,8 @@ dvi_set (int32_t ch)
   int                 n, cbytes;
 
   if (current_font < 0) {
-    ERROR("No font selected!");
+    dpx_record_recoverable_issue(DPX_RECOVERABLE_MISSING_FONT, "No font selected; character %04x ignored", ch);
+    return;
   }
   /* The division by dvi2pts seems strange since we actually know the
    * "dvi" size of the fonts contained in the DVI file.  In other
@@ -1553,7 +1554,8 @@ dvi_put (int32_t ch)
   int                 n, cbytes;
 
   if (current_font < 0) {
-    ERROR("No font selected!");
+    dpx_record_recoverable_issue(DPX_RECOVERABLE_MISSING_FONT, "No font selected; character %04x ignored", ch);
+    return;
   }
 
   font = &loaded_fonts[current_font];
@@ -1805,7 +1807,11 @@ do_fnt (int32_t tex_id)
   }
 
   if (i == num_def_fonts) {
-    ERROR("Tried to select a font that hasn't been defined: id=%d", tex_id);
+    WARN("Tried to select a font that hasn't been defined: id=%d; text using it will be omitted", tex_id);
+    dpx_record_recoverable_issue(DPX_RECOVERABLE_MISSING_FONT,
+                                 "Tried to select a font that hasn't been defined: id=%d", tex_id);
+    current_font = -1;
+    return;
   }
 
   if (!def_fonts[i].used) {
@@ -2010,11 +2016,6 @@ do_glyphs (int do_actual_text)
   int32_t             i;
   uint16_t            glyph_id, slen = 0;
 
-  if (current_font < 0)
-    ERROR("No font selected!");
-
-  font  = &loaded_fonts[current_font];
-
   if (do_actual_text) {
     slen = (unsigned int) get_buffered_unsigned_pair();
     if (lr_mode >= SKIMMING) {
@@ -2032,6 +2033,23 @@ do_glyphs (int do_actual_text)
   }
 
   width = get_buffered_signed_quad();
+
+  if (current_font < 0) {
+    dpx_record_recoverable_issue(DPX_RECOVERABLE_MISSING_FONT, "No font selected; glyph run ignored");
+    if (lr_mode >= SKIMMING) {
+      lr_width += width;
+      skip_glyphs();
+    } else {
+      if (lr_mode == RTYPESETTING || lr_mode == LTYPESETTING)
+        dvi_right(width);
+      skip_glyphs();
+      if (do_actual_text)
+        pdf_dev_end_actualtext();
+    }
+    return;
+  }
+
+  font  = &loaded_fonts[current_font];
 
   if (lr_mode >= SKIMMING) {
     lr_width += width;

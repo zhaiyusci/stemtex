@@ -49,6 +49,24 @@ StemTeXErrorCode exception_code(const std::exception &e) {
   return api ? api->code : STEMTEX_ERROR_INTERNAL;
 }
 
+StemTeXRenderOutcomeCode outcome_from_error(StemTeXErrorCode code) {
+  switch (code) {
+    case STEMTEX_OK: return STEMTEX_RENDER_OUTCOME_OK;
+    case STEMTEX_ERROR_INVALID_ARGUMENT: return STEMTEX_RENDER_OUTCOME_INVALID_ARGUMENT;
+    case STEMTEX_ERROR_BAD_CONFIG: return STEMTEX_RENDER_OUTCOME_BAD_CONFIG;
+    case STEMTEX_ERROR_WORKER_STARTUP: return STEMTEX_RENDER_OUTCOME_WORKER_STARTUP;
+    case STEMTEX_ERROR_WORKER_TIMEOUT: return STEMTEX_RENDER_OUTCOME_WORKER_TIMEOUT;
+    case STEMTEX_ERROR_WORKER_RESTARTING: return STEMTEX_RENDER_OUTCOME_WORKER_RESTARTING;
+    case STEMTEX_ERROR_WORKER_BUSY: return STEMTEX_RENDER_OUTCOME_WORKER_BUSY;
+    case STEMTEX_ERROR_TEX_SNIPPET: return STEMTEX_RENDER_OUTCOME_TEX_SNIPPET;
+    case STEMTEX_ERROR_XDVIPDFMX: return STEMTEX_RENDER_OUTCOME_XDVIPDFMX;
+    case STEMTEX_ERROR_CANCELLED: return STEMTEX_RENDER_OUTCOME_CANCELLED;
+    case STEMTEX_ERROR_FILESYSTEM: return STEMTEX_RENDER_OUTCOME_FILESYSTEM;
+    case STEMTEX_ERROR_INTERNAL:
+    default: return STEMTEX_RENDER_OUTCOME_INTERNAL;
+  }
+}
+
 void set_error_outputs(StemTeXErrorCode code, const std::string &message, StemTeXErrorCode *error_code,
                        char **error_utf8) {
   if (error_code) *error_code = code;
@@ -622,6 +640,15 @@ class DvipdfmxDaemon {
  public:
   using ApiFn = int(__cdecl *)(int, char **);
   using ShutdownFn = int(__cdecl *)(void);
+  using IssueFlagsFn = int(__cdecl *)(void);
+  using IssueMessageFn = const char *(__cdecl *)(void);
+
+  struct ConvertResult {
+    std::string mode;
+    int return_code = 0;
+    int issue_flags = 0;
+    std::string issue_message;
+  };
 
   explicit DvipdfmxDaemon(const RendererConfig &cfg)
       : program_arg_(slash_path(cfg.runtime_root / "bin" / "windows" / "xdvipdfmxdaemon.exe")),
@@ -636,6 +663,9 @@ class DvipdfmxDaemon {
     init_ = reinterpret_cast<ApiFn>(GetProcAddress(dll_, "dvipdfmxdaemon_init"));
     convert_ = reinterpret_cast<ApiFn>(GetProcAddress(dll_, "dvipdfmxdaemon_convert"));
     shutdown_ = reinterpret_cast<ShutdownFn>(GetProcAddress(dll_, "dvipdfmxdaemon_shutdown"));
+    last_issue_flags_ = reinterpret_cast<IssueFlagsFn>(GetProcAddress(dll_, "dvipdfmxdaemon_last_issue_flags"));
+    last_issue_message_ =
+        reinterpret_cast<IssueMessageFn>(GetProcAddress(dll_, "dvipdfmxdaemon_last_issue_message"));
     if (!init_ || !convert_ || !shutdown_) {
       FreeLibrary(dll_);
       dll_ = nullptr;
@@ -662,7 +692,7 @@ class DvipdfmxDaemon {
     env_scope_.reset();
   }
 
-  std::string convert(const fs::path &final_path, const fs::path &pdf_path, const std::string &page_range) {
+  ConvertResult convert(const fs::path &final_path, const fs::path &pdf_path, const std::string &page_range) {
     fs::path trace_path = pdf_path.parent_path() / "xdvipdfmx-trace.log";
     std::map<std::wstring, std::wstring> trace_env = {
         {L"STEMTEX_XDVIPDFMX_TRACE", path_to_wstring(trace_path)},
@@ -684,9 +714,17 @@ class DvipdfmxDaemon {
     std::vector<char *> av;
     for (auto &arg : args) av.push_back(arg.data());
     int code = convert_((int)av.size(), av.data());
-    if (code != 0) throw std::runtime_error("dvipdfmxdaemon_convert returned " + std::to_string(code));
+    if (code != 0 && code != 2) throw std::runtime_error("dvipdfmxdaemon_convert returned " + std::to_string(code));
     if (!fs::exists(pdf_path)) throw std::runtime_error("dvipdfmxdaemon.dll did not write PDF: " + pdf_path.string());
-    return "daemon-dll";
+    ConvertResult result;
+    result.mode = "daemon-dll";
+    result.return_code = code;
+    result.issue_flags = last_issue_flags_ ? last_issue_flags_() : 0;
+    if (last_issue_message_) {
+      const char *message = last_issue_message_();
+      if (message) result.issue_message = message;
+    }
+    return result;
   }
 
  private:
@@ -697,6 +735,8 @@ class DvipdfmxDaemon {
   ApiFn init_ = nullptr;
   ApiFn convert_ = nullptr;
   ShutdownFn shutdown_ = nullptr;
+  IssueFlagsFn last_issue_flags_ = nullptr;
+  IssueMessageFn last_issue_message_ = nullptr;
 };
 
 void run_sync(const std::string &command, const fs::path &cwd, const std::vector<wchar_t> &environment,
@@ -970,6 +1010,28 @@ struct StemTeXRenderer {
     }
   }
 
+  void set_last_outcome(StemTeXRenderOutcomeCode code, int issue_flags, const std::string &message) {
+    std::lock_guard<std::mutex> lock(diagnostic_mu);
+    last_outcome = code;
+    last_issue_flags = issue_flags;
+    last_outcome_message = message;
+  }
+
+  StemTeXRenderOutcomeCode get_last_outcome_code() {
+    std::lock_guard<std::mutex> lock(diagnostic_mu);
+    return last_outcome;
+  }
+
+  int get_last_issue_flags() {
+    std::lock_guard<std::mutex> lock(diagnostic_mu);
+    return last_issue_flags;
+  }
+
+  std::string get_last_outcome_message() {
+    std::lock_guard<std::mutex> lock(diagnostic_mu);
+    return last_outcome_message;
+  }
+
   std::string get_log_tail(int max_bytes) {
     std::lock_guard<std::mutex> lock(diagnostic_mu);
     if (max_bytes <= 0 || (size_t)max_bytes >= log_tail.size()) return log_tail;
@@ -1211,6 +1273,7 @@ struct StemTeXRenderer {
     schedule_spare_rebuild_locked();
     publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
     set_last_error(STEMTEX_OK, "");
+    set_last_outcome(STEMTEX_RENDER_OUTCOME_OK, 0, "");
   }
 
   bool cancel_current() {
@@ -1310,6 +1373,7 @@ struct StemTeXRenderer {
       } catch (const std::exception &e) {
         code = exception_code(e);
         set_last_error(code, e.what());
+        set_last_outcome(outcome_from_error(code), 0, e.what());
         update_status_after_render_exception();
         error = e.what();
       }
@@ -1425,12 +1489,22 @@ struct StemTeXRenderer {
     std::string xdvipdfmx_options = "-q -z 1 -C 64";
     std::string page_range = std::to_string(request_no) + "-" + std::to_string(request_no);
     std::string xdvipdfmx_mode = converter ? "daemon-dll" : "exe-fallback";
+    int xdvipdfmx_return_code = 0;
+    int xdvipdfmx_issue_flags = 0;
+    std::string xdvipdfmx_issue_message;
     try {
       try {
         if (!converter) throw std::runtime_error("dvipdfmx hot-start DLL unavailable");
-        xdvipdfmx_mode = converter->convert(final_path, pdf_path, page_range);
+        auto convert_result = converter->convert(final_path, pdf_path, page_range);
+        xdvipdfmx_mode = convert_result.mode;
+        xdvipdfmx_return_code = convert_result.return_code;
+        xdvipdfmx_issue_flags = convert_result.issue_flags;
+        xdvipdfmx_issue_message = convert_result.issue_message;
       } catch (const std::exception &) {
         xdvipdfmx_mode = "exe-fallback";
+        xdvipdfmx_return_code = 0;
+        xdvipdfmx_issue_flags = 0;
+        xdvipdfmx_issue_message.clear();
         std::ostringstream cmd;
         cmd << quote_cmd_arg(xdvipdfmx.string()) << " " << xdvipdfmx_options << " -s " << page_range
             << " -o " << quote_cmd_arg(pdf_path.string()) << " " << quote_cmd_arg(final_path.string());
@@ -1447,6 +1521,14 @@ struct StemTeXRenderer {
             << "\"pdfMode\":\"cpp-dll-live-worker-latest-page\","
             << "\"xdvipdfmxOptions\":\"" << json_escape(xdvipdfmx_options) << "\","
             << "\"xdvipdfmxMode\":\"" << json_escape(xdvipdfmx_mode) << "\","
+            << "\"xdvipdfmxReturnCode\":" << xdvipdfmx_return_code << ","
+            << "\"xdvipdfmxIssueFlags\":" << xdvipdfmx_issue_flags << ","
+            << "\"xdvipdfmxIssueMessage\":\"" << json_escape(xdvipdfmx_issue_message) << "\","
+            << "\"xdvipdfmxWarning\":" << (xdvipdfmx_issue_flags ? "true" : "false") << ","
+            << "\"outcomeCode\":" << (xdvipdfmx_issue_flags ? STEMTEX_RENDER_OUTCOME_RECOVERABLE
+                                                            : STEMTEX_RENDER_OUTCOME_OK) << ","
+            << "\"issueFlags\":" << xdvipdfmx_issue_flags << ","
+            << "\"outcomeMessage\":\"" << json_escape(xdvipdfmx_issue_message) << "\","
             << "\"widthPt\":" << resolved_width_pt << ","
             << "\"requestToPdfMs\":" << (end - start) << ","
             << "\"finalizeXdvMs\":" << (convert_start - finalize_start) << ","
@@ -1473,8 +1555,12 @@ struct StemTeXRenderer {
     result.request_id_utf8 = alloc_c_string(id);
     result.pdf_path_utf8 = alloc_c_string(pdf_path.string());
     result.summary_json_utf8 = alloc_c_string(summary.str());
+    result.outcome_code = xdvipdfmx_issue_flags ? STEMTEX_RENDER_OUTCOME_RECOVERABLE : STEMTEX_RENDER_OUTCOME_OK;
+    result.issue_flags = xdvipdfmx_issue_flags;
+    result.outcome_message_utf8 = alloc_c_string(xdvipdfmx_issue_message);
     publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
     set_last_error(STEMTEX_OK, "");
+    set_last_outcome(result.outcome_code, result.issue_flags, xdvipdfmx_issue_message);
     return result;
   }
 
@@ -1495,6 +1581,9 @@ struct StemTeXRenderer {
   std::atomic<uint64_t> snapshot_running_job_id{0};
   std::atomic<uint64_t> snapshot_pending_job_id{0};
   StemTeXErrorCode last_error = STEMTEX_OK;
+  StemTeXRenderOutcomeCode last_outcome = STEMTEX_RENDER_OUTCOME_OK;
+  int last_issue_flags = 0;
+  std::string last_outcome_message;
   std::string log_tail;
   std::unique_ptr<DvipdfmxDaemon> converter;
   WorkerSlot *active_slot = nullptr;
@@ -1536,6 +1625,7 @@ STEMTEX_API int stemtex_renderer_render(StemTeXRenderer *renderer, const char *s
                                         StemTeXRenderResult *result, StemTeXErrorCode *error_code,
                                         char **error_utf8) {
   if (!renderer || !snippet_utf8 || !result) {
+    if (renderer) renderer->set_last_outcome(STEMTEX_RENDER_OUTCOME_INVALID_ARGUMENT, 0, "Invalid argument");
     set_error_outputs(STEMTEX_ERROR_INVALID_ARGUMENT, "Invalid argument", error_code, error_utf8);
     return 0;
   }
@@ -1546,6 +1636,7 @@ STEMTEX_API int stemtex_renderer_render(StemTeXRenderer *renderer, const char *s
   } catch (const std::exception &e) {
     StemTeXErrorCode code = exception_code(e);
     renderer->set_last_error(code, e.what());
+    renderer->set_last_outcome(outcome_from_error(code), 0, e.what());
     renderer->update_status_after_render_exception();
     set_error_outputs(code, e.what(), error_code, error_utf8);
     return 0;
@@ -1556,6 +1647,7 @@ STEMTEX_API int stemtex_renderer_render_pdf_bytes(StemTeXRenderer *renderer, con
                                                   StemTeXPdfBytes *pdf, StemTeXRenderResult *result,
                                                   StemTeXErrorCode *error_code, char **error_utf8) {
   if (!pdf) {
+    if (renderer) renderer->set_last_outcome(STEMTEX_RENDER_OUTCOME_INVALID_ARGUMENT, 0, "Invalid argument");
     set_error_outputs(STEMTEX_ERROR_INVALID_ARGUMENT, "Invalid argument", error_code, error_utf8);
     return 0;
   }
@@ -1576,6 +1668,7 @@ STEMTEX_API int stemtex_renderer_render_pdf_bytes(StemTeXRenderer *renderer, con
   } catch (const std::exception &e) {
     if (!result) stemtex_renderer_free_result(&local_result);
     StemTeXErrorCode code = exception_code(e);
+    if (renderer) renderer->set_last_outcome(outcome_from_error(code), 0, e.what());
     set_error_outputs(code, e.what(), error_code, error_utf8);
     return 0;
   }
@@ -1585,6 +1678,7 @@ STEMTEX_API int stemtex_renderer_render_async(StemTeXRenderer *renderer, const c
                                               uint64_t *job_id, StemTeXRenderCallback callback, void *user_data,
                                               StemTeXErrorCode *error_code, char **error_utf8) {
   if (!renderer || !snippet_utf8 || !callback) {
+    if (renderer) renderer->set_last_outcome(STEMTEX_RENDER_OUTCOME_INVALID_ARGUMENT, 0, "Invalid argument");
     set_error_outputs(STEMTEX_ERROR_INVALID_ARGUMENT, "Invalid argument", error_code, error_utf8);
     return 0;
   }
@@ -1593,7 +1687,10 @@ STEMTEX_API int stemtex_renderer_render_async(StemTeXRenderer *renderer, const c
     if (error_code) *error_code = STEMTEX_OK;
     return 1;
   } catch (const std::exception &e) {
-    set_error_outputs(exception_code(e), e.what(), error_code, error_utf8);
+    StemTeXErrorCode code = exception_code(e);
+    renderer->set_last_error(code, e.what());
+    renderer->set_last_outcome(outcome_from_error(code), 0, e.what());
+    set_error_outputs(code, e.what(), error_code, error_utf8);
     return 0;
   }
 }
@@ -1656,6 +1753,21 @@ STEMTEX_API StemTeXErrorCode stemtex_renderer_last_error_code(StemTeXRenderer *r
   if (!renderer) return STEMTEX_ERROR_INVALID_ARGUMENT;
   std::lock_guard<std::mutex> lock(renderer->diagnostic_mu);
   return renderer->last_error;
+}
+
+STEMTEX_API StemTeXRenderOutcomeCode stemtex_renderer_last_outcome_code(StemTeXRenderer *renderer) {
+  if (!renderer) return STEMTEX_RENDER_OUTCOME_INVALID_ARGUMENT;
+  return renderer->get_last_outcome_code();
+}
+
+STEMTEX_API int stemtex_renderer_last_issue_flags(StemTeXRenderer *renderer) {
+  if (!renderer) return 0;
+  return renderer->get_last_issue_flags();
+}
+
+STEMTEX_API char *stemtex_renderer_last_outcome_message(StemTeXRenderer *renderer) {
+  if (!renderer) return alloc_c_string("Invalid argument");
+  return alloc_c_string(renderer->get_last_outcome_message());
 }
 
 STEMTEX_API char *stemtex_renderer_get_log_tail(StemTeXRenderer *renderer, int max_bytes) {
@@ -1771,9 +1883,13 @@ STEMTEX_API void stemtex_renderer_free_result(StemTeXRenderResult *result) {
   stemtex_renderer_free_string(result->request_id_utf8);
   stemtex_renderer_free_string(result->pdf_path_utf8);
   stemtex_renderer_free_string(result->summary_json_utf8);
+  stemtex_renderer_free_string(result->outcome_message_utf8);
   result->request_id_utf8 = nullptr;
   result->pdf_path_utf8 = nullptr;
   result->summary_json_utf8 = nullptr;
+  result->outcome_code = STEMTEX_RENDER_OUTCOME_OK;
+  result->issue_flags = 0;
+  result->outcome_message_utf8 = nullptr;
 }
 
 STEMTEX_API void stemtex_renderer_free_pdf_bytes(StemTeXPdfBytes *pdf) {

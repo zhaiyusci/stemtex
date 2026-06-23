@@ -47,6 +47,22 @@ typedef enum StemTeXErrorCode {
   STEMTEX_ERROR_INTERNAL
 } StemTeXErrorCode;
 
+typedef enum StemTeXRenderOutcomeCode {
+  STEMTEX_RENDER_OUTCOME_OK = 0,
+  STEMTEX_RENDER_OUTCOME_RECOVERABLE = 1,
+  STEMTEX_RENDER_OUTCOME_INVALID_ARGUMENT = 100,
+  STEMTEX_RENDER_OUTCOME_BAD_CONFIG = 101,
+  STEMTEX_RENDER_OUTCOME_WORKER_STARTUP = 102,
+  STEMTEX_RENDER_OUTCOME_WORKER_TIMEOUT = 103,
+  STEMTEX_RENDER_OUTCOME_WORKER_RESTARTING = 104,
+  STEMTEX_RENDER_OUTCOME_WORKER_BUSY = 105,
+  STEMTEX_RENDER_OUTCOME_TEX_SNIPPET = 106,
+  STEMTEX_RENDER_OUTCOME_XDVIPDFMX = 107,
+  STEMTEX_RENDER_OUTCOME_CANCELLED = 108,
+  STEMTEX_RENDER_OUTCOME_FILESYSTEM = 109,
+  STEMTEX_RENDER_OUTCOME_INTERNAL = 110
+} StemTeXRenderOutcomeCode;
+
 typedef enum StemTeXRendererStatus {
   STEMTEX_STATUS_STARTING = 0,
   STEMTEX_STATUS_READY,
@@ -68,6 +84,9 @@ typedef struct StemTeXRenderResult {
   char *request_id_utf8;
   char *pdf_path_utf8;
   char *summary_json_utf8;
+  StemTeXRenderOutcomeCode outcome_code;
+  int issue_flags;
+  char *outcome_message_utf8;
 } StemTeXRenderResult;
 
 typedef struct StemTeXPdfBytes {
@@ -111,6 +130,9 @@ STEMTEX_API int stemtex_renderer_cancel_current(StemTeXRenderer *renderer, StemT
 STEMTEX_API StemTeXRendererStatus stemtex_renderer_status(StemTeXRenderer *renderer);
 STEMTEX_API int stemtex_renderer_engine_snapshot(StemTeXRenderer *renderer, StemTeXEngineSnapshot *snapshot);
 STEMTEX_API StemTeXErrorCode stemtex_renderer_last_error_code(StemTeXRenderer *renderer);
+STEMTEX_API StemTeXRenderOutcomeCode stemtex_renderer_last_outcome_code(StemTeXRenderer *renderer);
+STEMTEX_API int stemtex_renderer_last_issue_flags(StemTeXRenderer *renderer);
+STEMTEX_API char *stemtex_renderer_last_outcome_message(StemTeXRenderer *renderer);
 STEMTEX_API char *stemtex_renderer_get_log_tail(StemTeXRenderer *renderer, int max_bytes);
 STEMTEX_API const char *stemtex_renderer_version(void);
 STEMTEX_API const char *stemtex_renderer_abi_version(void);

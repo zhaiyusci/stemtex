@@ -46,6 +46,43 @@ static int  really_quiet = 0;
 jmp_buf dpx_exit_env;
 int     dpx_exit_active = 0;
 int     dpx_exit_code   = 0;
+static int dpx_recoverable_flags = 0;
+static char dpx_recoverable_message[512] = {0};
+
+void
+dpx_clear_recoverable_issues (void)
+{
+  dpx_recoverable_flags = 0;
+  dpx_recoverable_message[0] = '\0';
+}
+
+void
+dpx_record_recoverable_issue (int flag, const char *fmt, ...)
+{
+  va_list argp;
+
+  dpx_recoverable_flags |= flag;
+  if (dpx_recoverable_message[0] != '\0')
+    return;
+
+  va_start(argp, fmt);
+  vsnprintf(dpx_recoverable_message, sizeof(dpx_recoverable_message), fmt, argp);
+  va_end(argp);
+  dpx_recoverable_message[sizeof(dpx_recoverable_message) - 1] = '\0';
+  DPX_TRACE("recoverable issue: %s", dpx_recoverable_message);
+}
+
+int
+dpx_recoverable_issue_flags (void)
+{
+  return dpx_recoverable_flags;
+}
+
+const char *
+dpx_recoverable_issue_message (void)
+{
+  return dpx_recoverable_message;
+}
 
 void
 dpx_exit (int code)
