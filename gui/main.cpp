@@ -311,8 +311,10 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
   printf("pdf=%s\nsummary=%s\nqtPdfError=%d pages=%d pagePoints=%.2fx%.2f croppedPixels=%dx%d\n",
          pdfPath.toUtf8().constData(), summary.toUtf8().constData(),
          (int)pdfError, pages, pageSize.width(), pageSize.height(), cropped.image.width(), cropped.image.height());
-  if (!summary.contains("\"xdvipdfmxMode\":\"daemon-dll\"") && !summary.contains("\"xdvipdfmxMode\":\"dll\"")) {
-    fprintf(stderr, "expected xdvipdfmxMode=daemon-dll, got summary=%s\n", summary.toUtf8().constData());
+  if (!summary.contains("\"xdvipdfmxMode\":\"daemon-dll\"") &&
+      !summary.contains("\"xdvipdfmxMode\":\"dll\"") &&
+      !summary.contains("\"xdvipdfmxMode\":\"process-isolated\"")) {
+    fprintf(stderr, "expected a supported xdvipdfmxMode, got summary=%s\n", summary.toUtf8().constData());
     stemtex_renderer_free_result(&result);
     stemtex_renderer_destroy(renderer);
     return 1;
@@ -484,7 +486,7 @@ class MainWindow : public QMainWindow {
 
   ~MainWindow() override {
     shuttingDown_.store(true);
-    if (renderer_) stemtex_renderer_destroy(renderer_);
+    stopRenderer(false);
   }
 
  private:
@@ -549,6 +551,7 @@ class MainWindow : public QMainWindow {
   }
 
   void refreshEngineStatus(const QString &overrideNote = QString()) {
+    std::lock_guard<std::mutex> lock(rendererMutex_);
     if (!renderer_) return;
     StemTeXEngineSnapshot snapshot{};
     if (!stemtex_renderer_engine_snapshot(renderer_, &snapshot)) return;
@@ -575,14 +578,57 @@ class MainWindow : public QMainWindow {
     texmfLabel_->setToolTip(QString("TeXLive package/font tree: %1\nDaemon runtime: %2").arg(texmf_root_, runtime_root_));
   }
 
-  void stopRenderer() {
+  void destroyRendererLater(StemTeXRenderer *renderer) {
+    if (!renderer) return;
+    std::thread([renderer]() { stemtex_renderer_destroy(renderer); }).detach();
+  }
+
+  void stopRenderer(bool asyncDestroy = true) {
     ++rendererGeneration_;
+    ++latestUiRequestId_;
     enginePollTimer_->stop();
-    if (renderer_) {
-      stemtex_renderer_destroy(renderer_);
+    pendingStartupRender_ = false;
+    StemTeXRenderer *renderer = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(rendererMutex_);
+      renderer = renderer_;
       renderer_ = nullptr;
     }
-    pendingStartupRender_ = false;
+    if (asyncDestroy) {
+      destroyRendererLater(renderer);
+    } else if (renderer) {
+      stemtex_renderer_destroy(renderer);
+    }
+  }
+
+  void clearProfileOutput() {
+    lastPdf_.clear();
+    lastPreview_ = QImage();
+    lastPreviewDisplaySize_ = QSize();
+    lastSummaryText_.clear();
+    croppedPreview_->clear();
+    croppedPreview_->setText(QString());
+    details_->clear();
+    openButton_->setEnabled(false);
+    setPreviewImageReady(false);
+  }
+
+  bool hasRenderer() const {
+    std::lock_guard<std::mutex> lock(rendererMutex_);
+    return renderer_ != nullptr;
+  }
+
+  StemTeXRenderer *currentRenderer() const {
+    std::lock_guard<std::mutex> lock(rendererMutex_);
+    return renderer_;
+  }
+
+  void installRenderer(StemTeXRenderer *renderer) {
+    std::lock_guard<std::mutex> lock(rendererMutex_);
+    if (renderer_) {
+      stemtex_renderer_destroy(renderer_);
+    }
+    renderer_ = renderer;
   }
 
   void chooseTexmfRoot() {
@@ -591,6 +637,7 @@ class MainWindow : public QMainWindow {
     QString normalized = normalizeTexmfRoot(selected);
     if (normalized == texmf_root_) return;
     stopRenderer();
+    clearProfileOutput();
     texmf_root_ = normalized;
     reloadProfiles();
     setUiReady(true);
@@ -599,22 +646,30 @@ class MainWindow : public QMainWindow {
   }
 
   void switchProfile() {
-    if (!renderer_) {
+    QString profileName = profileCombo_->currentText();
+    stopRenderer();
+    clearProfileOutput();
+    updateEngineStatus(false, 0, spareTarget_, QString("profile: %1").arg(profileName));
+    if (!profileCombo_ || profileCombo_->currentIndex() < 0) {
+      setUiReady(true);
+      return;
+    }
+    if (!hasRenderer()) {
       initializeRenderer();
       return;
     }
-    stopRenderer();
-    refreshEngineStatus(QString("profile: %1").arg(profileCombo_->currentText()));
     initializeRenderer();
   }
 
   void initializeRenderer() {
     QString profileRoot = selectedProfileRoot();
     if (profileRoot.isEmpty()) {
-      refreshEngineStatus("choose a profile");
+      updateEngineStatus(false, 0, spareTarget_, "choose a profile");
       setUiReady(true);
       return;
     }
+    setUiReady(false);
+    updateEngineStatus(false, 0, spareTarget_, QString("starting profile: %1").arg(QFileInfo(profileRoot).fileName()));
     uint64_t generation = ++rendererGeneration_;
     std::thread([this, profileRoot, generation]() {
       auto start = std::chrono::steady_clock::now();
@@ -641,13 +696,13 @@ class MainWindow : public QMainWindow {
           if (renderer) stemtex_renderer_destroy(renderer);
           return;
         }
-        renderer_ = renderer;
-        if (!renderer_) {
+        if (!renderer) {
           setUiReady(false);
           updateEngineStatus(false, 0, spareTarget_, QString("renderer init failed, code %1").arg((int)code));
           details_->setPlainText(errorText);
           return;
         }
+        installRenderer(renderer);
         setUiReady(true);
         refreshEngineStatus(QString("renderer initialized in %1 ms").arg(elapsed));
         enginePollTimer_->start();
@@ -660,7 +715,9 @@ class MainWindow : public QMainWindow {
   }
 
   void renderSnippet() {
-    if (!renderer_) {
+    uint64_t generation = rendererGeneration_.load();
+    StemTeXRenderer *renderer = currentRenderer();
+    if (!renderer) {
       pendingStartupRender_ = true;
       updateEngineStatus(false, spareReady_, spareTarget_, "renderer is still starting; this request will run after init");
       setPreviewImageReady(false);
@@ -678,18 +735,21 @@ class MainWindow : public QMainWindow {
     struct CallbackContext {
       MainWindow *self = nullptr;
       uint64_t uiRequestId = 0;
+      uint64_t generation = 0;
     };
-    auto *context = new CallbackContext{this, uiRequestId};
+    auto *context = new CallbackContext{this, uiRequestId, generation};
     auto callback = [](uint64_t rendererJobId, int ok, const StemTeXRenderResult *result, StemTeXErrorCode code,
                        const char *error, void *userData) {
       std::unique_ptr<CallbackContext> context(static_cast<CallbackContext *>(userData));
       MainWindow *self = context->self;
       uint64_t uiRequestId = context->uiRequestId;
+      uint64_t generation = context->generation;
       QString pdfPath = result && result->pdf_path_utf8 ? QString::fromUtf8(result->pdf_path_utf8) : QString();
       QString summary = result && result->summary_json_utf8 ? QString::fromUtf8(result->summary_json_utf8) : QString();
       QString errorText = error ? QString::fromUtf8(error) : QString();
-      QMetaObject::invokeMethod(self, [self, uiRequestId, rendererJobId, ok, code, pdfPath, summary, errorText]() {
-        if (self->shuttingDown_.load() || uiRequestId != self->latestUiRequestId_) return;
+      QMetaObject::invokeMethod(self, [self, uiRequestId, generation, rendererJobId, ok, code, pdfPath, summary, errorText]() {
+        if (self->shuttingDown_.load() || generation != self->rendererGeneration_.load() ||
+            uiRequestId != self->latestUiRequestId_) return;
         if (!ok) {
           self->refreshEngineStatus(code == STEMTEX_ERROR_CANCELLED
                                         ? QString("older request skipped because a newer request was submitted")
@@ -707,21 +767,24 @@ class MainWindow : public QMainWindow {
         self->updateDetailsText();
       }, Qt::QueuedConnection);
     };
-    std::thread([this, text, width, callback, context, uiRequestId]() {
+    std::thread([this, renderer, text, width, callback, context, uiRequestId, generation]() {
       StemTeXErrorCode code = STEMTEX_OK;
       char *error = nullptr;
       uint64_t rendererJobId = 0;
       int submitted = 0;
-      if (!shuttingDown_.load()) {
-        submitted = stemtex_renderer_render_async(renderer_, text.constData(), width, &rendererJobId, callback, context,
-                                                  &code, &error);
+      if (!shuttingDown_.load() && generation == rendererGeneration_.load()) {
+        std::lock_guard<std::mutex> lock(rendererMutex_);
+        if (renderer == renderer_) {
+          submitted = stemtex_renderer_render_async(renderer, text.constData(), width, &rendererJobId, callback, context,
+                                                    &code, &error);
+        }
       }
       QString errorText = error ? QString::fromUtf8(error) : QString();
       stemtex_renderer_free_string(error);
       if (!submitted) {
         delete context;
-        QMetaObject::invokeMethod(this, [this, uiRequestId, code, errorText]() {
-          if (shuttingDown_.load() || uiRequestId != latestUiRequestId_) return;
+        QMetaObject::invokeMethod(this, [this, uiRequestId, generation, code, errorText]() {
+          if (shuttingDown_.load() || generation != rendererGeneration_.load() || uiRequestId != latestUiRequestId_) return;
           refreshEngineStatus(QString("failed to submit request, code %1").arg((int)code));
           details_->setPlainText(errorText);
         }, Qt::QueuedConnection);
@@ -753,7 +816,7 @@ class MainWindow : public QMainWindow {
   void copyPreviewImage() {
     if (lastPreview_.isNull()) return;
     QApplication::clipboard()->setImage(lastPreview_);
-    updateEngineStatus(renderer_ != nullptr, spareReady_, spareTarget_);
+    updateEngineStatus(hasRenderer(), spareReady_, spareTarget_);
   }
 
   void savePreviewImage() {
@@ -762,10 +825,10 @@ class MainWindow : public QMainWindow {
                                                 "PNG image (*.png);;JPEG image (*.jpg *.jpeg);;BMP image (*.bmp)");
     if (path.isEmpty()) return;
     if (!lastPreview_.save(path)) {
-      updateEngineStatus(renderer_ != nullptr, spareReady_, spareTarget_, "save failed");
+      updateEngineStatus(hasRenderer(), spareReady_, spareTarget_, "save failed");
       return;
     }
-    updateEngineStatus(renderer_ != nullptr, spareReady_, spareTarget_);
+    updateEngineStatus(hasRenderer(), spareReady_, spareTarget_);
   }
 
   void updatePreviewPixmap() {
@@ -811,6 +874,7 @@ class MainWindow : public QMainWindow {
   QString runtime_root_;
   QString texmf_root_;
   StemTeXRenderer *renderer_ = nullptr;
+  mutable std::mutex rendererMutex_;
   std::atomic<bool> shuttingDown_{false};
   std::atomic<uint64_t> rendererGeneration_{0};
   QString lastPdf_;

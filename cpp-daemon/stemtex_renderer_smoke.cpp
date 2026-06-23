@@ -122,7 +122,8 @@ static bool summary_has_dll_mode(const char *summary) {
   if (!summary) return false;
   std::string text(summary);
   return text.find("\"xdvipdfmxMode\":\"daemon-dll\"") != std::string::npos ||
-         text.find("\"xdvipdfmxMode\":\"dll\"") != std::string::npos;
+         text.find("\"xdvipdfmxMode\":\"dll\"") != std::string::npos ||
+         text.find("\"xdvipdfmxMode\":\"process-isolated\"") != std::string::npos;
 }
 
 static void print_snapshot(StemTeXRenderer *renderer, const char *label) {

@@ -1173,12 +1173,19 @@ dvipdfmxdaemon_convert_document (int argc, char *argv[])
 
   memset(uplain, 0, sizeof(uplain));
   memset(oplain, 0, sizeof(oplain));
+  DPX_TRACE("convert_document: begin argc=%d", argc);
+  if (argc > 0 && argv && argv[0])
+    DPX_TRACE("convert_document: argv0=%s", argv[0]);
+  if (argc > 1 && argv && argv[argc - 1])
+    DPX_TRACE("convert_document: input=%s", argv[argc - 1]);
   cleanup_document_args();
   restore_daemon_defaults();
   opterr = 0;
   my_name = "xdvipdfmx";
 
   do_args_first_pass(argc, argv, NULL, 0);
+  DPX_TRACE("convert_document: after first args dvi=%s pdf=%s", dvi_filename ? dvi_filename : "(stdin)",
+            pdf_filename ? pdf_filename : "(default)");
 
   if (!dvi_filename) {
     if (verbose)
@@ -1191,22 +1198,27 @@ dvipdfmxdaemon_convert_document (int argc, char *argv[])
     y_offset = 0.0;
     dvi2pts  = 0.01;
   } else {
+    DPX_TRACE("convert_document: before dvi_init");
     dvi2pts = dvi_init(dvi_filename, mag);
     if (dvi2pts == 0.0)
       ERROR("dvi_init() failed!");
+    DPX_TRACE("convert_document: after dvi_init");
     creator = dvi_comment();
+    DPX_TRACE("convert_document: before dvi_scan_specials");
     dvi_scan_specials(0,
                       &paper_width, &paper_height,
                       &x_offset, &y_offset, &landscape_mode,
                       &pdf_version_major, &pdf_version_minor,
                       &do_encryption, &key_bits, &permission, oplain, uplain,
                       &has_id, id1, id2);
+    DPX_TRACE("convert_document: after dvi_scan_specials");
   }
 
   {
     int has_encrypt_special = do_encryption;
 
     do_args_second_pass(argc, argv, NULL, 0);
+    DPX_TRACE("convert_document: after second args");
     if (do_encryption && !has_encrypt_special) {
       get_enc_password(oplain, uplain);
     }
@@ -1277,7 +1289,9 @@ dvipdfmxdaemon_convert_document (int argc, char *argv[])
 
   set_distiller_template(filter_template);
 
+  DPX_TRACE("convert_document: before pdf_open_document");
   pdf_open_document(pdf_filename, creator, id1, id2, settings);
+  DPX_TRACE("convert_document: after pdf_open_document");
 
   if (opt_flags & OPT_CIDFONT_FIXEDPITCH)
     CIDFont_set_flags(CIDFONT_FORCE_FIXEDPITCH);
@@ -1287,12 +1301,18 @@ dvipdfmxdaemon_convert_document (int argc, char *argv[])
     mps_set_translate_origin(1);
 
   if (dpx_conf.compat_mode == dpx_mode_mpost_mode) {
+    DPX_TRACE("convert_document: before do_mps_pages");
     do_mps_pages();
+    DPX_TRACE("convert_document: after do_mps_pages");
   } else {
+    DPX_TRACE("convert_document: before do_dvi_pages");
     do_dvi_pages();
+    DPX_TRACE("convert_document: after do_dvi_pages");
   }
 
+  DPX_TRACE("convert_document: before pdf_close_document");
   pdf_close_document();
+  DPX_TRACE("convert_document: after pdf_close_document");
 
   if (dpx_conf.compat_mode != dpx_mode_mpost_mode)
     dvi_close();
@@ -1300,6 +1320,7 @@ dvipdfmxdaemon_convert_document (int argc, char *argv[])
   MESG("\n");
   cleanup_document_args();
   restore_daemon_defaults();
+  DPX_TRACE("convert_document: success");
   return 0;
 }
 
@@ -1313,6 +1334,7 @@ dvipdfmxdaemon_init (int argc, char *argv[])
 {
   const char *program_name = (argc > 0 && argv && argv[0]) ? argv[0] : "xdvipdfmxdaemon";
 
+  DPX_TRACE("daemon_init: begin program=%s", program_name);
   if (daemon_defaults.initialized)
     return 0;
 
@@ -1335,18 +1357,39 @@ dvipdfmxdaemon_init (int argc, char *argv[])
 
   save_daemon_defaults();
   daemon_defaults.initialized = 1;
+  DPX_TRACE("daemon_init: success");
   return 0;
 }
 
 int
 dvipdfmxdaemon_convert (int argc, char *argv[])
 {
-  if (!daemon_defaults.initialized) {
-    int code = dvipdfmxdaemon_init(1, argv);
-    if (code != 0)
-      return code;
+  int code;
+
+  dpx_exit_active = 1;
+  dpx_exit_code = 0;
+  if (setjmp(dpx_exit_env)) {
+    dpx_exit_active = 0;
+    cleanup_document_args();
+    if (daemon_defaults.initialized)
+      restore_daemon_defaults();
+    DPX_TRACE("daemon_convert: caught dpx_exit code=%d", dpx_exit_code);
+    return dpx_exit_code;
   }
-  return dvipdfmxdaemon_convert_document(argc, argv);
+
+  DPX_TRACE("daemon_convert: begin argc=%d", argc);
+  if (!daemon_defaults.initialized) {
+    code = dvipdfmxdaemon_init(1, argv);
+    if (code != 0) {
+      dpx_exit_active = 0;
+      DPX_TRACE("daemon_convert: init failed code=%d", code);
+      return code;
+    }
+  }
+  code = dvipdfmxdaemon_convert_document(argc, argv);
+  dpx_exit_active = 0;
+  DPX_TRACE("daemon_convert: return code=%d", code);
+  return code;
 }
 
 int

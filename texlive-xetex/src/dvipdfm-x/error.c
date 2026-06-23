@@ -26,6 +26,11 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
+
+#if defined(WIN32)
+__declspec(dllimport) unsigned long __stdcall GetEnvironmentVariableA (const char *, char *, unsigned long);
+#endif
 
 #include "dvipdfmx.h"
 #include "error.h"
@@ -38,6 +43,55 @@ static int _mesg_type = DPX_MESG;
 #define WANT_NEWLINE() (_mesg_type != DPX_MESG_WARN && _mesg_type != DPX_MESG_ERROR)
 
 static int  really_quiet = 0;
+jmp_buf dpx_exit_env;
+int     dpx_exit_active = 0;
+int     dpx_exit_code   = 0;
+
+void
+dpx_exit (int code)
+{
+  if (dpx_exit_active) {
+    dpx_exit_code = code;
+    longjmp(dpx_exit_env, 1);
+  }
+  exit(code);
+}
+
+static void
+dpx_trace_v (const char *fmt, va_list argp)
+{
+#if defined(WIN32)
+  char path_buf[4096];
+  unsigned long n = GetEnvironmentVariableA("STEMTEX_XDVIPDFMX_TRACE", path_buf, sizeof(path_buf));
+  const char *path = (n > 0 && n < sizeof(path_buf)) ? path_buf : NULL;
+#else
+  const char *path = getenv("STEMTEX_XDVIPDFMX_TRACE");
+#endif
+  FILE *fp;
+
+  if (!path || !*path)
+    return;
+
+  fp = fopen(path, "ab");
+  if (!fp)
+    return;
+
+  fprintf(fp, "[xdvipdfmx] ");
+  vfprintf(fp, fmt, argp);
+  fprintf(fp, "\n");
+  fflush(fp);
+  fclose(fp);
+}
+
+void
+DPX_TRACE (const char *fmt, ...)
+{
+  va_list argp;
+
+  va_start(argp, fmt);
+  dpx_trace_v(fmt, argp);
+  va_end(argp);
+}
 
 void
 shut_up (int quietness)
@@ -86,10 +140,13 @@ ERROR (const char *fmt, ...)
       fprintf(stderr, "\n");
     fprintf(stderr, "%s:fatal: ", my_name);
     va_start(argp, fmt);
+    dpx_trace_v(fmt, argp);
+    va_end(argp);
+    va_start(argp, fmt);
     vfprintf(stderr, fmt, argp);
     va_end(argp);
     fprintf(stderr, "\n");
   }
   error_cleanup();
-  exit( 1 );
+  dpx_exit(1);
 }

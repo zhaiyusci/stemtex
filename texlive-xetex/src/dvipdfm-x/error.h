@@ -34,6 +34,7 @@ extern void error_cleanup (void);
 #define NO_ERROR 0
 
 #include <assert.h>
+#include <setjmp.h>
 #include <stdio.h>
 
 extern void shut_up (int quietness);
@@ -44,6 +45,12 @@ extern void shut_up (int quietness);
 extern void ERROR (const char *fmt, ...);
 extern void MESG  (const char *fmt, ...);
 extern void WARN  (const char *fmt, ...);
+extern void DPX_TRACE (const char *fmt, ...);
+extern void dpx_exit (int code);
+
+extern jmp_buf dpx_exit_env;
+extern int     dpx_exit_active;
+extern int     dpx_exit_code;
 
 #define ASSERT(e) assert(e)
 

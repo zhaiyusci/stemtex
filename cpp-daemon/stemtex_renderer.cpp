@@ -624,7 +624,10 @@ class DvipdfmxDaemon {
   using ShutdownFn = int(__cdecl *)(void);
 
   explicit DvipdfmxDaemon(const RendererConfig &cfg)
-      : env_(runtime_environment_overrides(cfg)) {
+      : program_arg_(slash_path(cfg.runtime_root / "bin" / "windows" / "xdvipdfmxdaemon.exe")),
+        env_(runtime_environment_overrides(cfg)) {
+    fs::path init_trace_path = cfg.runtime_root / "texmf-var" / "xdvipdfmx-init-trace.log";
+    env_[L"STEMTEX_XDVIPDFMX_TRACE"] = path_to_wstring(init_trace_path);
     fs::path dll_path = cfg.runtime_root / "bin" / "windows" / "dvipdfmxdaemon.dll";
     if (!fs::exists(dll_path)) throw std::runtime_error("dvipdfmxdaemon.dll missing");
     env_scope_ = std::make_unique<ScopedEnvironment>(env_);
@@ -639,7 +642,7 @@ class DvipdfmxDaemon {
       throw std::runtime_error("dvipdfmxdaemon.dll does not export hot-start API");
     }
 
-    std::vector<std::string> args = {"xdvipdfmxdaemon"};
+    std::vector<std::string> args = {program_arg_};
     std::vector<char *> av;
     for (auto &arg : args) av.push_back(arg.data());
     int code = init_((int)av.size(), av.data());
@@ -660,8 +663,13 @@ class DvipdfmxDaemon {
   }
 
   std::string convert(const fs::path &final_path, const fs::path &pdf_path, const std::string &page_range) {
+    fs::path trace_path = pdf_path.parent_path() / "xdvipdfmx-trace.log";
+    std::map<std::wstring, std::wstring> trace_env = {
+        {L"STEMTEX_XDVIPDFMX_TRACE", path_to_wstring(trace_path)},
+    };
+    ScopedEnvironment trace_scope(trace_env);
     std::vector<std::string> args = {
-        "xdvipdfmxdaemon",
+        program_arg_,
         "-q",
         "-z",
         "1",
@@ -682,6 +690,7 @@ class DvipdfmxDaemon {
   }
 
  private:
+  std::string program_arg_;
   std::map<std::wstring, std::wstring> env_;
   std::unique_ptr<ScopedEnvironment> env_scope_;
   HMODULE dll_ = nullptr;
