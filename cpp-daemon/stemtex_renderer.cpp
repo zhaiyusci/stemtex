@@ -245,9 +245,140 @@ void append_be16(std::vector<uint8_t> &out, uint16_t v) {
   out.push_back((uint8_t)(v & 0xff));
 }
 
+uint32_t read_be_uint(const std::vector<uint8_t> &bytes, size_t pos, int width) {
+  if (pos + (size_t)width > bytes.size()) throw std::runtime_error("Malformed XDV font definition");
+  uint32_t value = 0;
+  for (int i = 0; i < width; ++i) value = (value << 8) | bytes[pos + (size_t)i];
+  return value;
+}
+
 struct XdvParts {
   std::vector<uint8_t> fontdefs;
 };
+
+using FontDefMap = std::map<uint32_t, std::vector<uint8_t>>;
+
+void collect_fontdefs_from_bytes(const std::vector<uint8_t> &xdv, FontDefMap &fontdefs) {
+  constexpr uint8_t SET1 = 128;
+  constexpr uint8_t SET_RULE = 132;
+  constexpr uint8_t PUT1 = 133;
+  constexpr uint8_t PUT_RULE = 137;
+  constexpr uint8_t BOP = 139;
+  constexpr uint8_t RIGHT1 = 143;
+  constexpr uint8_t W0 = 147;
+  constexpr uint8_t W1 = 148;
+  constexpr uint8_t X0 = 152;
+  constexpr uint8_t X1 = 153;
+  constexpr uint8_t DOWN1 = 157;
+  constexpr uint8_t Y0 = 161;
+  constexpr uint8_t Y1 = 162;
+  constexpr uint8_t Z0 = 166;
+  constexpr uint8_t Z1 = 167;
+  constexpr uint8_t FNT1 = 235;
+  constexpr uint8_t XXX1 = 239;
+  constexpr uint8_t FNT_DEF1 = 243;
+  constexpr uint8_t PRE = 247;
+  constexpr uint8_t POST = 248;
+  constexpr uint8_t POST_POST = 249;
+  constexpr uint8_t XDV_NATIVE_FONT_DEF = 252;
+  constexpr uint8_t XDV_GLYPHS = 253;
+  constexpr uint8_t XDV_TEXT_AND_GLYPHS = 254;
+  constexpr uint8_t PTEXDIR = 255;
+  constexpr uint16_t XDV_FLAG_COLORED = 0x0200;
+  constexpr uint16_t XDV_FLAG_EXTEND = 0x1000;
+  constexpr uint16_t XDV_FLAG_SLANT = 0x2000;
+  constexpr uint16_t XDV_FLAG_EMBOLDEN = 0x4000;
+
+  size_t pos = 0;
+  while (pos < xdv.size()) {
+    size_t start = pos;
+    uint8_t op = xdv[pos++];
+    if (op <= 127 || (op >= 171 && op <= 234) || op == 138 || op == 140 || op == 141 || op == 142 ||
+        op == W0 || op == X0 || op == Y0 || op == Z0 || op == 250 || op == 251) {
+      continue;
+    }
+    if (op >= SET1 && op <= 131) {
+      pos += (size_t)(op - SET1 + 1);
+    } else if (op == SET_RULE || op == PUT_RULE) {
+      pos += 8;
+    } else if (op >= PUT1 && op <= 136) {
+      pos += (size_t)(op - PUT1 + 1);
+    } else if (op == BOP) {
+      pos += 44;
+    } else if (op >= RIGHT1 && op <= 146) {
+      pos += (size_t)(op - RIGHT1 + 1);
+    } else if (op >= W1 && op <= 151) {
+      pos += (size_t)(op - W1 + 1);
+    } else if (op >= X1 && op <= 156) {
+      pos += (size_t)(op - X1 + 1);
+    } else if (op >= DOWN1 && op <= 160) {
+      pos += (size_t)(op - DOWN1 + 1);
+    } else if (op >= Y1 && op <= 165) {
+      pos += (size_t)(op - Y1 + 1);
+    } else if (op >= Z1 && op <= 170) {
+      pos += (size_t)(op - Z1 + 1);
+    } else if (op >= FNT1 && op <= 238) {
+      pos += (size_t)(op - FNT1 + 1);
+    } else if (op >= XXX1 && op <= 242) {
+      int width = op - XXX1 + 1;
+      uint32_t len = read_be_uint(xdv, pos, width);
+      pos += (size_t)width + len;
+    } else if (op >= FNT_DEF1 && op <= 246) {
+      int id_width = op - FNT_DEF1 + 1;
+      uint32_t id = read_be_uint(xdv, pos, id_width);
+      pos += (size_t)id_width + 12;
+      if (pos + 2 > xdv.size()) throw std::runtime_error("Malformed XDV font definition");
+      uint32_t area_len = xdv[pos++];
+      uint32_t name_len = xdv[pos++];
+      pos += area_len + name_len;
+      if (pos > xdv.size()) throw std::runtime_error("Malformed XDV font definition");
+      fontdefs[id] = std::vector<uint8_t>(xdv.begin() + (std::ptrdiff_t)start, xdv.begin() + (std::ptrdiff_t)pos);
+    } else if (op == PRE) {
+      if (pos + 14 > xdv.size()) throw std::runtime_error("Malformed XDV preamble");
+      uint32_t comment_len = xdv[pos + 13];
+      pos += 14 + comment_len;
+    } else if (op == POST || op == POST_POST) {
+      break;
+    } else if (op == XDV_NATIVE_FONT_DEF) {
+      uint32_t id = read_be_uint(xdv, pos, 4);
+      pos += 8;
+      uint16_t flags = (uint16_t)read_be_uint(xdv, pos, 2);
+      pos += 2;
+      if (pos >= xdv.size()) throw std::runtime_error("Malformed XDV native font definition");
+      uint32_t name_len = xdv[pos++];
+      pos += name_len + 4;
+      if (flags & XDV_FLAG_COLORED) pos += 4;
+      if (flags & XDV_FLAG_EXTEND) pos += 4;
+      if (flags & XDV_FLAG_SLANT) pos += 4;
+      if (flags & XDV_FLAG_EMBOLDEN) pos += 4;
+      if (pos > xdv.size()) throw std::runtime_error("Malformed XDV native font definition");
+      fontdefs[id] = std::vector<uint8_t>(xdv.begin() + (std::ptrdiff_t)start, xdv.begin() + (std::ptrdiff_t)pos);
+    } else if (op == XDV_GLYPHS) {
+      pos += 4;
+      uint32_t len = read_be_uint(xdv, pos, 2);
+      pos += 2 + len * 10;
+    } else if (op == XDV_TEXT_AND_GLYPHS) {
+      uint32_t text_len = read_be_uint(xdv, pos, 2);
+      pos += 2 + text_len * 2 + 4;
+      uint32_t glyph_len = read_be_uint(xdv, pos, 2);
+      pos += 2 + glyph_len * 10;
+    } else if (op == PTEXDIR) {
+      pos += 1;
+    } else {
+      throw std::runtime_error("Unsupported XDV opcode while scanning font definitions");
+    }
+    if (pos > xdv.size()) throw std::runtime_error("Malformed XDV while scanning font definitions");
+  }
+}
+
+std::vector<uint8_t> merged_fontdefs(const XdvParts &parts, const std::vector<uint8_t> &xdv_body) {
+  FontDefMap fontdefs;
+  collect_fontdefs_from_bytes(parts.fontdefs, fontdefs);
+  collect_fontdefs_from_bytes(xdv_body, fontdefs);
+  std::vector<uint8_t> merged;
+  for (const auto &entry : fontdefs) merged.insert(merged.end(), entry.second.begin(), entry.second.end());
+  return merged;
+}
 
 XdvParts read_xdv_parts(const fs::path &xdv_path) {
   auto xdv = read_file(xdv_path);
@@ -281,7 +412,8 @@ size_t finalize_xdv_body(const std::vector<uint8_t> &xdv_body, const fs::path &o
   append_be32(out, 0x1d200000);
   append_be16(out, 20);
   append_be16(out, page_count);
-  out.insert(out.end(), parts.fontdefs.begin(), parts.fontdefs.end());
+  std::vector<uint8_t> fontdefs = merged_fontdefs(parts, xdv_body);
+  out.insert(out.end(), fontdefs.begin(), fontdefs.end());
   out.push_back(249);
   append_be32(out, post_offset);
   out.push_back(7);

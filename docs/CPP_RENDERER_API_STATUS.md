@@ -38,6 +38,11 @@ tracked here as TODO:
 
 ## Remaining Product Work
 
+- Evaluate a persistent renderer helper process for fault isolation while
+  preserving hot-live performance. The helper would own the XeTeX/xdvipdfmx
+  daemon DLLs and kpathsea state; if a legacy TeX Live dependency calls
+  `exit()`, only the helper dies, while the host GUI/renderer DLL can report a
+  normalized crash outcome and restart the helper.
 - Add a stable host-language binding once the embedding language is known.
 - Decide whether `auto_restart` needs a real disabled mode; zero-initialized
   configs currently keep automatic recovery enabled.

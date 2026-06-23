@@ -69,6 +69,7 @@ scripts/
   smoke-cpp-renderer.sh           Canonical C++ renderer smoke entrypoint.
   stage-stemtex.sh                Stage bin/dll/include/share/texmf-dist.
   build-stemtex-installer.sh      Stage runtime/GUI/SDK and build installer.
+  generate-profile-warmup.py      Generate profile warmup.tex from preamble capabilities.
   generate-gui-icon.py            Regenerate GUI PNG/ICO from SVG.
   refresh-static-runtime-cache.sh Rebuild profile warmup/cache data.
   sync-renderer-sdk-to-runtime.sh Copy renderer DLL/lib/header into runtime.
@@ -97,19 +98,18 @@ trees, and `dist/` is for distributable runtime/installer artifacts.
 ## Bundled Profiles
 
 Each profile is a directory with `preamble.tex` and `warmup.tex`.  The GUI scans
-these directories and passes the selected one to the renderer.
+these directories and passes the selected one to the renderer. Warmup files are
+generated from the profile preamble with `scripts/generate-profile-warmup.py` so
+coverage follows declared fonts and packages rather than an open-ended snippet
+corpus.
 
-Current source profiles:
+Current source profiles are intentionally kept small so warmup coverage can stay
+meaningful:
 
 | Profile | Intended use |
 | --- | --- |
-| `math_light` | Latin text plus Unicode math, matrices, cases, color. |
-| `cjk_math_light` | Chinese/English text plus Unicode math and simple CJK fonts. |
-| `stem_units` | CJK STEM text with `siunitx`, `mhchem`, Unicode math, and color. |
-| `chemistry` | CJK chemistry snippets focused on `mhchem`. |
-| `physics_cjk` | CJK physics snippets with `physics`, Unicode math, color, and `cancel`. |
 | `unicodemath` | Broad Latin STEM profile with math, chemistry, physics, color, and cancel. |
-| `unicodemath_cjk` | Broad CJK STEM profile with the same package set. |
+| `unicodemath_cjk` | Broad CJK STEM profile with the same package set; this is the default maintained warmup target. |
 
 ## Build
 

@@ -161,7 +161,7 @@ setlocal
 set "TLROOT=%~dp0"
 if "%TLROOT:~-1%"=="\" set "TLROOT=%TLROOT:~0,-1%"
 set "PROFILE=%~1"
-if "%PROFILE%"=="" set "PROFILE=%TLROOT%\..\gui\profiles\chemistry"
+if "%PROFILE%"=="" set "PROFILE=%TLROOT%\..\gui\profiles\unicodemath_cjk"
 if not exist "%PROFILE%\warmup.tex" exit /b 0
 if not exist "%TLROOT%\texmf-dist\web2c\texmf.cnf" exit /b 0
 mkdir "%TLROOT%\texmf-var\fonts\conf\conf.d" >nul 2>nul

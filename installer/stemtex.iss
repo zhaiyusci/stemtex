@@ -56,7 +56,7 @@ Source: "{#SourceDir}\gui\*"; DestDir: "{app}\gui"; Flags: ignoreversion recurse
 Name: "{autoprograms}\StemTeX Renderer GUI"; Filename: "{app}\gui\stemtex-renderer-gui.exe"; WorkingDir: "{app}\gui"; Components: gui
 
 [Run]
-Filename: "{app}\runtime\refresh-profile-cache.bat"; Parameters: """{app}\gui\profiles\chemistry"""; WorkingDir: "{app}\runtime"; Flags: runhidden waituntilterminated; StatusMsg: "Preparing StemTeX font and profile cache..."; Check: ShouldRunInstallWarmup
+Filename: "{app}\runtime\refresh-profile-cache.bat"; Parameters: """{app}\gui\profiles\unicodemath_cjk"""; WorkingDir: "{app}\runtime"; Flags: runhidden waituntilterminated; StatusMsg: "Preparing StemTeX font and profile cache..."; Check: ShouldRunInstallWarmup
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\runtime\texmf-var\fonts\cache"
