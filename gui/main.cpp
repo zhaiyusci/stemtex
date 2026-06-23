@@ -492,7 +492,7 @@ class MainWindow : public QMainWindow {
  private:
   void setUiReady(bool ready) {
     bool hasProfile = profileCombo_ && profileCombo_->currentIndex() >= 0;
-    renderButton_->setEnabled(ready && hasProfile);
+    renderButton_->setEnabled(hasProfile);
     if (profileCombo_) profileCombo_->setEnabled(ready);
   }
 
