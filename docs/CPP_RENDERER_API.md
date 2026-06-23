@@ -193,6 +193,9 @@ int stemtex_renderer_cancel_current(StemTeXRenderer *renderer, StemTeXErrorCode 
 StemTeXRendererStatus stemtex_renderer_status(StemTeXRenderer *renderer);
 int stemtex_renderer_engine_snapshot(StemTeXRenderer *renderer, StemTeXEngineSnapshot *snapshot);
 StemTeXErrorCode stemtex_renderer_last_error_code(StemTeXRenderer *renderer);
+StemTeXRenderOutcomeCode stemtex_renderer_last_outcome_code(StemTeXRenderer *renderer);
+int stemtex_renderer_last_issue_flags(StemTeXRenderer *renderer);
+char *stemtex_renderer_last_outcome_message(StemTeXRenderer *renderer);
 char *stemtex_renderer_get_log_tail(StemTeXRenderer *renderer, int max_bytes);
 const char *stemtex_renderer_version(void);
 const char *stemtex_renderer_abi_version(void);
@@ -245,12 +248,56 @@ lights instead of inferring readiness from render callbacks or summary JSON.
 Render result:
 
 ```cpp
+typedef enum StemTeXRenderOutcomeCode {
+  STEMTEX_RENDER_OUTCOME_OK = 0,
+  STEMTEX_RENDER_OUTCOME_RECOVERABLE = 1,
+  STEMTEX_RENDER_OUTCOME_INVALID_ARGUMENT = 100,
+  STEMTEX_RENDER_OUTCOME_BAD_CONFIG = 101,
+  STEMTEX_RENDER_OUTCOME_WORKER_STARTUP = 102,
+  STEMTEX_RENDER_OUTCOME_WORKER_TIMEOUT = 103,
+  STEMTEX_RENDER_OUTCOME_WORKER_RESTARTING = 104,
+  STEMTEX_RENDER_OUTCOME_WORKER_BUSY = 105,
+  STEMTEX_RENDER_OUTCOME_TEX_SNIPPET = 106,
+  STEMTEX_RENDER_OUTCOME_XDVIPDFMX = 107,
+  STEMTEX_RENDER_OUTCOME_CANCELLED = 108,
+  STEMTEX_RENDER_OUTCOME_FILESYSTEM = 109,
+  STEMTEX_RENDER_OUTCOME_INTERNAL = 110
+} StemTeXRenderOutcomeCode;
+
 typedef struct StemTeXRenderResult {
   char *request_id_utf8;
   char *pdf_path_utf8;
   char *summary_json_utf8;
+  StemTeXRenderOutcomeCode outcome_code;
+  int issue_flags;
+  char *outcome_message_utf8;
 } StemTeXRenderResult;
 ```
+
+`StemTeXErrorCode` reports whether the API call itself succeeded. Successful
+calls may still produce a PDF with recoverable rendering issues. Hosts should
+therefore check `StemTeXRenderResult::outcome_code` after a successful render:
+
+- `STEMTEX_RENDER_OUTCOME_OK`: PDF was generated without known recoverable
+  renderer issues.
+- `STEMTEX_RENDER_OUTCOME_RECOVERABLE`: PDF was generated, but the renderer saw
+  a recoverable issue. The current `issue_flags` value `1` means xdvipdfmx saw a
+  missing/undefined font reference and omitted affected output.
+- Values `100` and above mirror fatal API/render failures. If a synchronous
+  render call returns `0`, no `StemTeXRenderResult` is available; call
+  `stemtex_renderer_last_outcome_code`, `stemtex_renderer_last_issue_flags`, and
+  `stemtex_renderer_last_outcome_message` on the renderer to read the same
+  normalized outcome channel.
+
+The timing summary JSON repeats the same high-level fields as
+`outcomeCode`, `issueFlags`, and `outcomeMessage`. For xdvipdfmx specifically it
+also includes `xdvipdfmxReturnCode`, `xdvipdfmxIssueFlags`,
+`xdvipdfmxIssueMessage`, and `xdvipdfmxWarning`.
+
+The bundled Qt GUI is a reference consumer of this contract: when it receives a
+recoverable outcome it still displays the generated PDF preview, but shows a
+warning marker in the preview pane and includes the outcome fields in the
+details text.
 
 Cleanup:
 

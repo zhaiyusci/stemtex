@@ -25,6 +25,13 @@ tracked here as TODO:
 - `stemtex_renderer_engine_snapshot` is a synchronous cached-state read. It does
   not take the render lock and should be the single source of truth for GUI
   status indicators.
+- Render results now carry a normalized outcome code separate from the legacy
+  `StemTeXErrorCode`. A successful render can return
+  `STEMTEX_RENDER_OUTCOME_RECOVERABLE` with `issue_flags != 0`; hosts should show
+  the PDF but surface the warning to users. Failed render calls update the same
+  outcome channel through `stemtex_renderer_last_outcome_code`,
+  `stemtex_renderer_last_issue_flags`, and
+  `stemtex_renderer_last_outcome_message`.
 - Cancellation kills the active worker and makes that active render fail with
   `STEMTEX_ERROR_CANCELLED`; queued work continues after failover/rebuild.
 - Default request and `xdvipdfmx` timeouts are both 90000 ms.

@@ -20,6 +20,16 @@ out/standalone-msvc/
   xdvipdfmxdaemon.exe
 ```
 
+`dvipdfmxdaemon.dll` is used as a hot converter by the C++ renderer. Fatal
+xdvipdfmx errors are trapped inside the daemon entrypoint instead of terminating
+the host process. Some known bad-DVI conditions are treated as recoverable: for
+example, selecting an undefined font records a missing-font issue, omits
+affected output, and lets PDF generation continue. In that case
+`dvipdfmxdaemon_convert` returns `2` (`RECOVERABLE_ERROR`) after writing the PDF.
+The DLL also exports `dvipdfmxdaemon_last_issue_flags` and
+`dvipdfmxdaemon_last_issue_message` so the renderer can report the condition to
+host applications.
+
 Install those binaries into the StemTeX side tree with:
 
 ```sh
