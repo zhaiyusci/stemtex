@@ -28,7 +28,6 @@ StemTeX\
       stemtex_renderer.h
     sdk\lib\
       stemtex-renderer.lib
-    worker-template.tex
     texmf-dist\
     texmf-var\
     refresh-font-cache.ps1
@@ -46,8 +45,8 @@ Build sequence:
 ./texlive-xetex/install-msvc-standalone-to-side-tree.sh
 ./scripts/refresh-static-runtime-cache.sh ./dist/stemtex-texlive-daemon-static ./gui/profiles/unicodemath_cjk
 ./scripts/build-cpp-daemon.sh
-./scripts/sync-renderer-sdk-to-runtime.sh
 ./scripts/build-gui.sh
+./scripts/stage-stemtex.sh
 ./scripts/build-stemtex-installer.sh
 ```
 

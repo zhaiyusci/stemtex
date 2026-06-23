@@ -589,6 +589,44 @@ struct RendererConfig {
   bool delete_intermediates = false;
 };
 
+constexpr const char *kDefaultWorkerTemplate = R"STEMTEX_WORKER(\input{@@STEMTEX_PREAMBLE@@}
+\newcount\snippetcount
+\def\workerstopline{\workerstop}
+\pagestyle{empty}
+\begin{document}
+\typeout{WORKER_READY}
+\def\workerloop{%
+  \advance\snippetcount by 1
+  \typeout{WORKER_WAIT:\the\snippetcount}%
+  \read16 to\snippetHsize
+  \ifx\snippetHsize\workerstopline
+    \typeout{WORKER_STOPPED}%
+  \else
+    \read16 to\requestfile
+    \begin{preview}%
+      \begin{minipage}{\snippetHsize}%
+        \hsize=\snippetHsize
+        \parindent=0pt
+        \begingroup
+        \setcounter{page}{1}%
+        \setcounter{equation}{0}%
+        \setcounter{footnote}{0}%
+        \normalfont\normalsize\normalcolor
+        \scrollmode
+        \input\requestfile
+        \par
+        \errorstopmode
+        \endgroup
+      \end{minipage}%
+    \end{preview}%
+    \typeout{WORKER_DONE:\the\snippetcount}%
+    \workerloop
+  \fi
+}
+\workerloop
+\end{document}
+)STEMTEX_WORKER";
+
 std::string installed_warmup_body(const RendererConfig &cfg) {
   std::string warmup = read_text_file(cfg.warmup_tex);
   const std::string begin = "\\begin{document}";
@@ -616,7 +654,7 @@ std::wstring worker_command(const RendererConfig &cfg, const fs::path &out_dir) 
 }
 
 void materialize_worker_template(const RendererConfig &cfg, const fs::path &out_dir) {
-  std::string text = read_text_file(cfg.worker_template);
+  std::string text = cfg.worker_template.empty() ? std::string(kDefaultWorkerTemplate) : read_text_file(cfg.worker_template);
   replace_all(text, "@@STEMTEX_PREAMBLE@@", slash_path(cfg.preamble_tex));
   write_text_file(out_dir / "worker-template.tex", text);
 }
@@ -1019,9 +1057,6 @@ int normalize_spare_worker_count(int count) {
 
 RendererConfig config_from_api(const StemTeXConfig *config) {
   RendererConfig cfg;
-  cfg.repo_root = config && config->repo_root_utf8 && *config->repo_root_utf8
-                      ? fs::absolute(config->repo_root_utf8)
-                      : fs::current_path();
   if (!config || !config->runtime_root_utf8 || !*config->runtime_root_utf8) {
     throw ApiException(STEMTEX_ERROR_BAD_CONFIG, "runtime_root_utf8 is required");
   }
@@ -1033,6 +1068,9 @@ RendererConfig config_from_api(const StemTeXConfig *config) {
     throw ApiException(STEMTEX_ERROR_BAD_CONFIG, "profile_root_utf8 is required");
   }
   cfg.profile_root = fs::absolute(config->profile_root_utf8);
+  cfg.repo_root = config && config->repo_root_utf8 && *config->repo_root_utf8
+                      ? fs::absolute(config->repo_root_utf8)
+                      : cfg.profile_root;
   std::string instance_id = random_id();
   fs::path default_work_root = fs::temp_directory_path() / "stemtex-renderer" / instance_id;
   cfg.state_root = config && config->state_root_utf8 && *config->state_root_utf8
@@ -1044,9 +1082,6 @@ RendererConfig config_from_api(const StemTeXConfig *config) {
   cfg.warmup_tex = cfg.profile_root / "warmup.tex";
   if (config && config->worker_template_utf8 && *config->worker_template_utf8) {
     cfg.worker_template = fs::absolute(config->worker_template_utf8);
-  } else {
-    fs::path repo_worker = cfg.repo_root / "cpp-daemon" / "worker-template.tex";
-    cfg.worker_template = fs::exists(repo_worker) ? repo_worker : cfg.runtime_root / "worker-template.tex";
   }
   cfg.preamble_tex = cfg.profile_root / "preamble.tex";
   if (config) {
@@ -1080,7 +1115,7 @@ std::string validate_config_text(const RendererConfig &cfg) {
   require_dir(cfg.texmf_root / "texmf-dist", "texmf-dist");
   require_dir(cfg.texmf_root / "texmf-dist" / "web2c", "texmf-dist web2c");
   require_file(cfg.warmup_tex, "warmup tex");
-  require_file(cfg.worker_template, "worker template");
+  if (!cfg.worker_template.empty()) require_file(cfg.worker_template, "worker template");
   require_file(cfg.preamble_tex, "preamble tex");
   require_dir(cfg.runtime_root / "texmf-var" / "fonts" / "conf", "fontconfig conf");
   require_dir(cfg.runtime_root / "texmf-var" / "fonts" / "cache", "fontconfig cache");
@@ -1101,12 +1136,8 @@ struct StemTeXRenderer {
     snapshot_spare_target.store(cfg.spare_worker_count);
     publish_status(STEMTEX_STATUS_STARTING, STEMTEX_STAGE_REBUILDING);
     worker_env = worker_environment(cfg);
-    try {
-      converter = std::make_unique<DvipdfmxDaemon>(cfg);
-      append_log("dvipdfmx hot-start DLL initialized\n");
-    } catch (const std::exception &e) {
-      append_log(std::string("dvipdfmx hot-start DLL unavailable; using exe fallback: ") + e.what() + "\n");
-    }
+    converter = std::make_unique<DvipdfmxDaemon>(cfg);
+    append_log("dvipdfmx hot-start DLL initialized\n");
     primary = create_ready_worker("primary");
     schedule_spare_rebuild_locked();
     publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
@@ -1200,7 +1231,7 @@ struct StemTeXRenderer {
     slot->last_xdv_offset = 0;
     slot->next_request = 0;
     WorkerSlot *raw = slot.get();
-    raw->child.start(worker_command(cfg, raw->live_out), cfg.repo_root, worker_env, [this, raw](const std::string &text) {
+    raw->child.start(worker_command(cfg, raw->live_out), raw->live_out, worker_env, [this, raw](const std::string &text) {
       append_log(text);
       {
         std::lock_guard<std::mutex> lock(raw->mu);
@@ -1239,7 +1270,7 @@ struct StemTeXRenderer {
       slot.done = false;
     }
     slot.child.write_stdin("360pt\n");
-    slot.child.write_stdin(slash_path(fs::relative(req_path, cfg.repo_root)) + "\n");
+    slot.child.write_stdin(slash_path(req_path) + "\n");
     std::unique_lock<std::mutex> lock(slot.mu);
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(cfg.request_timeout_ms);
     bool completed = false;
@@ -1553,7 +1584,7 @@ struct StemTeXRenderer {
     }
     int resolved_width_pt = effective_width(cfg, width_pt);
     slot.child.write_stdin(std::to_string(resolved_width_pt) + "pt\n");
-    slot.child.write_stdin(slash_path(fs::relative(req_path, cfg.repo_root)) + "\n");
+    slot.child.write_stdin(slash_path(req_path) + "\n");
 
     {
       std::unique_lock<std::mutex> lock(slot.mu);
@@ -1617,31 +1648,18 @@ struct StemTeXRenderer {
     size_t final_bytes = finalize_xdv_body(cumulative, final_path, parts, (uint16_t)request_no, last_bop);
     int64_t convert_start = now_ms();
     publish_status_and_counts_locked(STEMTEX_STATUS_RENDERING, STEMTEX_STAGE_CONVERTING);
-    fs::path xdvipdfmx = cfg.runtime_root / "bin" / "windows" / "xdvipdfmxdaemon.exe";
     std::string xdvipdfmx_options = "-q -z 1 -C 64";
     std::string page_range = std::to_string(request_no) + "-" + std::to_string(request_no);
-    std::string xdvipdfmx_mode = converter ? "daemon-dll" : "exe-fallback";
+    std::string xdvipdfmx_mode = "daemon-dll";
     int xdvipdfmx_return_code = 0;
     int xdvipdfmx_issue_flags = 0;
     std::string xdvipdfmx_issue_message;
     try {
-      try {
-        if (!converter) throw std::runtime_error("dvipdfmx hot-start DLL unavailable");
-        auto convert_result = converter->convert(final_path, pdf_path, page_range);
-        xdvipdfmx_mode = convert_result.mode;
-        xdvipdfmx_return_code = convert_result.return_code;
-        xdvipdfmx_issue_flags = convert_result.issue_flags;
-        xdvipdfmx_issue_message = convert_result.issue_message;
-      } catch (const std::exception &) {
-        xdvipdfmx_mode = "exe-fallback";
-        xdvipdfmx_return_code = 0;
-        xdvipdfmx_issue_flags = 0;
-        xdvipdfmx_issue_message.clear();
-        std::ostringstream cmd;
-        cmd << quote_cmd_arg(xdvipdfmx.string()) << " " << xdvipdfmx_options << " -s " << page_range
-            << " -o " << quote_cmd_arg(pdf_path.string()) << " " << quote_cmd_arg(final_path.string());
-        run_sync(cmd.str(), cfg.repo_root, worker_env, (DWORD)cfg.xdvipdfmx_timeout_ms);
-      }
+      auto convert_result = converter->convert(final_path, pdf_path, page_range);
+      xdvipdfmx_mode = convert_result.mode;
+      xdvipdfmx_return_code = convert_result.return_code;
+      xdvipdfmx_issue_flags = convert_result.issue_flags;
+      xdvipdfmx_issue_message = convert_result.issue_message;
     } catch (const std::exception &e) {
       publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
       throw ApiException(STEMTEX_ERROR_XDVIPDFMX, e.what());
@@ -1986,7 +2004,6 @@ STEMTEX_API int stemtex_refresh_font_cache(const char *runtime_root_utf8, const 
     cfg.state_root = cfg.runtime_root / "texmf-var" / "cache-warmup-state";
     cfg.renders_root = cfg.runtime_root / "texmf-var" / "cache-warmup-renders";
     cfg.warmup_tex = cfg.profile_root / "warmup.tex";
-    cfg.worker_template = cfg.repo_root / "cpp-daemon" / "worker-template.tex";
     cfg.preamble_tex = cfg.profile_root / "preamble.tex";
     cfg.request_timeout_ms = 90000;
     cfg.xdvipdfmx_timeout_ms = 90000;

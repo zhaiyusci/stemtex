@@ -54,7 +54,6 @@ cpp-daemon/
   stemtex_renderer.h              Public C ABI.
   stemtex_renderer.cpp            Renderer DLL implementation.
   stemtex_renderer_smoke.cpp      Smoke/timing executable.
-  worker-template.tex             Live XeTeX worker template.
 
 gui/
   main.cpp                        StemTeX Renderer GUI.
@@ -72,7 +71,6 @@ scripts/
   generate-profile-warmup.py      Generate profile warmup.tex from preamble capabilities.
   generate-gui-icon.py            Regenerate GUI PNG/ICO from SVG.
   refresh-static-runtime-cache.sh Rebuild profile warmup/cache data.
-  sync-renderer-sdk-to-runtime.sh Copy renderer DLL/lib/header into runtime.
 
 texlive-xetex/
   src/                            Generated-C XeTeX and xdvipdfmx sources.
@@ -120,7 +118,6 @@ Build the daemon engine bundle:
 
 ```sh
 cd /path/to/stemtex
-./scripts/stage-stemtex.sh
 ./texlive-xetex/build-standalone-msvc.sh
 ./texlive-xetex/install-msvc-standalone-to-side-tree.sh
 ./scripts/refresh-static-runtime-cache.sh ./dist/stemtex-texlive-daemon-static ./gui/profiles/unicodemath_cjk
@@ -130,8 +127,8 @@ Build the renderer and GUI:
 
 ```sh
 ./scripts/build-cpp-daemon.sh
-./scripts/sync-renderer-sdk-to-runtime.sh
 ./scripts/build-gui.sh
+./scripts/stage-stemtex.sh
 ```
 
 Run the C++ renderer smoke suite:
@@ -144,7 +141,7 @@ Run the C++ renderer smoke suite:
 Run a native GUI smoke test:
 
 ```sh
-timeout 90s ./build/gui/Release/stemtex-renderer-gui.exe --smoke
+timeout 90s ./staging/gui/stemtex-renderer-gui.exe --smoke
 ```
 
 Build the installer:
@@ -184,7 +181,6 @@ StemTeX/
       stemtex_renderer.h
     sdk/lib/
       stemtex-renderer.lib
-    worker-template.tex
     gui/profiles/
       <name>/preamble.tex
       <name>/warmup.tex

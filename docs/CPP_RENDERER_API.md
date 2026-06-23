@@ -109,12 +109,11 @@ typedef struct StemTeXConfig {
 
 Fields:
 
-- `repo_root_utf8`: repository/resource root. The renderer expects to find
-  `cpp-daemon/worker-template.tex` under this tree in a source checkout. If it
-  is absent, it falls back to `runtime_root\worker-template.tex`.
+- `repo_root_utf8`: optional working directory for relative TeX inputs inside
+  snippets. It is not used for renderer resource discovery.
 - `runtime_root_utf8`: StemTeX runtime root, meaning the directory that directly
-  contains `bin\windows\xetexdaemon.exe` and `worker-template.tex`. In the
-  installer layout this is normally `C:\StemTeX\runtime`.
+  contains `bin\windows\xetexdaemon.exe`. In the installer layout this is
+  normally `C:\StemTeX\runtime`.
 - `texmf_root_utf8`: optional TeX Live tree used for packages and TeX fonts.
   If null, it defaults to `runtime_root_utf8`. The renderer still runs patched
   binaries, formats, fontconfig configuration, and cache from `runtime_root_utf8`;
@@ -139,7 +138,8 @@ Fields:
   recovery enabled.
 - `delete_intermediates`: delete request/XDV intermediates after successful
   render while keeping PDF and summary.
-- `worker_template_utf8`: optional worker template override.
+- `worker_template_utf8`: optional worker template override. Leave this null for
+  the built-in live XeTeX worker template.
 
 Create a renderer:
 
@@ -414,9 +414,8 @@ for failover/recovery; it is not used as a parallel rendering pool.
 render returns `STEMTEX_ERROR_CANCELLED`, and the renderer promotes/rebuilds a
 worker for subsequent queued requests.
 
-If primary and all spares are unavailable, the renderer falls back to creating a
-new primary synchronously. That is the degraded path and can pay cold-start
-latency.
+If primary and all spares are unavailable, the renderer creates a new primary
+synchronously. That degraded path can pay cold-start latency.
 
 If `xdvipdfmx` fails after TeX has already produced XDV, the renderer returns
 failure and includes the converter stdout/stderr tail in `error_utf8`. This path
@@ -464,7 +463,9 @@ cd /path/to/stemtex
 Useful environment variables:
 
 ```text
-STEMTEX_RUNTIME  Runtime tree, defaulting to dist/stemtex-texlive-daemon-static.
+STAGE_ROOT       Staged StemTeX tree used by the smoke script.
+STEMTEX_RUNTIME  Explicit runtime tree override for smoke/timing scripts.
+STEMTEX_PROFILE  Explicit profile override for smoke/timing scripts.
 RUNS             Number of repeated renders for applicable cases.
 SPARES           Hot spare target for the renderer.
 TIMEOUT          Per smoke command timeout in seconds.

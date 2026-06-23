@@ -23,7 +23,6 @@
 #include <QImage>
 #include <QPainter>
 #include <QPixmap>
-#include <QProcessEnvironment>
 #include <QPushButton>
 #include <QComboBox>
 #include <QSlider>
@@ -55,38 +54,18 @@
 
 namespace {
 
-QString defaultRepoRoot() {
-  QDir dir(QCoreApplication::applicationDirPath());
-  for (int i = 0; i < 8; ++i) {
-    if (QFileInfo::exists(dir.filePath("cpp-daemon/worker-template.tex")) && QFileInfo::exists(dir.filePath("gui/profiles"))) {
-      return dir.absolutePath();
-    }
-    if (!dir.cdUp()) break;
-  }
-  return QDir::currentPath();
+QString appResourceRoot() {
+  return QDir::cleanPath(QCoreApplication::applicationDirPath());
 }
 
 QString defaultRuntimeRoot() {
-  QString env = QProcessEnvironment::systemEnvironment().value("STEMTEX_RUNTIME");
-  if (!env.isEmpty()) return QDir::cleanPath(QDir(env).absolutePath());
   QDir appDir(QCoreApplication::applicationDirPath());
   QString installedRuntime = appDir.filePath("../runtime");
-  if (QFileInfo::exists(QDir(installedRuntime).filePath("bin/windows/xetexdaemon.exe"))) {
-    return QDir::cleanPath(installedRuntime);
-  }
-  QString portableRuntime = appDir.filePath("runtime");
-  if (QFileInfo::exists(QDir(portableRuntime).filePath("bin/windows/xetexdaemon.exe"))) {
-    return QDir::cleanPath(portableRuntime);
-  }
-  return QString();
+  return QDir::cleanPath(QDir(installedRuntime).absolutePath());
 }
 
 QString normalizeRuntimeRoot(const QString &path) {
   QDir dir(QDir::cleanPath(QDir(path).absolutePath()));
-  QString nestedRuntime = dir.filePath("runtime");
-  if (QFileInfo::exists(QDir(nestedRuntime).filePath("bin/windows/xetexdaemon.exe"))) {
-    return QDir::cleanPath(nestedRuntime);
-  }
   return QDir::cleanPath(dir.absolutePath());
 }
 
@@ -95,8 +74,6 @@ QString normalizeTexmfRoot(const QString &path) {
 }
 
 QString defaultTexmfRoot(const QString &runtimeRoot) {
-  QString env = QProcessEnvironment::systemEnvironment().value("STEMTEX_TEXMF_ROOT");
-  if (!env.isEmpty()) return normalizeTexmfRoot(env);
   return normalizeTexmfRoot(runtimeRoot);
 }
 
@@ -133,20 +110,18 @@ bool rendererProfileInfo(const QString &profileRoot, ProfileEntry *entry, QStrin
   return true;
 }
 
-QVector<ProfileEntry> profileRoots(const QString &repoRoot, QString *errorText) {
+QVector<ProfileEntry> profileRoots(const QString &, QString *errorText) {
   QVector<ProfileEntry> profiles;
-  QStringList seen;
   QDir appDir(QCoreApplication::applicationDirPath());
-  for (const QString &base : {appDir.filePath("profiles"), QDir(repoRoot).filePath("gui/profiles")}) {
-    QDir dir(base);
-    if (!dir.exists()) continue;
-    for (const QFileInfo &candidate : dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
-      ProfileEntry profile;
-      if (!rendererProfileInfo(candidate.absoluteFilePath(), &profile, errorText)) continue;
-      if (seen.contains(profile.path)) continue;
-      seen << profile.path;
-      profiles.push_back(profile);
-    }
+  QDir dir(appDir.filePath("profiles"));
+  if (!dir.exists()) {
+    if (errorText) *errorText = QString("profile directory not found: %1").arg(dir.absolutePath());
+    return profiles;
+  }
+  for (const QFileInfo &candidate : dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
+    ProfileEntry profile;
+    if (!rendererProfileInfo(candidate.absoluteFilePath(), &profile, errorText)) continue;
+    profiles.push_back(profile);
   }
   return profiles;
 }
@@ -960,7 +935,7 @@ int main(int argc, char **argv) {
   QStringList args = app.arguments();
   bool smoke = args.contains("--smoke");
   args.removeAll("--smoke");
-  QString repoRoot = args.size() > 1 ? args.at(1) : defaultRepoRoot();
+  QString repoRoot = args.size() > 1 ? args.at(1) : appResourceRoot();
   QString runtimeRoot = args.size() > 2 ? args.at(2) : defaultRuntimeRoot();
   configureRendererDllSearch(runtimeRoot);
   QString profileError;

@@ -2,8 +2,9 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-runtime_root="${STEMTEX_RUNTIME:-$repo_root/dist/stemtex-texlive-daemon-static}"
-profile_root="${STEMTEX_PROFILE:-$repo_root/gui/profiles/unicodemath_cjk}"
+stage_root="${STAGE_ROOT:-$repo_root/staging}"
+runtime_root="${STEMTEX_RUNTIME:-$stage_root/runtime}"
+profile_root="${STEMTEX_PROFILE:-$stage_root/gui/profiles/unicodemath_cjk}"
 exe="$repo_root/build/cpp-daemon/Release/stemtex-renderer-smoke.exe"
 timeout_s="${TIMEOUT:-90}"
 runs="${RUNS:-2}"
@@ -65,7 +66,7 @@ case "$mode" in
     ;;
   *)
     echo "usage: $0 [quick|errors|timing|case <name>]" >&2
-    echo "environment: STEMTEX_RUNTIME, RUNS, SPARES, TIMEOUT, BUILD=0" >&2
+    echo "environment: STAGE_ROOT, STEMTEX_RUNTIME, STEMTEX_PROFILE, RUNS, SPARES, TIMEOUT, BUILD=0" >&2
     exit 2
     ;;
 esac

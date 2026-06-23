@@ -44,7 +44,6 @@ Source: "{#SourceDir}\runtime\bin\*"; DestDir: "{app}\runtime\bin"; Flags: ignor
 Source: "{#SourceDir}\runtime\sdk\*"; DestDir: "{app}\runtime\sdk"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#SourceDir}\runtime\VERSION"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#SourceDir}\runtime\StemTeX.ico"; DestDir: "{app}\runtime"; Flags: ignoreversion
-Source: "{#SourceDir}\runtime\worker-template.tex"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#SourceDir}\runtime\run-xelatexdaemon.bat"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#SourceDir}\runtime\refresh-profile-cache.bat"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#SourceDir}\runtime\texmf-var\web2c\*"; DestDir: "{app}\runtime\texmf-var\web2c"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.aux;*.log"
