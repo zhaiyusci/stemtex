@@ -99,9 +99,9 @@ trees, and `dist/` is for distributable runtime/installer artifacts.
 
 Each profile is a directory with `preamble.tex` and `warmup.tex`.  The GUI scans
 these directories and passes the selected one to the renderer. Warmup files are
-generated from the profile preamble with `scripts/generate-profile-warmup.py` so
-coverage follows declared fonts and packages rather than an open-ended snippet
-corpus.
+generated from the profile preamble with `scripts/generate-profile-warmup.py`.
+They are minimal readiness probes; correctness comes from the renderer merging
+font definitions found in live XDV output.
 
 Current source profiles are intentionally kept small so warmup coverage can stay
 meaningful:
