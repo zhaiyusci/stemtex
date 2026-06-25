@@ -1,5 +1,417 @@
 #define EXTERN extern
 #include "xetexd.h"
+#include <setjmp.h>
+#include <string.h>
+
+typedef struct {
+  boolean valid;
+  memoryword *yzmem_copy;
+  memoryword *zeqtb_copy;
+  twohalves *yhash_copy;
+  memoryword *savestack_copy;
+  liststaterecord *nest_copy;
+  instaterecord *inputstack_copy;
+  integer *linestack_copy;
+  strnumber *sourcefilenamestack_copy;
+  strnumber *fullsourcefilenamestack_copy;
+  halfword *paramstack_copy;
+  halfword *ifstack_copy;
+  savepointer *grpstack_copy;
+  packedUTF16code *strpool_copy;
+  poolpointer *strstart_copy;
+  integer yzmem_count;
+  integer zeqtb_count;
+  integer yhash_count;
+  integer strpool_count;
+  integer strstart_count;
+  halfword lomemmax_copy;
+  halfword himemmin_copy;
+  integer varused_copy, dynused_copy;
+  halfword avail_copy;
+  halfword memend_copy;
+  halfword rover_copy;
+  integer nestptr_copy;
+  integer maxneststack_copy;
+  liststaterecord curlist_copy;
+  short shownmode_copy;
+  halfword hashused_copy;
+  halfword hashhigh_copy;
+  boolean nonewcontrolsequence_copy;
+  integer cscount_copy;
+  integer saveptr_copy;
+  integer maxsavestack_copy;
+  quarterword curlevel_copy;
+  groupcode curgroup_copy;
+  integer curboundary_copy;
+  eightbits curcmd_copy;
+  halfword curchr_copy;
+  halfword curcs_copy;
+  halfword curtok_copy;
+  integer inputptr_copy;
+  integer maxinstack_copy;
+  instaterecord curinput_copy;
+  integer inopen_copy;
+  integer openparens_copy;
+  integer line_copy;
+  unsigned char scannerstatus_copy;
+  halfword warningindex_copy;
+  halfword defref_copy;
+  integer paramptr_copy;
+  integer maxparamstack_copy;
+  integer alignstate_copy;
+  integer baseptr_copy;
+  halfword parloc_copy;
+  halfword partoken_copy;
+  boolean forceeof_copy;
+  boolean isincsname_copy;
+  halfword curmark_copy[5];
+  unsigned char longstate_copy;
+  halfword pstack_copy[9];
+  integer curval_copy;
+  integer curval1_copy;
+  unsigned char curvallevel_copy;
+  smallnumber radix_copy;
+  glueord curorder_copy;
+  halfword condptr_copy;
+  unsigned char iflimit_copy;
+  smallnumber curif_copy;
+  integer ifline_copy;
+  integer skipline_copy;
+  poolpointer poolptr_copy;
+  strnumber strptr_copy;
+  integer first_copy;
+  integer last_copy;
+  integer maxbufstack_copy;
+  unsigned char interaction_copy;
+  unsigned char interactionoption_copy;
+  schar errorcount_copy;
+  unsigned char history_copy;
+  integer spaceclass_copy;
+  integer prevclass_copy;
+  boolean cancelboundary_copy;
+  boolean insdisc_copy;
+  halfword aftertoken_copy;
+  internalfontnumber mainf_copy;
+  fourquarters maini_copy;
+  fourquarters mainj_copy;
+  fontindex maink_copy;
+  halfword mainp_copy;
+  halfword mainpp_copy;
+  halfword mainppp_copy;
+  halfword mainh_copy;
+  boolean ishyph_copy;
+  integer mains_copy;
+  halfword bchar_copy;
+  halfword falsebchar_copy;
+  internalfontnumber curf_copy;
+  integer curc_copy;
+  fourquarters curi_copy;
+  halfword curp_copy;
+  halfword curq_copy;
+  halfword ligstack_copy;
+  boolean ligaturepresent_copy;
+  boolean lfthit_copy;
+  boolean rthit_copy;
+  halfword curl_copy;
+  halfword curr_copy;
+  halfword saroot_copy[8];
+  halfword curptr_copy;
+  memoryword sanull_copy;
+  halfword sachain_copy;
+  quarterword salevel_copy;
+} stemtexcheckpointstate;
+
+static stemtexcheckpointstate stemtex_checkpoint;
+static boolean stemtex_checkpoint_ready = false;
+jmp_buf stemtex_main_jmp;
+boolean stemtex_main_jmp_ready = false;
+
+static boolean stemtex_special_matches(const char *literal)
+{
+  poolpointer start = strstart[(strptr) - 65536L];
+  poolpointer end = poolptr;
+  size_t len = strlen(literal);
+  poolpointer i;
+  if ((poolpointer)len != end - start) return false;
+  for (i = 0; i < (poolpointer)len; ++i) {
+    if (strpool[start + i] != (packedUTF16code)literal[i]) return false;
+  }
+  return true;
+}
+
+static void stemtex_checkpoint_alloc(void)
+{
+  integer yzmem_count = memmax - memmin + 1;
+  integer zeqtb_count = eqtbtop + 1;
+  integer yhash_count = 1 + hashtop - hashoffset;
+  integer strpool_count = poolptr > 1 ? poolptr : 1;
+  integer strstart_count = strptr >= 65536L ? strptr - 65536L + 1 : 1;
+  if (stemtex_checkpoint.yzmem_count != yzmem_count) {
+    libcfree(stemtex_checkpoint.yzmem_copy);
+    stemtex_checkpoint.yzmem_copy = xmallocarray(memoryword, yzmem_count);
+    stemtex_checkpoint.yzmem_count = yzmem_count;
+  }
+  if (stemtex_checkpoint.zeqtb_count != zeqtb_count) {
+    libcfree(stemtex_checkpoint.zeqtb_copy);
+    stemtex_checkpoint.zeqtb_copy = xmallocarray(memoryword, zeqtb_count);
+    stemtex_checkpoint.zeqtb_count = zeqtb_count;
+  }
+  if (stemtex_checkpoint.yhash_count != yhash_count) {
+    libcfree(stemtex_checkpoint.yhash_copy);
+    stemtex_checkpoint.yhash_copy = xmallocarray(twohalves, yhash_count);
+    stemtex_checkpoint.yhash_count = yhash_count;
+  }
+  if (stemtex_checkpoint.savestack_copy == NULL) stemtex_checkpoint.savestack_copy = xmallocarray(memoryword, savesize);
+  if (stemtex_checkpoint.nest_copy == NULL) stemtex_checkpoint.nest_copy = xmallocarray(liststaterecord, nestsize);
+  if (stemtex_checkpoint.inputstack_copy == NULL) stemtex_checkpoint.inputstack_copy = xmallocarray(instaterecord, stacksize);
+  if (stemtex_checkpoint.linestack_copy == NULL) stemtex_checkpoint.linestack_copy = xmallocarray(integer, maxinopen);
+  if (stemtex_checkpoint.sourcefilenamestack_copy == NULL) stemtex_checkpoint.sourcefilenamestack_copy = xmallocarray(strnumber, maxinopen);
+  if (stemtex_checkpoint.fullsourcefilenamestack_copy == NULL) stemtex_checkpoint.fullsourcefilenamestack_copy = xmallocarray(strnumber, maxinopen);
+  if (stemtex_checkpoint.paramstack_copy == NULL) stemtex_checkpoint.paramstack_copy = xmallocarray(halfword, paramsize);
+  if (stemtex_checkpoint.ifstack_copy == NULL) stemtex_checkpoint.ifstack_copy = xmallocarray(halfword, savesize);
+  if (stemtex_checkpoint.grpstack_copy == NULL) stemtex_checkpoint.grpstack_copy = xmallocarray(savepointer, savesize);
+  if (stemtex_checkpoint.strpool_count < strpool_count) {
+    libcfree(stemtex_checkpoint.strpool_copy);
+    stemtex_checkpoint.strpool_copy = xmallocarray(packedUTF16code, strpool_count);
+    stemtex_checkpoint.strpool_count = strpool_count;
+  }
+  if (stemtex_checkpoint.strstart_count < strstart_count) {
+    libcfree(stemtex_checkpoint.strstart_copy);
+    stemtex_checkpoint.strstart_copy = xmallocarray(poolpointer, strstart_count);
+    stemtex_checkpoint.strstart_count = strstart_count;
+  }
+}
+
+static void stemtex_save_checkpoint(void)
+{
+  stemtex_checkpoint_alloc();
+  memcpy(stemtex_checkpoint.yzmem_copy, yzmem, sizeof(memoryword) * stemtex_checkpoint.yzmem_count);
+  memcpy(stemtex_checkpoint.zeqtb_copy, zeqtb, sizeof(memoryword) * stemtex_checkpoint.zeqtb_count);
+  memcpy(stemtex_checkpoint.yhash_copy, yhash, sizeof(twohalves) * stemtex_checkpoint.yhash_count);
+  memcpy(stemtex_checkpoint.savestack_copy, savestack, sizeof(memoryword) * savesize);
+  memcpy(stemtex_checkpoint.nest_copy, nest, sizeof(liststaterecord) * nestsize);
+  memcpy(stemtex_checkpoint.inputstack_copy, inputstack, sizeof(instaterecord) * stacksize);
+  memcpy(stemtex_checkpoint.linestack_copy, linestack, sizeof(integer) * maxinopen);
+  memcpy(stemtex_checkpoint.sourcefilenamestack_copy, sourcefilenamestack, sizeof(strnumber) * maxinopen);
+  memcpy(stemtex_checkpoint.fullsourcefilenamestack_copy, fullsourcefilenamestack, sizeof(strnumber) * maxinopen);
+  memcpy(stemtex_checkpoint.paramstack_copy, paramstack, sizeof(halfword) * paramsize);
+  memcpy(stemtex_checkpoint.ifstack_copy, ifstack, sizeof(halfword) * savesize);
+  memcpy(stemtex_checkpoint.grpstack_copy, grpstack, sizeof(savepointer) * savesize);
+  memcpy(stemtex_checkpoint.strpool_copy, strpool, sizeof(packedUTF16code) * poolptr);
+  memcpy(stemtex_checkpoint.strstart_copy, strstart, sizeof(poolpointer) * (strptr - 65536L + 1));
+  stemtex_checkpoint.lomemmax_copy = lomemmax;
+  stemtex_checkpoint.himemmin_copy = himemmin;
+  stemtex_checkpoint.varused_copy = varused;
+  stemtex_checkpoint.dynused_copy = dynused;
+  stemtex_checkpoint.avail_copy = avail;
+  stemtex_checkpoint.memend_copy = memend;
+  stemtex_checkpoint.rover_copy = rover;
+  stemtex_checkpoint.nestptr_copy = nestptr;
+  stemtex_checkpoint.maxneststack_copy = maxneststack;
+  stemtex_checkpoint.curlist_copy = curlist;
+  stemtex_checkpoint.shownmode_copy = shownmode;
+  stemtex_checkpoint.hashused_copy = hashused;
+  stemtex_checkpoint.hashhigh_copy = hashhigh;
+  stemtex_checkpoint.nonewcontrolsequence_copy = nonewcontrolsequence;
+  stemtex_checkpoint.cscount_copy = cscount;
+  stemtex_checkpoint.saveptr_copy = saveptr;
+  stemtex_checkpoint.maxsavestack_copy = maxsavestack;
+  stemtex_checkpoint.curlevel_copy = curlevel;
+  stemtex_checkpoint.curgroup_copy = curgroup;
+  stemtex_checkpoint.curboundary_copy = curboundary;
+  stemtex_checkpoint.curcmd_copy = curcmd;
+  stemtex_checkpoint.curchr_copy = curchr;
+  stemtex_checkpoint.curcs_copy = curcs;
+  stemtex_checkpoint.curtok_copy = curtok;
+  stemtex_checkpoint.inputptr_copy = inputptr;
+  stemtex_checkpoint.maxinstack_copy = maxinstack;
+  stemtex_checkpoint.curinput_copy = curinput;
+  stemtex_checkpoint.inopen_copy = inopen;
+  stemtex_checkpoint.openparens_copy = openparens;
+  stemtex_checkpoint.line_copy = line;
+  stemtex_checkpoint.scannerstatus_copy = scannerstatus;
+  stemtex_checkpoint.warningindex_copy = warningindex;
+  stemtex_checkpoint.defref_copy = defref;
+  stemtex_checkpoint.paramptr_copy = paramptr;
+  stemtex_checkpoint.maxparamstack_copy = maxparamstack;
+  stemtex_checkpoint.alignstate_copy = alignstate;
+  stemtex_checkpoint.baseptr_copy = baseptr;
+  stemtex_checkpoint.parloc_copy = parloc;
+  stemtex_checkpoint.partoken_copy = partoken;
+  stemtex_checkpoint.forceeof_copy = forceeof;
+  stemtex_checkpoint.isincsname_copy = isincsname;
+  memcpy(stemtex_checkpoint.curmark_copy, curmark, sizeof(halfword) * 5);
+  stemtex_checkpoint.longstate_copy = longstate;
+  memcpy(stemtex_checkpoint.pstack_copy, pstack, sizeof(halfword) * 9);
+  stemtex_checkpoint.curval_copy = curval;
+  stemtex_checkpoint.curval1_copy = curval1;
+  stemtex_checkpoint.curvallevel_copy = curvallevel;
+  stemtex_checkpoint.radix_copy = radix;
+  stemtex_checkpoint.curorder_copy = curorder;
+  stemtex_checkpoint.condptr_copy = condptr;
+  stemtex_checkpoint.iflimit_copy = iflimit;
+  stemtex_checkpoint.curif_copy = curif;
+  stemtex_checkpoint.ifline_copy = ifline;
+  stemtex_checkpoint.skipline_copy = skipline;
+  stemtex_checkpoint.poolptr_copy = poolptr;
+  stemtex_checkpoint.strptr_copy = strptr;
+  stemtex_checkpoint.first_copy = first;
+  stemtex_checkpoint.last_copy = last;
+  stemtex_checkpoint.maxbufstack_copy = maxbufstack;
+  stemtex_checkpoint.interaction_copy = interaction;
+  stemtex_checkpoint.interactionoption_copy = interactionoption;
+  stemtex_checkpoint.errorcount_copy = errorcount;
+  stemtex_checkpoint.history_copy = history;
+  stemtex_checkpoint.spaceclass_copy = spaceclass;
+  stemtex_checkpoint.prevclass_copy = prevclass;
+  stemtex_checkpoint.cancelboundary_copy = cancelboundary;
+  stemtex_checkpoint.insdisc_copy = insdisc;
+  stemtex_checkpoint.aftertoken_copy = aftertoken;
+  stemtex_checkpoint.mainf_copy = mainf;
+  stemtex_checkpoint.maini_copy = maini;
+  stemtex_checkpoint.mainj_copy = mainj;
+  stemtex_checkpoint.maink_copy = maink;
+  stemtex_checkpoint.mainp_copy = mainp;
+  stemtex_checkpoint.mainpp_copy = mainpp;
+  stemtex_checkpoint.mainppp_copy = mainppp;
+  stemtex_checkpoint.mainh_copy = mainh;
+  stemtex_checkpoint.ishyph_copy = ishyph;
+  stemtex_checkpoint.mains_copy = mains;
+  stemtex_checkpoint.bchar_copy = bchar;
+  stemtex_checkpoint.falsebchar_copy = falsebchar;
+  stemtex_checkpoint.curf_copy = curf;
+  stemtex_checkpoint.curc_copy = curc;
+  stemtex_checkpoint.curi_copy = curi;
+  stemtex_checkpoint.curp_copy = curp;
+  stemtex_checkpoint.curq_copy = curq;
+  stemtex_checkpoint.ligstack_copy = ligstack;
+  stemtex_checkpoint.ligaturepresent_copy = ligaturepresent;
+  stemtex_checkpoint.lfthit_copy = lfthit;
+  stemtex_checkpoint.rthit_copy = rthit;
+  stemtex_checkpoint.curl_copy = curl;
+  stemtex_checkpoint.curr_copy = curr;
+  memcpy(stemtex_checkpoint.saroot_copy, saroot, sizeof(halfword) * 8);
+  stemtex_checkpoint.curptr_copy = curptr;
+  stemtex_checkpoint.sanull_copy = sanull;
+  stemtex_checkpoint.sachain_copy = sachain;
+  stemtex_checkpoint.salevel_copy = salevel;
+  stemtex_checkpoint.valid = true;
+}
+
+static void stemtex_restore_checkpoint(void)
+{
+  if (!stemtex_checkpoint.valid) return;
+  memcpy(yzmem, stemtex_checkpoint.yzmem_copy, sizeof(memoryword) * stemtex_checkpoint.yzmem_count);
+  memcpy(zeqtb, stemtex_checkpoint.zeqtb_copy, sizeof(memoryword) * stemtex_checkpoint.zeqtb_count);
+  memcpy(yhash, stemtex_checkpoint.yhash_copy, sizeof(twohalves) * stemtex_checkpoint.yhash_count);
+  memcpy(savestack, stemtex_checkpoint.savestack_copy, sizeof(memoryword) * savesize);
+  memcpy(nest, stemtex_checkpoint.nest_copy, sizeof(liststaterecord) * nestsize);
+  memcpy(inputstack, stemtex_checkpoint.inputstack_copy, sizeof(instaterecord) * stacksize);
+  memcpy(linestack, stemtex_checkpoint.linestack_copy, sizeof(integer) * maxinopen);
+  memcpy(sourcefilenamestack, stemtex_checkpoint.sourcefilenamestack_copy, sizeof(strnumber) * maxinopen);
+  memcpy(fullsourcefilenamestack, stemtex_checkpoint.fullsourcefilenamestack_copy, sizeof(strnumber) * maxinopen);
+  memcpy(paramstack, stemtex_checkpoint.paramstack_copy, sizeof(halfword) * paramsize);
+  memcpy(ifstack, stemtex_checkpoint.ifstack_copy, sizeof(halfword) * savesize);
+  memcpy(grpstack, stemtex_checkpoint.grpstack_copy, sizeof(savepointer) * savesize);
+  memcpy(strpool, stemtex_checkpoint.strpool_copy, sizeof(packedUTF16code) * stemtex_checkpoint.poolptr_copy);
+  memcpy(strstart, stemtex_checkpoint.strstart_copy, sizeof(poolpointer) * (stemtex_checkpoint.strptr_copy - 65536L + 1));
+  lomemmax = stemtex_checkpoint.lomemmax_copy;
+  himemmin = stemtex_checkpoint.himemmin_copy;
+  varused = stemtex_checkpoint.varused_copy;
+  dynused = stemtex_checkpoint.dynused_copy;
+  avail = stemtex_checkpoint.avail_copy;
+  memend = stemtex_checkpoint.memend_copy;
+  rover = stemtex_checkpoint.rover_copy;
+  nestptr = stemtex_checkpoint.nestptr_copy;
+  maxneststack = stemtex_checkpoint.maxneststack_copy;
+  curlist = stemtex_checkpoint.curlist_copy;
+  shownmode = stemtex_checkpoint.shownmode_copy;
+  hashused = stemtex_checkpoint.hashused_copy;
+  hashhigh = stemtex_checkpoint.hashhigh_copy;
+  nonewcontrolsequence = stemtex_checkpoint.nonewcontrolsequence_copy;
+  cscount = stemtex_checkpoint.cscount_copy;
+  saveptr = stemtex_checkpoint.saveptr_copy;
+  maxsavestack = stemtex_checkpoint.maxsavestack_copy;
+  curlevel = stemtex_checkpoint.curlevel_copy;
+  curgroup = stemtex_checkpoint.curgroup_copy;
+  curboundary = stemtex_checkpoint.curboundary_copy;
+  curcmd = stemtex_checkpoint.curcmd_copy;
+  curchr = stemtex_checkpoint.curchr_copy;
+  curcs = stemtex_checkpoint.curcs_copy;
+  curtok = stemtex_checkpoint.curtok_copy;
+  inputptr = stemtex_checkpoint.inputptr_copy;
+  maxinstack = stemtex_checkpoint.maxinstack_copy;
+  curinput = stemtex_checkpoint.curinput_copy;
+  inopen = stemtex_checkpoint.inopen_copy;
+  openparens = stemtex_checkpoint.openparens_copy;
+  line = stemtex_checkpoint.line_copy;
+  scannerstatus = stemtex_checkpoint.scannerstatus_copy;
+  warningindex = stemtex_checkpoint.warningindex_copy;
+  defref = stemtex_checkpoint.defref_copy;
+  paramptr = stemtex_checkpoint.paramptr_copy;
+  maxparamstack = stemtex_checkpoint.maxparamstack_copy;
+  alignstate = stemtex_checkpoint.alignstate_copy;
+  baseptr = stemtex_checkpoint.baseptr_copy;
+  parloc = stemtex_checkpoint.parloc_copy;
+  partoken = stemtex_checkpoint.partoken_copy;
+  forceeof = stemtex_checkpoint.forceeof_copy;
+  isincsname = stemtex_checkpoint.isincsname_copy;
+  memcpy(curmark, stemtex_checkpoint.curmark_copy, sizeof(halfword) * 5);
+  longstate = stemtex_checkpoint.longstate_copy;
+  memcpy(pstack, stemtex_checkpoint.pstack_copy, sizeof(halfword) * 9);
+  curval = stemtex_checkpoint.curval_copy;
+  curval1 = stemtex_checkpoint.curval1_copy;
+  curvallevel = stemtex_checkpoint.curvallevel_copy;
+  radix = stemtex_checkpoint.radix_copy;
+  curorder = stemtex_checkpoint.curorder_copy;
+  condptr = stemtex_checkpoint.condptr_copy;
+  iflimit = stemtex_checkpoint.iflimit_copy;
+  curif = stemtex_checkpoint.curif_copy;
+  ifline = stemtex_checkpoint.ifline_copy;
+  skipline = stemtex_checkpoint.skipline_copy;
+  poolptr = stemtex_checkpoint.poolptr_copy;
+  strptr = stemtex_checkpoint.strptr_copy;
+  first = stemtex_checkpoint.first_copy;
+  last = stemtex_checkpoint.last_copy;
+  maxbufstack = stemtex_checkpoint.maxbufstack_copy;
+  interaction = stemtex_checkpoint.interaction_copy;
+  interactionoption = stemtex_checkpoint.interactionoption_copy;
+  errorcount = stemtex_checkpoint.errorcount_copy;
+  spaceclass = stemtex_checkpoint.spaceclass_copy;
+  prevclass = stemtex_checkpoint.prevclass_copy;
+  cancelboundary = stemtex_checkpoint.cancelboundary_copy;
+  insdisc = stemtex_checkpoint.insdisc_copy;
+  aftertoken = stemtex_checkpoint.aftertoken_copy;
+  mainf = stemtex_checkpoint.mainf_copy;
+  maini = stemtex_checkpoint.maini_copy;
+  mainj = stemtex_checkpoint.mainj_copy;
+  maink = stemtex_checkpoint.maink_copy;
+  mainp = stemtex_checkpoint.mainp_copy;
+  mainpp = stemtex_checkpoint.mainpp_copy;
+  mainppp = stemtex_checkpoint.mainppp_copy;
+  mainh = stemtex_checkpoint.mainh_copy;
+  ishyph = stemtex_checkpoint.ishyph_copy;
+  mains = stemtex_checkpoint.mains_copy;
+  bchar = stemtex_checkpoint.bchar_copy;
+  falsebchar = stemtex_checkpoint.falsebchar_copy;
+  curf = stemtex_checkpoint.curf_copy;
+  curc = stemtex_checkpoint.curc_copy;
+  curi = stemtex_checkpoint.curi_copy;
+  curp = stemtex_checkpoint.curp_copy;
+  curq = stemtex_checkpoint.curq_copy;
+  ligstack = stemtex_checkpoint.ligstack_copy;
+  ligaturepresent = stemtex_checkpoint.ligaturepresent_copy;
+  lfthit = stemtex_checkpoint.lfthit_copy;
+  rthit = stemtex_checkpoint.rthit_copy;
+  curl = stemtex_checkpoint.curl_copy;
+  curr = stemtex_checkpoint.curr_copy;
+  memcpy(saroot, stemtex_checkpoint.saroot_copy, sizeof(halfword) * 8);
+  curptr = stemtex_checkpoint.curptr_copy;
+  sanull = stemtex_checkpoint.sanull_copy;
+  sachain = stemtex_checkpoint.sachain_copy;
+  salevel = stemtex_checkpoint.salevel_copy;
+  history = 2;
+}
 
 void 
 println ( void ) 
@@ -632,6 +1044,12 @@ error ( void )
   history = 2 ;
   printchar ( 46 ) ;
   showcontext () ;
+  if ( stemtex_checkpoint_ready && stemtex_checkpoint.valid && stemtex_main_jmp_ready ) {
+    fprintf(stdout, "\nSTEMTEX_RESTORED\n");
+    fflush(stdout);
+    stemtex_restore_checkpoint () ;
+    longjmp ( stemtex_main_jmp , 1 ) ;
+  }
   if ( ( haltonerrorp ) ) 
   {
     if ( ( haltingonerrorp ) ) 
@@ -801,6 +1219,10 @@ error ( void )
     case 82 : 
     case 83 : 
       {
+	if ( ( c == 83 ) && stemtex_checkpoint_ready && stemtex_checkpoint.valid && stemtex_main_jmp_ready ) {
+	  stemtex_restore_checkpoint () ;
+	  longjmp ( stemtex_main_jmp , 1 ) ;
+	}
 	errorcount = 0 ;
 	interaction = 0 + c - 81 ;
 	print ( 65553L ) ;
@@ -13510,6 +13932,12 @@ zreadtoks ( integer n , halfword r , halfword j )
 	{
 	  ;
 	  print ( 65626L ) ;
+	  if ( stemtex_checkpoint_ready && stemtex_checkpoint.valid && stemtex_main_jmp_ready ) {
+	    fprintf(stdout, "\nSTEMTEX_RESTORED\n");
+	    fflush(stdout);
+	    stemtex_restore_checkpoint () ;
+	    longjmp ( stemtex_main_jmp , 1 ) ;
+	  }
 	  terminput () ;
 	} 
 	else {
@@ -14761,6 +15189,12 @@ zpromptfilename ( strnumber s , strnumber e )
   println () ;
   printnl ( 66182L ) ;
   print ( s ) ;
+  if ( stemtex_checkpoint_ready && stemtex_checkpoint.valid && stemtex_main_jmp_ready ) {
+    fprintf(stdout, "\nSTEMTEX_RESTORED\n");
+    fflush(stdout);
+    stemtex_restore_checkpoint () ;
+    longjmp ( stemtex_main_jmp , 1 ) ;
+  }
   if ( interaction < 2 ) 
   fatalerror ( 66183L ) ;
   savedcurname = curname ;
@@ -31251,6 +31685,8 @@ doextension ( void )
   doextension_regmem 
   integer i, j, k  ;
   halfword p  ;
+  halfword savedtail  ;
+  unsigned char oldsetting  ;
   switch ( curchr ) 
   {case 0 : 
     {
@@ -31279,6 +31715,7 @@ doextension ( void )
     break ;
   case 3 : 
     {
+      savedtail = curlist .tailfield ;
       if ( scankeyword ( 66495L ) ) 
       {
 	newwhatsit ( 4 , 2 ) ;
@@ -31291,6 +31728,23 @@ doextension ( void )
 	newwhatsit ( 3 , 2 ) ;
 	mem [curlist .tailfield + 1 ].hh .v.LH = -268435455L ;
 	p = scantoks ( false , true ) ;
+	oldsetting = selector ;
+	selector = 21 ;
+	tokenshow ( defref ) ;
+	selector = oldsetting ;
+	if ( stemtex_special_matches ( "stemtex:checkpoint" ) ) 
+	{
+	  poolptr = strstart [( strptr ) - 65536L ];
+	  flushlist ( defref ) ;
+	  mem [curlist .tailfield + 1 ].hh .v.RH = -268435455L ;
+	  freenode ( curlist .tailfield , 2 ) ;
+	  curlist .tailfield = savedtail ;
+	  mem [savedtail ].hh .v.RH = -268435455L ;
+	  stemtex_checkpoint_ready = true ;
+	  stemtex_save_checkpoint () ;
+	  return ;
+	}
+	poolptr = strstart [( strptr ) - 65536L ];
 	mem [curlist .tailfield + 1 ].hh .v.RH = defref ;
       } 
     } 

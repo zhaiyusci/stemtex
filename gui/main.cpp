@@ -54,6 +54,8 @@
 
 namespace {
 
+std::mutex gRendererLifecycleMutex;
+
 QString appResourceRoot() {
   return QDir::cleanPath(QCoreApplication::applicationDirPath());
 }
@@ -255,7 +257,7 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
   cfg.profile_root_utf8 = profile.constData();
   cfg.request_timeout_ms = 90000;
   cfg.xdvipdfmx_timeout_ms = 90000;
-  cfg.spare_worker_count = 2;
+  cfg.spare_worker_count = 1;
 
   StemTeXErrorCode code = STEMTEX_OK;
   char *error = nullptr;
@@ -408,6 +410,7 @@ class MainWindow : public QMainWindow {
     lexer->setColor(QColor(20, 120, 70), QsciLexerTeX::Symbol);
     lexer->setColor(QColor(34, 34, 34), QsciLexerTeX::Text);
     editor_->setLexer(lexer);
+    observedEditorText_ = editor_->text();
 
     auto *previewShell = new QWidget(splitter);
     auto *previewLayout = new QVBoxLayout(previewShell);
@@ -442,18 +445,35 @@ class MainWindow : public QMainWindow {
     enginePollTimer_ = new QTimer(this);
     enginePollTimer_->setInterval(500);
     connect(enginePollTimer_, &QTimer::timeout, this, [this]() { refreshEngineStatus(); });
+    editorPollTimer_ = new QTimer(this);
+    editorPollTimer_->setInterval(200);
+    connect(editorPollTimer_, &QTimer::timeout, this, [this]() {
+      if (!editor_) return;
+      QString current = editor_->text();
+      if (current == observedEditorText_) return;
+      observedEditorText_ = current;
+      scheduleAutoRender();
+    });
+    autoRenderTimer_ = new QTimer(this);
+    autoRenderTimer_->setSingleShot(true);
+    autoRenderTimer_->setInterval(250);
+    connect(autoRenderTimer_, &QTimer::timeout, this, [this]() { renderSnippet(); });
 
     connect(widthSlider_, &QSlider::valueChanged, widthSpin_, &QSpinBox::setValue);
     connect(widthSpin_, &QSpinBox::valueChanged, widthSlider_, &QSlider::setValue);
     connect(widthSpin_, &QSpinBox::valueChanged, this, [this](int value) {
       updatePreviewMinimumWidth(value);
-      rerenderLastPdfPreview();
+      scheduleAutoRender();
     });
     connect(dpiSpin_, &QSpinBox::valueChanged, this, [this](int) { rerenderLastPdfPreview(); });
     connect(paddingSpin_, &QDoubleSpinBox::valueChanged, this, [this](double) { rerenderLastPdfPreview(); });
+    connect(encodingCombo_, &QComboBox::currentTextChanged, this, [this](const QString &) { scheduleAutoRender(); });
     connect(texmfButton_, &QPushButton::clicked, this, [this]() { chooseTexmfRoot(); });
     connect(profileCombo_, &QComboBox::currentIndexChanged, this, [this](int) { switchProfile(); });
-    connect(renderButton_, &QPushButton::clicked, this, [this]() { renderSnippet(); });
+    connect(renderButton_, &QPushButton::clicked, this, [this]() {
+      if (autoRenderTimer_) autoRenderTimer_->stop();
+      renderSnippet();
+    });
     connect(copyImageButton_, &QPushButton::clicked, this, [this]() { copyPreviewImage(); });
     connect(saveImageButton_, &QPushButton::clicked, this, [this]() { savePreviewImage(); });
     connect(openButton_, &QPushButton::clicked, this, [this]() {
@@ -463,7 +483,8 @@ class MainWindow : public QMainWindow {
     updateEngineStatus(false, spareReady_, spareTarget_);
     setUiReady(true);
     updatePreviewMinimumWidth(widthSpin_->value());
-    initializeRenderer();
+    editorPollTimer_->start();
+    initializeRenderer(true);
   }
 
   ~MainWindow() override {
@@ -481,6 +502,16 @@ class MainWindow : public QMainWindow {
   void setPreviewImageReady(bool ready) {
     copyImageButton_->setEnabled(ready);
     saveImageButton_->setEnabled(ready);
+  }
+
+  void scheduleAutoRender() {
+    if (shuttingDown_.load() || !autoRenderTimer_) return;
+    if (!profileCombo_ || profileCombo_->currentIndex() < 0) return;
+    if (!hasRenderer()) {
+      pendingStartupRender_ = true;
+      return;
+    }
+    autoRenderTimer_->start();
   }
 
   QString lightHtml(bool ok) const {
@@ -562,13 +593,17 @@ class MainWindow : public QMainWindow {
 
   void destroyRendererLater(StemTeXRenderer *renderer) {
     if (!renderer) return;
-    std::thread([renderer]() { stemtex_renderer_destroy(renderer); }).detach();
+    std::thread([renderer]() {
+      std::lock_guard<std::mutex> lock(gRendererLifecycleMutex);
+      stemtex_renderer_destroy(renderer);
+    }).detach();
   }
 
   void stopRenderer(bool asyncDestroy = true) {
     ++rendererGeneration_;
     ++latestUiRequestId_;
     enginePollTimer_->stop();
+    if (autoRenderTimer_) autoRenderTimer_->stop();
     pendingStartupRender_ = false;
     StemTeXRenderer *renderer = nullptr;
     {
@@ -579,6 +614,7 @@ class MainWindow : public QMainWindow {
     if (asyncDestroy) {
       destroyRendererLater(renderer);
     } else if (renderer) {
+      std::lock_guard<std::mutex> lifecycleLock(gRendererLifecycleMutex);
       stemtex_renderer_destroy(renderer);
     }
   }
@@ -612,6 +648,7 @@ class MainWindow : public QMainWindow {
   void installRenderer(StemTeXRenderer *renderer) {
     std::lock_guard<std::mutex> lock(rendererMutex_);
     if (renderer_) {
+      std::lock_guard<std::mutex> lifecycleLock(gRendererLifecycleMutex);
       stemtex_renderer_destroy(renderer_);
     }
     renderer_ = renderer;
@@ -628,26 +665,22 @@ class MainWindow : public QMainWindow {
     reloadProfiles();
     setUiReady(true);
     updateEngineStatus(false, 0, spareTarget_, QString("texmf: %1").arg(texmf_root_));
-    initializeRenderer();
+    initializeRenderer(true);
   }
 
   void switchProfile() {
     QString profileName = profileCombo_->currentText();
-    stopRenderer();
+    stopRenderer(false);
     clearProfileOutput();
     updateEngineStatus(false, 0, spareTarget_, QString("profile: %1").arg(profileName));
     if (!profileCombo_ || profileCombo_->currentIndex() < 0) {
       setUiReady(true);
       return;
     }
-    if (!hasRenderer()) {
-      initializeRenderer();
-      return;
-    }
-    initializeRenderer();
+    initializeRenderer(false);
   }
 
-  void initializeRenderer() {
+  void initializeRenderer(bool renderAfterInit) {
     QString profileRoot = selectedProfileRoot();
     if (profileRoot.isEmpty()) {
       updateEngineStatus(false, 0, spareTarget_, "choose a profile");
@@ -657,7 +690,7 @@ class MainWindow : public QMainWindow {
     setUiReady(false);
     updateEngineStatus(false, 0, spareTarget_, QString("starting profile: %1").arg(QFileInfo(profileRoot).fileName()));
     uint64_t generation = ++rendererGeneration_;
-    std::thread([this, profileRoot, generation]() {
+    std::thread([this, profileRoot, generation, renderAfterInit]() {
       auto start = std::chrono::steady_clock::now();
       QByteArray repo = QDir::cleanPath(repo_root_).toUtf8();
       QByteArray runtime = QDir::cleanPath(runtime_root_).toUtf8();
@@ -670,37 +703,60 @@ class MainWindow : public QMainWindow {
       cfg.profile_root_utf8 = profile.constData();
       cfg.request_timeout_ms = 90000;
       cfg.xdvipdfmx_timeout_ms = 90000;
-      cfg.spare_worker_count = 2;
+      cfg.spare_worker_count = 1;
       StemTeXErrorCode code = STEMTEX_OK;
       char *error = nullptr;
-      StemTeXRenderer *renderer = stemtex_renderer_create(&cfg, &code, &error);
+      StemTeXRenderer *renderer = nullptr;
+      bool installed = false;
+      bool stale = false;
+      {
+        std::lock_guard<std::mutex> lifecycleLock(gRendererLifecycleMutex);
+        renderer = stemtex_renderer_create(&cfg, &code, &error);
+        stale = shuttingDown_.load() || generation != rendererGeneration_.load();
+        if (renderer && !stale) {
+          std::lock_guard<std::mutex> rendererLock(rendererMutex_);
+          if (!renderer_) {
+            renderer_ = renderer;
+            renderer = nullptr;
+            installed = true;
+          } else {
+            stale = true;
+          }
+        }
+        if (renderer && stale) {
+          stemtex_renderer_destroy(renderer);
+          renderer = nullptr;
+        }
+      }
       auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
       QString errorText = error ? QString::fromUtf8(error) : QString();
       stemtex_renderer_free_string(error);
-      QMetaObject::invokeMethod(this, [this, renderer, code, errorText, elapsed, generation]() {
+      if (stale && !installed) return;
+      QMetaObject::invokeMethod(this, [this, installed, code, errorText, elapsed, generation, renderAfterInit]() {
         if (shuttingDown_.load() || generation != rendererGeneration_.load()) {
-          if (renderer) stemtex_renderer_destroy(renderer);
           return;
         }
-        if (!renderer) {
+        if (!installed) {
           setUiReady(false);
           updateEngineStatus(false, 0, spareTarget_, QString("renderer init failed, code %1").arg((int)code));
           details_->setPlainText(errorText);
           return;
         }
-        installRenderer(renderer);
         setUiReady(true);
         refreshEngineStatus(QString("renderer initialized in %1 ms").arg(elapsed));
         enginePollTimer_->start();
         if (pendingStartupRender_) {
           pendingStartupRender_ = false;
           renderSnippet();
+        } else if (renderAfterInit) {
+          scheduleAutoRender();
         }
       }, Qt::QueuedConnection);
     }).detach();
   }
 
   void renderSnippet() {
+    if (autoRenderTimer_) autoRenderTimer_->stop();
     uint64_t generation = rendererGeneration_.load();
     StemTeXRenderer *renderer = currentRenderer();
     if (!renderer) {
@@ -920,8 +976,11 @@ class MainWindow : public QMainWindow {
   QTextBrowser *details_ = nullptr;
   QLabel *engineStatusLabel_ = nullptr;
   QTimer *enginePollTimer_ = nullptr;
+  QTimer *editorPollTimer_ = nullptr;
+  QTimer *autoRenderTimer_ = nullptr;
+  QString observedEditorText_;
   int spareReady_ = 0;
-  int spareTarget_ = 2;
+  int spareTarget_ = 1;
   QString engineNote_;
   bool pendingStartupRender_ = false;
   uint64_t latestUiRequestId_ = 0;

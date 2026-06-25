@@ -131,9 +131,9 @@ Fields:
   `0` uses `360`.
 - `min_width_pt`, `max_width_pt`: retained in the ABI for host-side policy, but
   the renderer no longer clamps `width_pt`.
-- `spare_worker_count`: number of hot spare workers to maintain. `0` means the
-  default, currently `1`. Positive values are clamped internally; the current
-  maximum is `4`.
+- `spare_worker_count`: number of hot spare workers to maintain. `0` means no
+  hot spare workers. Positive values are clamped internally; the current maximum
+  is `4`.
 - `auto_restart`: reserved policy flag; zero-initialized configs keep automatic
   recovery enabled.
 - `delete_intermediates`: delete request/XDV intermediates after successful

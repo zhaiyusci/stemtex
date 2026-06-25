@@ -132,6 +132,28 @@ std::wstring path_to_wstring(const fs::path &p) {
   return p.wstring();
 }
 
+bool env_name_equal_ascii_ci(const std::wstring &a, const std::wstring &b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    wchar_t ca = a[i];
+    wchar_t cb = b[i];
+    if (ca >= L'a' && ca <= L'z') ca = ca - L'a' + L'A';
+    if (cb >= L'a' && cb <= L'z') cb = cb - L'a' + L'A';
+    if (ca != cb) return false;
+  }
+  return true;
+}
+
+void erase_env_name(std::map<std::wstring, std::wstring> &env, const std::wstring &name) {
+  for (auto it = env.begin(); it != env.end();) {
+    if (env_name_equal_ascii_ci(it->first, name)) {
+      it = env.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
 std::vector<wchar_t> build_environment_block(const std::map<std::wstring, std::wstring> &overrides) {
   std::map<std::wstring, std::wstring> env;
   LPWCH raw = GetEnvironmentStringsW();
@@ -143,7 +165,44 @@ std::vector<wchar_t> build_environment_block(const std::map<std::wstring, std::w
     env[entry.substr(0, eq)] = entry.substr(eq + 1);
   }
   FreeEnvironmentStringsW(raw);
-  for (const auto &kv : overrides) env[kv.first] = kv.second;
+
+  const std::wstring tex_names[] = {
+      L"PATH",
+      L"TEXMFROOT",
+      L"TEXMFCNF",
+      L"TEXFORMATS",
+      L"XE_FONTCONFIG_PATH",
+      L"FONTCONFIG_PATH",
+      L"XE_FC_CACHEDIR",
+      L"FC_CACHEDIR",
+      L"TEXMFDIST",
+      L"TEXMFSYSVAR",
+      L"TEXMFSYSCONFIG",
+      L"TEXMFVAR",
+      L"TEXMFCONFIG",
+      L"TEXMF",
+      L"TEXMFDBS",
+      L"SYSTEXMF",
+      L"TEXMFCACHE",
+      L"VARTEXFONTS",
+      L"TEXPOOL",
+      L"TEXINPUTS",
+      L"TEXFONTMAPS",
+      L"WEB2C",
+      L"W32TEX",
+      L"OSFONTDIR",
+      L"SELFAUTOLOC",
+      L"SELFAUTODIR",
+      L"SELFAUTOPARENT",
+      L"SELFAUTOGRANDPARENT",
+      L"ICU_DATA",
+      L"command_line_encoding",
+  };
+  for (const auto &name : tex_names) erase_env_name(env, name);
+  for (const auto &kv : overrides) {
+    erase_env_name(env, kv.first);
+    env[kv.first] = kv.second;
+  }
 
   std::vector<wchar_t> block;
   for (const auto &kv : env) {
@@ -482,7 +541,8 @@ class ChildProcess {
   void write_stdin(const std::string &text) {
     DWORD written = 0;
     if (!WriteFile(stdin_, text.data(), (DWORD)text.size(), &written, nullptr)) {
-      throw std::runtime_error("WriteFile stdin failed");
+      DWORD err = GetLastError();
+      throw std::runtime_error("WriteFile stdin failed: " + std::to_string(err));
     }
   }
 
@@ -592,17 +652,23 @@ struct RendererConfig {
 constexpr const char *kDefaultWorkerTemplate = R"STEMTEX_WORKER(\input{@@STEMTEX_PREAMBLE@@}
 \newcount\snippetcount
 \def\workerstopline{\workerstop}
+\def\stemtexemptyline{}
 \pagestyle{empty}
 \begin{document}
 \typeout{WORKER_READY}
 \def\workerloop{%
+  \special{stemtex:checkpoint}%
   \advance\snippetcount by 1
   \typeout{WORKER_WAIT:\the\snippetcount}%
   \read16 to\snippetHsize
+  \ifx\snippetHsize\stemtexemptyline
+    \read16 to\snippetHsize
+  \fi
   \ifx\snippetHsize\workerstopline
     \typeout{WORKER_STOPPED}%
   \else
     \read16 to\requestfile
+    \scrollmode
     \begin{preview}%
       \begin{minipage}{\snippetHsize}%
         \hsize=\snippetHsize
@@ -612,14 +678,13 @@ constexpr const char *kDefaultWorkerTemplate = R"STEMTEX_WORKER(\input{@@STEMTEX
         \setcounter{equation}{0}%
         \setcounter{footnote}{0}%
         \normalfont\normalsize\normalcolor
-        \scrollmode
         \input\requestfile
         \par
-        \errorstopmode
         \endgroup
       \end{minipage}%
     \end{preview}%
     \typeout{WORKER_DONE:\the\snippetcount}%
+    \errorstopmode
     \workerloop
   \fi
 }
@@ -647,7 +712,7 @@ std::wstring worker_command(const RendererConfig &cfg, const fs::path &out_dir) 
   std::wostringstream cmd;
   cmd << quote_cmd_arg_w(path_to_wstring(exe))
       << L" -fmt=xelatexdaemon --no-font-cache-refresh"
-      << L" -jobname=worker-template -interaction=errorstopmode -halt-on-error -no-pdf -flush-output-on-shipout"
+      << L" -jobname=worker-template -interaction=errorstopmode -no-pdf -flush-output-on-shipout"
       << L" -output-directory=" << quote_cmd_arg_w(path_to_wstring(out_dir))
       << L" " << quote_cmd_arg_w(widen_utf8(worker_arg));
   return cmd.str();
@@ -1028,6 +1093,23 @@ std::string json_escape(const std::string &s) {
   return out;
 }
 
+bool tex_output_has_error(const std::string &text) {
+  bool line_start = true;
+  for (char c : text) {
+    if (line_start && c == '!') return true;
+    line_start = (c == '\n' || c == '\r');
+  }
+  return false;
+}
+
+int parse_worker_marker_number(const std::string &line, const char *marker) {
+  const char *pos = std::strstr(line.c_str(), marker);
+  if (!pos) return -1;
+  pos += std::strlen(marker);
+  if (*pos < '0' || *pos > '9') return -1;
+  return std::atoi(pos);
+}
+
 std::string random_id() {
   auto t = std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::system_clock::now().time_since_epoch()).count();
@@ -1051,7 +1133,7 @@ int effective_width(const RendererConfig &cfg, int width) {
 }
 
 int normalize_spare_worker_count(int count) {
-  if (count <= 0) return 1;
+  if (count <= 0) return 0;
   return std::min(4, count);
 }
 
@@ -1153,8 +1235,13 @@ struct StemTeXRenderer {
     bool ready = false;
     bool done = false;
     std::string output_tail;
+    std::string request_output;
     uint64_t last_xdv_offset = 0;
+    int last_wait_request = 0;
+    int last_done_request = 0;
     int next_request = 0;
+    bool restored = false;
+    bool wait_after_restore = false;
   };
 
   void append_log(const std::string &text) {
@@ -1228,7 +1315,10 @@ struct StemTeXRenderer {
     slot->ready = false;
     slot->done = false;
     slot->output_tail.clear();
+    slot->request_output.clear();
     slot->last_xdv_offset = 0;
+    slot->last_wait_request = 0;
+    slot->last_done_request = 0;
     slot->next_request = 0;
     WorkerSlot *raw = slot.get();
     raw->child.start(worker_command(cfg, raw->live_out), raw->live_out, worker_env, [this, raw](const std::string &text) {
@@ -1239,6 +1329,10 @@ struct StemTeXRenderer {
         if (raw->output_tail.size() > 8192) {
           raw->output_tail.erase(0, raw->output_tail.size() - 8192);
         }
+        raw->request_output += text;
+        if (raw->request_output.size() > 32768) {
+          raw->request_output.erase(0, raw->request_output.size() - 32768);
+        }
       }
       raw->lines.feed(text, [raw](const std::string &line) {
         std::lock_guard<std::mutex> lock(raw->mu);
@@ -1246,16 +1340,43 @@ struct StemTeXRenderer {
           raw->ready = true;
           raw->cv.notify_all();
         }
-        if (line.find("WORKER_DONE:") != std::string::npos) {
+        if (line.find("STEMTEX_RESTORED") != std::string::npos) {
+          raw->restored = true;
+          raw->cv.notify_all();
+        }
+        int wait_request = parse_worker_marker_number(line, "WORKER_WAIT:");
+        if (wait_request >= 0) {
+          raw->last_wait_request = wait_request;
+          if (raw->restored) raw->wait_after_restore = true;
+          raw->cv.notify_all();
+        }
+        int done_request = parse_worker_marker_number(line, "WORKER_DONE:");
+        if (done_request >= 0) {
           raw->done = true;
+          raw->last_done_request = done_request;
           raw->cv.notify_all();
         }
       });
     });
     std::unique_lock<std::mutex> lock(raw->mu);
-    if (!raw->cv.wait_for(lock, std::chrono::milliseconds(cfg.request_timeout_ms), [&]() { return raw->ready; })) {
+    auto startup_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(cfg.request_timeout_ms);
+    while (!raw->ready && !shutting_down.load() && std::chrono::steady_clock::now() < startup_deadline) {
+      raw->cv.wait_for(lock, std::chrono::milliseconds(25));
+    }
+    if (!raw->ready) {
+      std::string tail = raw->output_tail;
+      lock.unlock();
       raw->child.stop();
-      throw ApiException(STEMTEX_ERROR_WORKER_STARTUP, "Live worker did not become ready: " + name);
+      if (shutting_down.load()) {
+        throw ApiException(STEMTEX_ERROR_CANCELLED, "Live worker startup cancelled");
+      }
+      throw ApiException(STEMTEX_ERROR_WORKER_STARTUP,
+                         "Live worker did not become ready: " + name + ". TeX output tail:\n" + tail);
+    }
+    if (shutting_down.load()) {
+      lock.unlock();
+      raw->child.stop();
+      throw ApiException(STEMTEX_ERROR_CANCELLED, "Live worker startup cancelled");
     }
     lock.unlock();
     if (prime) prime_worker(*raw);
@@ -1268,13 +1389,27 @@ struct StemTeXRenderer {
     {
       std::lock_guard<std::mutex> lock(slot.mu);
       slot.done = false;
+      slot.restored = false;
+      slot.wait_after_restore = false;
+      slot.request_output.clear();
     }
-    slot.child.write_stdin("360pt\n");
-    slot.child.write_stdin(slash_path(req_path) + "\n");
+    try {
+      slot.child.write_stdin("360pt\n");
+      slot.child.write_stdin(slash_path(req_path) + "\n");
+    } catch (...) {
+      std::string tail;
+      {
+        std::lock_guard<std::mutex> lock(slot.mu);
+        tail = slot.output_tail;
+      }
+      slot.child.stop();
+      throw ApiException(STEMTEX_ERROR_WORKER_STARTUP,
+                         "Live worker closed during warmup: " + slot.name + ". TeX output tail:\n" + tail);
+    }
     std::unique_lock<std::mutex> lock(slot.mu);
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(cfg.request_timeout_ms);
     bool completed = false;
-    while (std::chrono::steady_clock::now() < deadline) {
+    while (!shutting_down.load() && std::chrono::steady_clock::now() < deadline) {
       if (slot.done || !slot.child.is_running()) {
         completed = true;
         break;
@@ -1285,12 +1420,47 @@ struct StemTeXRenderer {
       std::string tail = slot.output_tail;
       lock.unlock();
       slot.child.stop();
+      if (shutting_down.load()) {
+        throw ApiException(STEMTEX_ERROR_CANCELLED, "Live worker warmup cancelled");
+      }
       throw ApiException(STEMTEX_ERROR_WORKER_STARTUP, "Live worker warmup failed: " + slot.name + ". TeX output tail:\n" + tail);
     }
     lock.unlock();
     fs::path xdv_path = slot.live_out / "worker-template.xdv";
     slot.last_xdv_offset = fs::file_size(xdv_path);
+    slot.last_done_request = std::max(slot.last_done_request, 1);
     slot.next_request = 1;
+  }
+
+  void write_render_request_or_recover(WorkerSlot &slot, int width_pt, const fs::path &req_path) {
+    try {
+      slot.child.write_stdin(std::to_string(width_pt) + "pt\n");
+      slot.child.write_stdin(slash_path(req_path) + "\n");
+    } catch (...) {
+      std::string tail;
+      std::string request_output;
+      {
+        std::lock_guard<std::mutex> lock(slot.mu);
+        tail = slot.output_tail;
+        request_output = slot.request_output;
+      }
+      {
+        std::lock_guard<std::mutex> control_lock(control_mu);
+        active_slot = nullptr;
+        cancel_requested = false;
+      }
+      promote_spare_locked("stdin-closed");
+      update_status_after_worker_loss_locked();
+      if (tex_output_has_error(request_output)) {
+        throw ApiException(STEMTEX_ERROR_TEX_SNIPPET,
+                           std::string("TeX snippet failed before worker returned WORKER_DONE. TeX output tail:\n") +
+                               request_output);
+      }
+      throw ApiException(STEMTEX_ERROR_WORKER_RESTARTING,
+                         "Live worker closed while sending the request; a replacement worker is being prepared.\n"
+                         "TeX output tail:\n" +
+                             tail);
+    }
   }
 
   ~StemTeXRenderer() {
@@ -1307,56 +1477,72 @@ struct StemTeXRenderer {
 
   void join_spare_builder() {
     if (spare_builder.joinable()) spare_builder.join();
+    spare_builder_finished.store(true);
   }
 
   void schedule_spare_rebuild_locked() {
-    if (shutting_down || spare_rebuilding || (int)spares.size() >= cfg.spare_worker_count) return;
-    if (spare_builder.joinable()) spare_builder.detach();
+    if (spare_builder.joinable() && spare_builder_finished.load()) spare_builder.join();
+    if (shutting_down.load() || spare_rebuilding || (int)spares.size() >= cfg.spare_worker_count) return;
+    if (spare_builder.joinable()) return;
     spare_rebuilding = true;
+    spare_builder_finished.store(false);
     publish_counts_locked();
     spare_builder = std::thread([this]() {
-      while (true) {
-        int slot_index = 0;
-        {
+      struct FinishFlag {
+        StemTeXRenderer *self;
+        ~FinishFlag() { self->spare_builder_finished.store(true); }
+      } finish{this};
+      try {
+        while (true) {
+          int slot_index = 0;
+          {
+            std::lock_guard<std::mutex> lock(render_mu);
+            if (shutting_down.load() || (int)spares.size() >= cfg.spare_worker_count) {
+              spare_rebuilding = false;
+              publish_counts_locked();
+              return;
+            }
+            slot_index = next_spare_index++;
+          }
+
+          std::unique_ptr<WorkerSlot> built;
+          try {
+            built = create_ready_worker("spare-" + std::to_string(slot_index));
+          } catch (...) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          }
+
           std::lock_guard<std::mutex> lock(render_mu);
-          if (shutting_down || (int)spares.size() >= cfg.spare_worker_count) {
+          if (shutting_down.load()) {
             spare_rebuilding = false;
             publish_counts_locked();
             return;
           }
-          slot_index = next_spare_index++;
-        }
-
-        std::unique_ptr<WorkerSlot> built;
-        try {
-          built = create_ready_worker("spare-" + std::to_string(slot_index));
-        } catch (...) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-
-        std::lock_guard<std::mutex> lock(render_mu);
-        if (shutting_down) {
-          spare_rebuilding = false;
-          publish_counts_locked();
-          return;
-        }
-        if (built) {
-          if (!primary || !primary->child.is_running()) {
-            if (primary) primary->child.stop();
-            primary = std::move(built);
-            primary->name = "primary";
-            publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
-          } else if ((int)spares.size() < cfg.spare_worker_count) {
-            spares.push_back(std::move(built));
-            publish_counts_locked();
+          if (built) {
+            if (!primary || !primary->child.is_running()) {
+              if (primary) primary->child.stop();
+              primary = std::move(built);
+              primary->name = "primary";
+              publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
+            } else if ((int)spares.size() < cfg.spare_worker_count) {
+              spares.push_back(std::move(built));
+              publish_counts_locked();
+            }
           }
         }
+      } catch (...) {
+        std::lock_guard<std::mutex> lock(render_mu);
+        spare_rebuilding = false;
+        publish_counts_locked();
       }
     });
   }
 
-  void promote_spare_locked() {
-    if (primary) primary->child.stop();
+  void promote_spare_locked(const char *reason) {
+    if (primary) {
+      append_log(std::string("[stemtex] retiring live worker: ") + reason + "\n");
+      primary->child.stop();
+    }
     while (!spares.empty()) {
       auto candidate = std::move(spares.back());
       spares.pop_back();
@@ -1573,9 +1759,14 @@ struct StemTeXRenderer {
     fs::path req_path = render_dir / "requests" / "req1.tex";
     write_text_file(req_path, snippet);
 
+    int expected_request = 0;
     {
       std::lock_guard<std::mutex> lock(slot.mu);
       slot.done = false;
+      slot.request_output.clear();
+      slot.restored = false;
+      slot.wait_after_restore = false;
+      expected_request = slot.next_request + 1;
     }
     {
       std::lock_guard<std::mutex> lock(control_mu);
@@ -1583,29 +1774,91 @@ struct StemTeXRenderer {
       cancel_requested = false;
     }
     int resolved_width_pt = effective_width(cfg, width_pt);
-    slot.child.write_stdin(std::to_string(resolved_width_pt) + "pt\n");
-    slot.child.write_stdin(slash_path(req_path) + "\n");
+    write_render_request_or_recover(slot, resolved_width_pt, req_path);
 
     {
       std::unique_lock<std::mutex> lock(slot.mu);
       auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(cfg.request_timeout_ms);
       bool completed = false;
       while (std::chrono::steady_clock::now() < deadline) {
-        if (slot.done || !slot.child.is_running()) {
+        bool has_tex_error = tex_output_has_error(slot.request_output);
+        bool request_done = slot.done && slot.last_done_request >= expected_request;
+        bool returned_to_loop = !has_tex_error || slot.wait_after_restore;
+        if ((request_done && returned_to_loop) || (has_tex_error && slot.wait_after_restore) ||
+            !slot.child.is_running()) {
           completed = true;
           break;
         }
         slot.cv.wait_for(lock, std::chrono::milliseconds(25));
       }
       if (!completed) {
+        bool snippet_recovery_stuck = tex_output_has_error(slot.request_output);
+        std::string request_output = slot.request_output;
         lock.unlock();
         {
           std::lock_guard<std::mutex> control_lock(control_mu);
           active_slot = nullptr;
+          cancel_requested = false;
         }
-        promote_spare_locked();
+        promote_spare_locked(snippet_recovery_stuck ? "snippet-error-stuck" : "request-timeout");
         update_status_after_worker_loss_locked();
+        if (snippet_recovery_stuck) {
+          throw ApiException(STEMTEX_ERROR_TEX_SNIPPET,
+                             "TeX snippet failed and the live worker did not return to the request loop. TeX output tail:\n" +
+                                 request_output);
+        }
         throw ApiException(STEMTEX_ERROR_WORKER_TIMEOUT, "Worker request timed out");
+      }
+      if (!slot.child.is_running()) {
+        std::string request_output = slot.request_output;
+        std::string tail = slot.output_tail;
+        bool has_tex_error = tex_output_has_error(request_output);
+        bool was_cancelled = false;
+        lock.unlock();
+        {
+          std::lock_guard<std::mutex> control_lock(control_mu);
+          was_cancelled = cancel_requested;
+          active_slot = nullptr;
+          cancel_requested = false;
+        }
+        promote_spare_locked(was_cancelled ? "cancelled" : (has_tex_error ? "snippet-error-worker-exited" : "exited-before-done"));
+        update_status_after_worker_loss_locked();
+        if (was_cancelled) throw ApiException(STEMTEX_ERROR_CANCELLED, "Render cancelled");
+        if (has_tex_error) {
+          throw ApiException(STEMTEX_ERROR_TEX_SNIPPET,
+                             "TeX snippet failed and the live worker exited before returning to the request loop. TeX output tail:\n" +
+                                 request_output);
+        }
+        throw ApiException(STEMTEX_ERROR_TEX_SNIPPET, "Worker exited before WORKER_DONE. TeX output tail:\n" + tail);
+      }
+      if (!slot.done && tex_output_has_error(slot.request_output)) {
+        std::string request_output = slot.request_output;
+        if (slot.restored) {
+          int ready_request = slot.last_wait_request;
+          lock.unlock();
+          {
+            std::lock_guard<std::mutex> control_lock(control_mu);
+            active_slot = nullptr;
+            cancel_requested = false;
+          }
+          fs::path xdv_path = slot.live_out / "worker-template.xdv";
+          if (fs::exists(xdv_path)) slot.last_xdv_offset = fs::file_size(xdv_path);
+          slot.next_request = ready_request > 0 ? ready_request - 1 : slot.next_request;
+          append_log("[stemtex] TeX error restored worker to request loop\n");
+          publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
+          throw ApiException(STEMTEX_ERROR_TEX_SNIPPET, "TeX snippet failed. TeX output tail:\n" + request_output);
+        }
+        lock.unlock();
+        {
+          std::lock_guard<std::mutex> control_lock(control_mu);
+          active_slot = nullptr;
+          cancel_requested = false;
+        }
+        promote_spare_locked("snippet-error-stuck");
+        update_status_after_worker_loss_locked();
+        throw ApiException(STEMTEX_ERROR_TEX_SNIPPET,
+                           "TeX snippet failed and the live worker did not return to the request loop. TeX output tail:\n" +
+                               request_output);
       }
       if (!slot.done) {
         std::string tail = slot.output_tail;
@@ -1617,10 +1870,26 @@ struct StemTeXRenderer {
           cancel_requested = false;
         }
         lock.unlock();
-        promote_spare_locked();
+        promote_spare_locked(was_cancelled ? "cancelled" : "exited-before-done");
         update_status_after_worker_loss_locked();
         if (was_cancelled) throw ApiException(STEMTEX_ERROR_CANCELLED, "Render cancelled");
         throw ApiException(STEMTEX_ERROR_TEX_SNIPPET, "Worker exited before WORKER_DONE. TeX output tail:\n" + tail);
+      }
+      if (tex_output_has_error(slot.request_output)) {
+        std::string request_output = slot.request_output;
+        bool recovered_by_checkpoint = slot.restored;
+        lock.unlock();
+        {
+          std::lock_guard<std::mutex> control_lock(control_mu);
+          active_slot = nullptr;
+          cancel_requested = false;
+        }
+        fs::path xdv_path = slot.live_out / "worker-template.xdv";
+        if (fs::exists(xdv_path)) slot.last_xdv_offset = fs::file_size(xdv_path);
+        ++slot.next_request;
+        if (recovered_by_checkpoint) append_log("[stemtex] TeX checkpoint recovery returned worker to request loop\n");
+        publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
+        throw ApiException(STEMTEX_ERROR_TEX_SNIPPET, "TeX snippet failed. TeX output tail:\n" + request_output);
       }
     }
     {
@@ -1741,6 +2010,7 @@ struct StemTeXRenderer {
   std::unique_ptr<WorkerSlot> primary;
   std::vector<std::unique_ptr<WorkerSlot>> spares;
   std::thread spare_builder;
+  std::atomic<bool> spare_builder_finished{true};
   std::mutex async_mu;
   std::condition_variable async_cv;
   std::thread async_worker;
@@ -1749,7 +2019,7 @@ struct StemTeXRenderer {
   bool async_stop = false;
   uint64_t next_async_job_id = 0;
   bool spare_rebuilding = false;
-  bool shutting_down = false;
+  std::atomic<bool> shutting_down{false};
   int next_spare_index = 0;
 };
 

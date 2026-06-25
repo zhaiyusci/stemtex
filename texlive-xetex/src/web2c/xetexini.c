@@ -1,5 +1,8 @@
 #define EXTERN extern
 #include "xetexd.h"
+#include <setjmp.h>
+extern jmp_buf stemtex_main_jmp;
+extern boolean stemtex_main_jmp_ready;
 
 void 
 initialize ( void ) 
@@ -5089,7 +5092,10 @@ mainbody ( void )
     startinput () ;
   } 
   history = 0 ;
+  stemtex_main_jmp_ready = true ;
+  (void) setjmp ( stemtex_main_jmp ) ;
   maincontrol () ;
+  stemtex_main_jmp_ready = false ;
   finalcleanup () ;
   closefilesandterminate () ;
   lab9999: {

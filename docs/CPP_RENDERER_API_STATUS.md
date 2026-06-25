@@ -22,6 +22,11 @@ tracked here as TODO:
 - Concurrent render calls on one renderer are serialized by the renderer.
 - Spare workers are failover capacity only; they are not a throughput pool.
 - Async render is a convenience wrapper around the same serialized render path.
+- Body-level TeX errors are recovered in the live XeTeX worker through the
+  source-level checkpoint path described in
+  `docs/XETEX_CHECKPOINT_RECOVERY.md`. The renderer waits for the restored worker
+  to emit the next `WORKER_WAIT` marker before returning
+  `STEMTEX_ERROR_TEX_SNIPPET`.
 - `stemtex_renderer_engine_snapshot` is a synchronous cached-state read. It does
   not take the render lock and should be the single source of truth for GUI
   status indicators.
@@ -32,17 +37,19 @@ tracked here as TODO:
   outcome channel through `stemtex_renderer_last_outcome_code`,
   `stemtex_renderer_last_issue_flags`, and
   `stemtex_renderer_last_outcome_message`.
+- `spare_worker_count = 0` now means no hot spares. Ordinary snippet errors do
+  not require spare workers because the live worker can restore to its request
+  loop in place.
 - Cancellation kills the active worker and makes that active render fail with
   `STEMTEX_ERROR_CANCELLED`; queued work continues after failover/rebuild.
 - Default request and `xdvipdfmx` timeouts are both 90000 ms.
 
 ## Remaining Product Work
 
-- Evaluate a persistent renderer helper process for fault isolation while
-  preserving hot-live performance. The helper would own the XeTeX/xdvipdfmx
-  daemon DLLs and kpathsea state; if a legacy TeX Live dependency calls
-  `exit()`, only the helper dies, while the host GUI/renderer DLL can report a
-  normalized crash outcome and restart the helper.
+- Evaluate a persistent renderer helper process for fault isolation around
+  startup/dependency-level failures. The source-level checkpoint path covers
+  body-level TeX errors, but it cannot stop a legacy TeX Live dependency from
+  calling `exit()` during initialization.
 - Add a stable host-language binding once the embedding language is known.
 - Decide whether `auto_restart` needs a real disabled mode; zero-initialized
   configs currently keep automatic recovery enabled.

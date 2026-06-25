@@ -46,7 +46,8 @@ static void print_usage(const char *argv0) {
                "Cases: default, validate, refresh, physics, fonts, chem-text, bad,\n"
                "       bad-then-good, bad-then-good-wait, bad-then-good-wait-long,\n"
                "       bad-stress, latin-math, latin-text, restart, async, cancel,\n"
-               "       recover-no-worker, bytes\n",
+               "       recover-no-worker, bad-corpus, lifecycle-stress,\n"
+               "       profile-switch-stress, bytes\n",
                argv0, argv0);
 }
 
@@ -169,12 +170,16 @@ int main(int argc, char **argv) {
   std::string runtime_root_utf8 = runtime_root.generic_string();
   std::string texmf_root_utf8 = texmf_root.generic_string();
   std::string profile_root_utf8 = opts.profile_root.empty() ? "" : opts.profile_root.generic_string();
+  std::string state_root_utf8 = (repo_root / "build" / "smoke-state").generic_string();
+  std::string renders_root_utf8 = (repo_root / "build" / "smoke-renders").generic_string();
 
   StemTeXConfig cfg{};
   cfg.repo_root_utf8 = repo_root_utf8.c_str();
   cfg.runtime_root_utf8 = runtime_root_utf8.c_str();
   cfg.texmf_root_utf8 = texmf_root_utf8.c_str();
   cfg.profile_root_utf8 = profile_root_utf8.empty() ? nullptr : profile_root_utf8.c_str();
+  cfg.state_root_utf8 = state_root_utf8.c_str();
+  cfg.renders_root_utf8 = renders_root_utf8.c_str();
   int runs = opts.runs;
   std::string case_name = opts.case_name;
   cfg.spare_worker_count = opts.spare_workers;
@@ -222,6 +227,92 @@ int main(int argc, char **argv) {
   std::printf("runtime=%s\n", runtime_version ? runtime_version : "");
   stemtex_renderer_free_string(runtime_version);
 
+  if (case_name == "--lifecycle-stress") {
+    stemtex_renderer_destroy(renderer);
+    renderer = nullptr;
+    const char *probe = u8"Lifecycle probe: $E=mc^2$ \\[\\ce{H2O}\\]";
+    int failures = 0;
+    for (int i = 0; i < runs; ++i) {
+      error = nullptr;
+      long long loop_create_start = now_ms();
+      StemTeXRenderer *loop_renderer = stemtex_renderer_create(&cfg, &error_code, &error);
+      long long loop_create_end = now_ms();
+      if (!loop_renderer) {
+        ++failures;
+        std::printf("lifecycle run=%d createOk=0 code=%d createMs=%lld err=%s\n", i + 1, (int)error_code,
+                    loop_create_end - loop_create_start, error ? error : "");
+        stemtex_renderer_free_string(error);
+        continue;
+      }
+      StemTeXRenderResult result{};
+      long long render_start = now_ms();
+      int ok = stemtex_renderer_render(loop_renderer, probe, 360, &result, &error_code, &error);
+      long long render_end = now_ms();
+      std::printf("lifecycle run=%d createOk=1 createMs=%lld renderOk=%d code=%d renderMs=%lld\n", i + 1,
+                  loop_create_end - loop_create_start, ok, (int)error_code, render_end - render_start);
+      if (ok) {
+        stemtex_renderer_free_result(&result);
+      } else {
+        ++failures;
+        std::printf("lifecycle run=%d err=%s\n", i + 1, error ? error : "");
+        stemtex_renderer_free_string(error);
+        error = nullptr;
+      }
+      stemtex_renderer_destroy(loop_renderer);
+    }
+    std::printf("lifecycle passed=%d failed=%d total=%d\n", runs - failures, failures, runs);
+    return failures == 0 ? 0 : 1;
+  }
+
+  if (case_name == "--profile-switch-stress") {
+    stemtex_renderer_destroy(renderer);
+    renderer = nullptr;
+    fs::path profile_parent = opts.profile_root.parent_path();
+    std::vector<fs::path> profiles = {
+        profile_parent / "unicodemath_cjk",
+        profile_parent / "unicodemath",
+    };
+    int failures = 0;
+    for (int i = 0; i < runs; ++i) {
+      fs::path profile_path = profiles[(size_t)i % profiles.size()];
+      std::string loop_profile_utf8 = profile_path.generic_string();
+      StemTeXConfig loop_cfg = cfg;
+      loop_cfg.profile_root_utf8 = loop_profile_utf8.c_str();
+      const char *probe = profile_path.filename() == "unicodemath"
+                              ? u8"Profile switch probe: $E=mc^2$ \\[\\ce{H2O}\\]"
+                              : u8"\u4e2d\u6587 profile switch probe: $E=mc^2$ \\[\\ce{H2O}\\]";
+      error = nullptr;
+      long long loop_create_start = now_ms();
+      StemTeXRenderer *loop_renderer = stemtex_renderer_create(&loop_cfg, &error_code, &error);
+      long long loop_create_end = now_ms();
+      if (!loop_renderer) {
+        ++failures;
+        std::printf("profileSwitch run=%d profile=%s createOk=0 code=%d createMs=%lld err=%s\n", i + 1,
+                    loop_profile_utf8.c_str(), (int)error_code, loop_create_end - loop_create_start, error ? error : "");
+        stemtex_renderer_free_string(error);
+        continue;
+      }
+      StemTeXRenderResult result{};
+      long long render_start = now_ms();
+      int ok = stemtex_renderer_render(loop_renderer, probe, 360, &result, &error_code, &error);
+      long long render_end = now_ms();
+      std::printf("profileSwitch run=%d profile=%s createOk=1 createMs=%lld renderOk=%d code=%d renderMs=%lld\n", i + 1,
+                  profile_path.filename().generic_string().c_str(), loop_create_end - loop_create_start, ok,
+                  (int)error_code, render_end - render_start);
+      if (ok) {
+        stemtex_renderer_free_result(&result);
+      } else {
+        ++failures;
+        std::printf("profileSwitch run=%d err=%s\n", i + 1, error ? error : "");
+        stemtex_renderer_free_string(error);
+        error = nullptr;
+      }
+      stemtex_renderer_destroy(loop_renderer);
+    }
+    std::printf("profileSwitch passed=%d failed=%d total=%d\n", runs - failures, failures, runs);
+    return failures == 0 ? 0 : 1;
+  }
+
   const char *snippet =
       u8"\u4e2d\u6587 C++ DLL smoke test: $E=mc^2$ "
       u8"\\[\\int_0^1 x^2\\,dx=\\frac13\\] "
@@ -268,6 +359,112 @@ int main(int argc, char **argv) {
     }
     stemtex_renderer_destroy(renderer);
     return failures == runs ? 0 : 1;
+  } else if (case_name == "--bad-corpus" || case_name == "--checkpoint-critical") {
+    struct BadCase {
+      const char *name;
+      const char *snippet;
+    };
+    const std::vector<BadCase> cases = {
+        {"missing-brace-exp", "$e^{L_p$"},
+        {"missing-frac-brace", "$\\frac{1}{2$"},
+        {"bad-sqrt-option", "$\\sqrt[3{x}$"},
+        {"missing-right-delimiter", "$\\left( x + y$"},
+        {"bad-matrix-row", "$\\begin{matrix} a & b \\\\ c \\end{pmatrix}$"},
+        {"unterminated-aligned", "$\\begin{aligned} a &= b \\\\ c &= d$"},
+        {"undefined-command", "$\\notacommand{x}$"},
+        {"undefined-text-command", "\\unknownmacro"},
+        {"orphan-end", "\\end{equation}"},
+        {"wrong-env-end", "\\begin{array}{cc} a & b \\end{matrix}"},
+        {"missing-frac-arg", "$\\frac{1}$"},
+        {"missing-overset-arg", "$\\overset{a}$"},
+        {"subscript-text-mode", "_abc"},
+        {"superscript-text-mode", "^abc"},
+        {"item-outside-list", "\\item hello"},
+        {"cr-outside-alignment", "\\cr"},
+        {"extra-close-brace", "hello }"},
+        {"open-textcolor", u8"\u8fd9\u662f\u4e00\u6bb5\uff1a\\textcolor{blue}{\u84dd\u8272\u6587\u5b57"},
+        {"open-group", "\\begingroup unfinished"},
+        {"input-missing-file", "\\input{definitely-not-existing-file}"},
+        {"missing-image", "\\includegraphics{definitely-not-existing-image.png}"},
+        {"halign-in-math", "$\\halign{#\\cr a&b\\cr}$"},
+    };
+    const std::vector<BadCase> critical_cases = {
+        {"undefined-command", "$\\notacommand{x}$"},
+        {"bad-matrix-row", "$\\begin{matrix} a & b \\\\ c \\end{pmatrix}$"},
+        {"orphan-end", "\\end{equation}"},
+        {"open-textcolor", u8"\u8fd9\u662f\u4e00\u6bb5\uff1a\\textcolor{blue}{\u84dd\u8272\u6587\u5b57"},
+        {"open-group", "\\begingroup unfinished"},
+        {"input-missing-file", "\\input{definitely-not-existing-file}"},
+    };
+    const auto &selected_cases = case_name == "--checkpoint-critical" ? critical_cases : cases;
+    const char *good =
+        u8"\u8fd9\u662f\u4e00\u6bb5 StemTeX Renderer GUI \u91cc\u7684\u4e2d\u6587\u3001"
+        u8"\u6570\u5b66\u548c\u5316\u5b66\u9884\u89c8\uff1a$E=mc^2$\uff0c"
+        u8"\u4ee5\u53ca \\textcolor{blue}{\u84dd\u8272\u6587\u5b57}\u3002\n\n"
+        u8"\\begin{equation}\nE = mc^2\n\\end{equation}\n\n"
+        u8"\\[\\int_0^1 x^2\\,dx = \\frac{1}{3},\\quad \\langle\\psi,\\phi\\rangle\\]\n\n"
+        u8"\\ce{2H2 + O2 -> 2H2O}";
+    int passed = 0;
+    int failed = 0;
+    wait_for_spares(renderer, 30);
+    print_snapshot(renderer, "beforeBadCorpus");
+    for (size_t i = 0; i < selected_cases.size(); ++i) {
+      StemTeXRenderResult bad_result{};
+      long long bad_start = now_ms();
+      int bad_ok = stemtex_renderer_render(renderer, selected_cases[i].snippet, 360, &bad_result, &error_code, &error);
+      long long bad_end = now_ms();
+      bool bad_expected = !bad_ok && error_code == STEMTEX_ERROR_TEX_SNIPPET;
+      std::printf("badCorpus case=%zu name=%s badOk=%d code=%d ms=%lld\n", i + 1, selected_cases[i].name, bad_ok,
+                  (int)error_code, bad_end - bad_start);
+      if (bad_ok) {
+        std::printf("badCorpus case=%s unexpectedPdf=%s\n", selected_cases[i].name,
+                    bad_result.pdf_path_utf8 ? bad_result.pdf_path_utf8 : "");
+        stemtex_renderer_free_result(&bad_result);
+      } else {
+        if (error) {
+          std::string err(error);
+          size_t nl = err.find('\n');
+          if (nl != std::string::npos) err.resize(nl);
+          std::printf("badCorpus case=%s error=%s\n", selected_cases[i].name, err.c_str());
+        }
+        stemtex_renderer_free_string(error);
+        error = nullptr;
+      }
+
+      StemTeXEngineSnapshot after_bad = get_snapshot(renderer);
+      std::printf("badCorpus case=%s afterBad status=%d stage=%d primary=%d spare=%d/%d rebuilding=%d\n",
+                  selected_cases[i].name, (int)after_bad.status, (int)after_bad.stage, after_bad.primary_ready,
+                  after_bad.spare_ready, after_bad.spare_target, after_bad.spare_rebuilding);
+
+      StemTeXRenderResult good_result{};
+      long long good_start = now_ms();
+      int good_ok = stemtex_renderer_render(renderer, good, 360, &good_result, &error_code, &error);
+      long long good_end = now_ms();
+      if (good_ok) {
+        std::printf("badCorpus case=%s recoveryOk=1 ms=%lld pdf=%s\n", selected_cases[i].name, good_end - good_start,
+                    good_result.pdf_path_utf8 ? good_result.pdf_path_utf8 : "");
+        stemtex_renderer_free_result(&good_result);
+      } else {
+        std::printf("badCorpus case=%s recoveryOk=0 code=%d ms=%lld err=%s\n", selected_cases[i].name, (int)error_code,
+                    good_end - good_start, error ? error : "");
+        stemtex_renderer_free_string(error);
+        error = nullptr;
+      }
+
+      StemTeXEngineSnapshot after_good = get_snapshot(renderer);
+      bool status_ok = after_good.status == STEMTEX_STATUS_READY || after_good.status == STEMTEX_STATUS_RESTARTING;
+      if (bad_expected && good_ok && status_ok) {
+        passed += 1;
+      } else {
+        failed += 1;
+      }
+    }
+    char *tail = stemtex_renderer_get_log_tail(renderer, 4096);
+    std::printf("badCorpus passed=%d failed=%d total=%zu\n", passed, failed, selected_cases.size());
+    std::printf("badCorpus logTail:\n%s\n", tail ? tail : "");
+    stemtex_renderer_free_string(tail);
+    stemtex_renderer_destroy(renderer);
+    return failed == 0 ? 0 : 1;
   } else if (case_name == "--chem-text") {
     snippet = u8"\u6b63\u6587\u6a21\u5f0f\u5316\u5b66: "
               u8"\\ce{H2O}, \\ce{CO2}, \\ce{2H2 + O2 -> 2H2O}.";
