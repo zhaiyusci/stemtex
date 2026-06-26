@@ -644,20 +644,20 @@ struct RendererConfig {
   int min_width_pt = 0;
   int max_width_pt = 0;
   int default_width_pt = 360;
-  int spare_worker_count = 1;
+  int spare_worker_count = 0;
   bool auto_restart = true;
   bool delete_intermediates = false;
 };
 
 constexpr const char *kDefaultWorkerTemplate = R"STEMTEX_WORKER(\input{@@STEMTEX_PREAMBLE@@}
 \newcount\snippetcount
+\newif\ifstemtexcheckpointed
 \def\workerstopline{\workerstop}
 \def\stemtexemptyline{}
 \pagestyle{empty}
 \begin{document}
 \typeout{WORKER_READY}
 \def\workerloop{%
-  \special{stemtex:checkpoint}%
   \advance\snippetcount by 1
   \typeout{WORKER_WAIT:\the\snippetcount}%
   \read16 to\snippetHsize
@@ -684,6 +684,11 @@ constexpr const char *kDefaultWorkerTemplate = R"STEMTEX_WORKER(\input{@@STEMTEX
       \end{minipage}%
     \end{preview}%
     \typeout{WORKER_DONE:\the\snippetcount}%
+    \ifstemtexcheckpointed\else
+      \stemtexcheckpointedtrue
+      \special{stemtex:checkpoint}%
+      \typeout{WORKER_BASELINE_READY}%
+    \fi
     \errorstopmode
     \workerloop
   \fi
@@ -1242,6 +1247,7 @@ struct StemTeXRenderer {
     int next_request = 0;
     bool restored = false;
     bool wait_after_restore = false;
+    bool baseline_ready = false;
   };
 
   void append_log(const std::string &text) {
@@ -1320,6 +1326,7 @@ struct StemTeXRenderer {
     slot->last_wait_request = 0;
     slot->last_done_request = 0;
     slot->next_request = 0;
+    slot->baseline_ready = false;
     WorkerSlot *raw = slot.get();
     raw->child.start(worker_command(cfg, raw->live_out), raw->live_out, worker_env, [this, raw](const std::string &text) {
       append_log(text);
@@ -1342,6 +1349,10 @@ struct StemTeXRenderer {
         }
         if (line.find("STEMTEX_RESTORED") != std::string::npos) {
           raw->restored = true;
+          raw->cv.notify_all();
+        }
+        if (line.find("WORKER_BASELINE_READY") != std::string::npos) {
+          raw->baseline_ready = true;
           raw->cv.notify_all();
         }
         int wait_request = parse_worker_marker_number(line, "WORKER_WAIT:");
@@ -1391,6 +1402,7 @@ struct StemTeXRenderer {
       slot.done = false;
       slot.restored = false;
       slot.wait_after_restore = false;
+      slot.baseline_ready = false;
       slot.request_output.clear();
     }
     try {
@@ -1410,20 +1422,21 @@ struct StemTeXRenderer {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(cfg.request_timeout_ms);
     bool completed = false;
     while (!shutting_down.load() && std::chrono::steady_clock::now() < deadline) {
-      if (slot.done || !slot.child.is_running()) {
+      if ((slot.done && slot.baseline_ready) || !slot.child.is_running()) {
         completed = true;
         break;
       }
       slot.cv.wait_for(lock, std::chrono::milliseconds(25));
     }
-    if (!completed || !slot.done) {
+    if (!completed || !slot.done || !slot.baseline_ready) {
       std::string tail = slot.output_tail;
       lock.unlock();
       slot.child.stop();
       if (shutting_down.load()) {
         throw ApiException(STEMTEX_ERROR_CANCELLED, "Live worker warmup cancelled");
       }
-      throw ApiException(STEMTEX_ERROR_WORKER_STARTUP, "Live worker warmup failed: " + slot.name + ". TeX output tail:\n" + tail);
+      throw ApiException(STEMTEX_ERROR_WORKER_STARTUP,
+                         "Live worker warmup did not reach checkpoint baseline: " + slot.name + ". TeX output tail:\n" + tail);
     }
     lock.unlock();
     fs::path xdv_path = slot.live_out / "worker-template.xdv";
@@ -1759,14 +1772,12 @@ struct StemTeXRenderer {
     fs::path req_path = render_dir / "requests" / "req1.tex";
     write_text_file(req_path, snippet);
 
-    int expected_request = 0;
     {
       std::lock_guard<std::mutex> lock(slot.mu);
       slot.done = false;
       slot.request_output.clear();
       slot.restored = false;
       slot.wait_after_restore = false;
-      expected_request = slot.next_request + 1;
     }
     {
       std::lock_guard<std::mutex> lock(control_mu);
@@ -1782,7 +1793,7 @@ struct StemTeXRenderer {
       bool completed = false;
       while (std::chrono::steady_clock::now() < deadline) {
         bool has_tex_error = tex_output_has_error(slot.request_output);
-        bool request_done = slot.done && slot.last_done_request >= expected_request;
+        bool request_done = slot.done;
         bool returned_to_loop = !has_tex_error || slot.wait_after_restore;
         if ((request_done && returned_to_loop) || (has_tex_error && slot.wait_after_restore) ||
             !slot.child.is_running()) {
@@ -1834,7 +1845,6 @@ struct StemTeXRenderer {
       if (!slot.done && tex_output_has_error(slot.request_output)) {
         std::string request_output = slot.request_output;
         if (slot.restored) {
-          int ready_request = slot.last_wait_request;
           lock.unlock();
           {
             std::lock_guard<std::mutex> control_lock(control_mu);
@@ -1843,7 +1853,6 @@ struct StemTeXRenderer {
           }
           fs::path xdv_path = slot.live_out / "worker-template.xdv";
           if (fs::exists(xdv_path)) slot.last_xdv_offset = fs::file_size(xdv_path);
-          slot.next_request = ready_request > 0 ? ready_request - 1 : slot.next_request;
           append_log("[stemtex] TeX error restored worker to request loop\n");
           publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
           throw ApiException(STEMTEX_ERROR_TEX_SNIPPET, "TeX snippet failed. TeX output tail:\n" + request_output);
@@ -1886,7 +1895,6 @@ struct StemTeXRenderer {
         }
         fs::path xdv_path = slot.live_out / "worker-template.xdv";
         if (fs::exists(xdv_path)) slot.last_xdv_offset = fs::file_size(xdv_path);
-        ++slot.next_request;
         if (recovered_by_checkpoint) append_log("[stemtex] TeX checkpoint recovery returned worker to request loop\n");
         publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
         throw ApiException(STEMTEX_ERROR_TEX_SNIPPET, "TeX snippet failed. TeX output tail:\n" + request_output);

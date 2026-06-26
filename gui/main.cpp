@@ -257,7 +257,7 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
   cfg.profile_root_utf8 = profile.constData();
   cfg.request_timeout_ms = 90000;
   cfg.xdvipdfmx_timeout_ms = 90000;
-  cfg.spare_worker_count = 1;
+  cfg.spare_worker_count = 0;
 
   StemTeXErrorCode code = STEMTEX_OK;
   char *error = nullptr;
@@ -494,9 +494,10 @@ class MainWindow : public QMainWindow {
 
  private:
   void setUiReady(bool ready) {
+    (void)ready;
     bool hasProfile = profileCombo_ && profileCombo_->currentIndex() >= 0;
     renderButton_->setEnabled(hasProfile);
-    if (profileCombo_) profileCombo_->setEnabled(ready);
+    if (profileCombo_) profileCombo_->setEnabled(profileCombo_->count() > 0);
   }
 
   void setPreviewImageReady(bool ready) {
@@ -521,7 +522,7 @@ class MainWindow : public QMainWindow {
   void updateEngineStatus(bool primaryOk, int spareReady, int spareTarget, const QString &note = QString()) {
     spareReady_ = qMax(0, spareReady);
     spareTarget_ = qMax(0, spareTarget);
-    QString engineText = primaryOk ? "primary ready" : "primary unavailable";
+    QString engineText = primaryOk ? "primary ready" : "preparing primary ...";
     QString text = lightHtml(primaryOk);
     text += QString(" <span style=\"color:#333;\">%1</span>").arg(engineText);
     text += QString(" <span style=\"color:#777;\">spares %1/%2</span>").arg(spareReady_).arg(spareTarget_);
@@ -670,7 +671,7 @@ class MainWindow : public QMainWindow {
 
   void switchProfile() {
     QString profileName = profileCombo_->currentText();
-    stopRenderer(false);
+    stopRenderer(true);
     clearProfileOutput();
     updateEngineStatus(false, 0, spareTarget_, QString("profile: %1").arg(profileName));
     if (!profileCombo_ || profileCombo_->currentIndex() < 0) {
@@ -703,7 +704,7 @@ class MainWindow : public QMainWindow {
       cfg.profile_root_utf8 = profile.constData();
       cfg.request_timeout_ms = 90000;
       cfg.xdvipdfmx_timeout_ms = 90000;
-      cfg.spare_worker_count = 1;
+      cfg.spare_worker_count = 0;
       StemTeXErrorCode code = STEMTEX_OK;
       char *error = nullptr;
       StemTeXRenderer *renderer = nullptr;
@@ -980,7 +981,7 @@ class MainWindow : public QMainWindow {
   QTimer *autoRenderTimer_ = nullptr;
   QString observedEditorText_;
   int spareReady_ = 0;
-  int spareTarget_ = 1;
+  int spareTarget_ = 0;
   QString engineNote_;
   bool pendingStartupRender_ = false;
   uint64_t latestUiRequestId_ = 0;

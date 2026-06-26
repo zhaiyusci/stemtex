@@ -16,12 +16,24 @@ startup/restart/future-helper-process class of problems.
 
 ## Runtime Protocol
 
-The built-in worker template now places a checkpoint at the top of each request
-loop:
+The built-in worker template takes a single checkpoint after the worker's first
+warmup request has completed:
+
+```tex
+\typeout{WORKER_DONE:\the\snippetcount}%
+\ifstemtexcheckpointed\else
+  \stemtexcheckpointedtrue
+  \special{stemtex:checkpoint}%
+  \typeout{WORKER_BASELINE_READY}%
+\fi
+\errorstopmode
+\workerloop
+```
+
+After that, the request loop continues normally:
 
 ```tex
 \def\workerloop{%
-  \special{stemtex:checkpoint}%
   \advance\snippetcount by 1
   \typeout{WORKER_WAIT:\the\snippetcount}%
   \read16 to\snippetHsize
@@ -31,7 +43,9 @@ loop:
 
 `stemtex:checkpoint` is intercepted inside XeTeX's generated C source. It is not
 written into the XDV stream. Instead, it snapshots the TeX state that matters for
-returning to the worker loop.
+returning to the clean, post-preamble/post-warmup worker loop. The checkpoint is
+not refreshed for every later request, so a successful snippet cannot become the
+new baseline by accident.
 
 When a snippet later triggers a TeX error or a prompt path, XeTeX prints:
 
@@ -44,7 +58,8 @@ Then it restores the checkpoint and long-jumps back to the long-lived
 `WORKER_WAIT:N` before reporting the snippet failure to the caller. This is the
 important synchronization point: `STEMTEX_RESTORED` alone is only a restore
 signal; the next `WORKER_WAIT` proves that XeTeX is back at the request loop and
-ready for the next stdin pair.
+ready for the next stdin pair. The numeric suffix is diagnostic only; the C++
+renderer does not require it to be monotonic after a checkpoint restore.
 
 ## Captured State
 
@@ -57,6 +72,17 @@ The checkpoint currently saves and restores:
   interaction mode, and error counters;
 - allocator/hash/string scalar state such as `lomemmax`, `himemmin`,
   `hashused`, `poolptr`, and `strptr`.
+
+The largest checkpoint regions (`mem`, `eqtb`, and `hash`) are stored as
+block-based fill/raw snapshots. Each region is split into fixed-size element
+blocks. A block whose elements are all byte-identical is stored as one fill
+element; other blocks fall back to raw bytes. This keeps exact full-state
+restore semantics without storing every large region byte-for-byte. Smaller
+stacks and scalar state are still copied directly.
+
+Fill-block restore is optimized for the hot error-recovery path: all-zero fill
+blocks use `memset`, and non-zero fill blocks are expanded by repeated doubling
+copies instead of one element at a time.
 
 The restore is intentionally scoped to body-level recovery. It does not attempt
 to re-run or partially undo preamble initialization.
@@ -77,6 +103,10 @@ configuration and means no hot spare workers. Spare workers remain supported as
 failover capacity for process loss, cancellation, or explicit restart, but they
 are no longer required for ordinary snippet errors.
 
+During startup, the renderer also waits for `WORKER_BASELINE_READY` after the
+warmup request. This guarantees the reusable checkpoint exists before the worker
+is reported as ready for user snippets.
+
 Cancellation is separate from checkpoint recovery. A cancellation intentionally
 kills the active worker and returns `STEMTEX_ERROR_CANCELLED`; the next render
 starts or promotes a worker through the normal recovery path.
@@ -95,18 +125,17 @@ recovery mechanism.
 
 ## Current Test Coverage
 
-The current smoke coverage was run against the staged runtime with
-`SPARES=0`, except where noted:
+The current smoke coverage was run against the staged runtime after switching to
+the single post-warmup checkpoint with fill/raw large snapshots. The most
+relevant cases are:
 
-- `quick`: validate, default rendering, async, recover-no-worker;
-- content cases: `physics`, `fonts`, `chem-text`, `bytes`, `latin-math`,
-  `latin-text`;
-- `bad-corpus`: 20 malformed snippets, each immediately followed by a good
-  recovery probe;
-- `errors`: repeated bad snippets plus cancellation;
-- lifecycle cases: `restart`, `bad-then-good`, `bad-then-good-wait`, and
-  `bad-then-good-wait-long`;
-- `quick` with `SPARES=2`, to confirm the older spare-worker path still works.
+- `bad-corpus` with `SPARES=0`: malformed snippets, each immediately followed
+  by a good recovery probe;
+- `errors` with `SPARES=0`: repeated bad snippets plus cancellation;
+- `lifecycle-stress` with `SPARES=1`: repeated create/render/destroy cycles;
+- `profile-switch-stress` with `SPARES=1`: alternating `unicodemath_cjk` and
+  `unicodemath`;
+- `quick` with `SPARES=1`: validate, default rendering, async, recover-no-worker.
 
 The most important regression test is:
 
@@ -118,7 +147,7 @@ BUILD=0 SPARES=0 RUNS=1 TIMEOUT=240 \
 Expected result:
 
 ```text
-badCorpus passed=20 failed=0 total=20
+badCorpus passed=22 failed=0 total=22
 ```
 
 ## Known Boundaries

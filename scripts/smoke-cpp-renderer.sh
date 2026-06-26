@@ -8,7 +8,7 @@ profile_root="${STEMTEX_PROFILE:-$stage_root/gui/profiles/unicodemath_cjk}"
 exe="$repo_root/build/cpp-daemon/Release/stemtex-renderer-smoke.exe"
 timeout_s="${TIMEOUT:-90}"
 runs="${RUNS:-2}"
-spares="${SPARES:-2}"
+spares="${SPARES:-0}"
 mode="${1:-quick}"
 if [[ $# -gt 0 ]]; then
   shift

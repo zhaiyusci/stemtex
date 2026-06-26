@@ -34,7 +34,8 @@ runtime\
 ## Runtime Model
 
 `stemtex-renderer.dll` owns one primary XeTeX worker plus a configurable number
-of hot spare workers:
+of hot spare workers. The default configuration keeps only the primary worker;
+hosts may opt into hot spares by passing a positive `spare_worker_count`:
 
 - `primary`: handles normal render requests.
 - `spare-N`: stays hot as an immediate failover target.
@@ -47,7 +48,7 @@ On create, it:
    renderer compiles `warmup.tex` and saves `profile_root\warmup.xdv` for that
    local installation.
 4. Starts and primes a primary live worker.
-5. Starts building spare live workers in the background.
+5. If requested, starts building spare live workers in the background.
 
 `create` returns after the primary worker is ready. Spare workers are then built
 asynchronously, so increasing the spare count does not lengthen the foreground

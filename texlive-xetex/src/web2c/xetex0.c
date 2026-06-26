@@ -3,11 +3,28 @@
 #include <setjmp.h>
 #include <string.h>
 
+#define STEMTEX_SNAPSHOT_FILL 1
+#define STEMTEX_SNAPSHOT_RAW 2
+
+typedef struct {
+  unsigned char mode;
+  size_t size;
+  size_t data_size;
+  unsigned char *data;
+} stemtexsnapshotblock;
+
+typedef struct {
+  stemtexsnapshotblock *blocks;
+  size_t block_count;
+  size_t original_size;
+  size_t stored_size;
+} stemtexsnapshot;
+
 typedef struct {
   boolean valid;
-  memoryword *yzmem_copy;
-  memoryword *zeqtb_copy;
-  twohalves *yhash_copy;
+  stemtexsnapshot yzmem_copy;
+  stemtexsnapshot zeqtb_copy;
+  stemtexsnapshot yhash_copy;
   memoryword *savestack_copy;
   liststaterecord *nest_copy;
   instaterecord *inputstack_copy;
@@ -126,6 +143,123 @@ static boolean stemtex_checkpoint_ready = false;
 jmp_buf stemtex_main_jmp;
 boolean stemtex_main_jmp_ready = false;
 
+#define STEMTEX_SNAPSHOT_BLOCK_ELEMS 4096
+
+static void stemtex_snapshot_free(stemtexsnapshot *snapshot)
+{
+  size_t i;
+  if (snapshot->blocks != NULL) {
+    for (i = 0; i < snapshot->block_count; ++i) libcfree(snapshot->blocks[i].data);
+    libcfree(snapshot->blocks);
+  }
+  memset(snapshot, 0, sizeof(*snapshot));
+}
+
+static boolean stemtex_snapshot_block_is_fill(const unsigned char *src, size_t size, size_t elem_size)
+{
+  size_t pos;
+  if ((elem_size == 0) || (size == 0) || ((size % elem_size) != 0)) return false;
+  for (pos = elem_size; pos < size; pos += elem_size) {
+    if (memcmp(src, src + pos, elem_size) != 0) return false;
+  }
+  return true;
+}
+
+static boolean stemtex_snapshot_fill_is_zero(const unsigned char *fill, size_t elem_size)
+{
+  size_t i;
+  for (i = 0; i < elem_size; ++i) {
+    if (fill[i] != 0) return false;
+  }
+  return true;
+}
+
+static void stemtex_snapshot_restore_fill(unsigned char *dst, size_t size, const unsigned char *fill, size_t elem_size)
+{
+  size_t copied;
+  if (stemtex_snapshot_fill_is_zero(fill, elem_size)) {
+    memset(dst, 0, size);
+    return;
+  }
+  memcpy(dst, fill, elem_size);
+  copied = elem_size;
+  while (copied < size) {
+    size_t chunk = copied;
+    if (chunk > size - copied) chunk = size - copied;
+    memcpy(dst + copied, dst, chunk);
+    copied += chunk;
+  }
+}
+
+static void stemtex_snapshot_save(stemtexsnapshot *snapshot, const void *src, size_t src_size, size_t elem_size)
+{
+  const unsigned char *bytes = (const unsigned char *)src;
+  size_t block_size = elem_size * STEMTEX_SNAPSHOT_BLOCK_ELEMS;
+  size_t block_count;
+  size_t i;
+  if ((elem_size == 0) || ((src_size % elem_size) != 0)) {
+    fprintf(stderr, "stemtex checkpoint snapshot has invalid element size\n");
+    uexit(1);
+  }
+  if (block_size == 0) block_size = elem_size;
+  block_count = (src_size + block_size - 1) / block_size;
+  stemtex_snapshot_free(snapshot);
+  snapshot->blocks = xmallocarray(stemtexsnapshotblock, block_count);
+  memset(snapshot->blocks, 0, sizeof(stemtexsnapshotblock) * block_count);
+  snapshot->block_count = block_count;
+  snapshot->original_size = src_size;
+  for (i = 0; i < block_count; ++i) {
+    size_t offset = i * block_size;
+    size_t size = src_size - offset;
+    stemtexsnapshotblock *block = &snapshot->blocks[i];
+    if (size > block_size) size = block_size;
+    block->size = size;
+    if (stemtex_snapshot_block_is_fill(bytes + offset, size, elem_size)) {
+      block->mode = STEMTEX_SNAPSHOT_FILL;
+      block->data_size = elem_size;
+      block->data = xmallocarray(unsigned char, elem_size);
+      memcpy(block->data, bytes + offset, elem_size);
+    } else {
+      block->mode = STEMTEX_SNAPSHOT_RAW;
+      block->data_size = size;
+      block->data = xmallocarray(unsigned char, size);
+      memcpy(block->data, bytes + offset, size);
+    }
+    snapshot->stored_size += block->data_size;
+  }
+}
+
+static void stemtex_snapshot_restore(const stemtexsnapshot *snapshot, void *dst, size_t dst_size, size_t elem_size)
+{
+  unsigned char *bytes = (unsigned char *)dst;
+  size_t offset = 0;
+  size_t i;
+  if ((snapshot->original_size != dst_size) || (elem_size == 0) || ((dst_size % elem_size) != 0)) {
+    fprintf(stderr, "stemtex checkpoint snapshot size mismatch\n");
+    uexit(1);
+  }
+  for (i = 0; i < snapshot->block_count; ++i) {
+    const stemtexsnapshotblock *block = &snapshot->blocks[i];
+    if (offset + block->size > dst_size) {
+      fprintf(stderr, "stemtex checkpoint snapshot block overflow\n");
+      uexit(1);
+    }
+    if (block->mode == STEMTEX_SNAPSHOT_FILL) {
+      stemtex_snapshot_restore_fill(bytes + offset, block->size, block->data, elem_size);
+    } else if (block->mode == STEMTEX_SNAPSHOT_RAW) {
+      memcpy(bytes + offset, block->data, block->size);
+    } else {
+      fprintf(stderr, "stemtex checkpoint snapshot has unknown block mode\n");
+      uexit(1);
+    }
+    offset += block->size;
+  }
+  if (offset != dst_size) {
+    fprintf(stderr, "stemtex checkpoint snapshot restore ended at wrong size\n");
+    uexit(1);
+  }
+}
+
 static boolean stemtex_special_matches(const char *literal)
 {
   poolpointer start = strstart[(strptr) - 65536L];
@@ -146,21 +280,9 @@ static void stemtex_checkpoint_alloc(void)
   integer yhash_count = 1 + hashtop - hashoffset;
   integer strpool_count = poolptr > 1 ? poolptr : 1;
   integer strstart_count = strptr >= 65536L ? strptr - 65536L + 1 : 1;
-  if (stemtex_checkpoint.yzmem_count != yzmem_count) {
-    libcfree(stemtex_checkpoint.yzmem_copy);
-    stemtex_checkpoint.yzmem_copy = xmallocarray(memoryword, yzmem_count);
-    stemtex_checkpoint.yzmem_count = yzmem_count;
-  }
-  if (stemtex_checkpoint.zeqtb_count != zeqtb_count) {
-    libcfree(stemtex_checkpoint.zeqtb_copy);
-    stemtex_checkpoint.zeqtb_copy = xmallocarray(memoryword, zeqtb_count);
-    stemtex_checkpoint.zeqtb_count = zeqtb_count;
-  }
-  if (stemtex_checkpoint.yhash_count != yhash_count) {
-    libcfree(stemtex_checkpoint.yhash_copy);
-    stemtex_checkpoint.yhash_copy = xmallocarray(twohalves, yhash_count);
-    stemtex_checkpoint.yhash_count = yhash_count;
-  }
+  stemtex_checkpoint.yzmem_count = yzmem_count;
+  stemtex_checkpoint.zeqtb_count = zeqtb_count;
+  stemtex_checkpoint.yhash_count = yhash_count;
   if (stemtex_checkpoint.savestack_copy == NULL) stemtex_checkpoint.savestack_copy = xmallocarray(memoryword, savesize);
   if (stemtex_checkpoint.nest_copy == NULL) stemtex_checkpoint.nest_copy = xmallocarray(liststaterecord, nestsize);
   if (stemtex_checkpoint.inputstack_copy == NULL) stemtex_checkpoint.inputstack_copy = xmallocarray(instaterecord, stacksize);
@@ -185,9 +307,9 @@ static void stemtex_checkpoint_alloc(void)
 static void stemtex_save_checkpoint(void)
 {
   stemtex_checkpoint_alloc();
-  memcpy(stemtex_checkpoint.yzmem_copy, yzmem, sizeof(memoryword) * stemtex_checkpoint.yzmem_count);
-  memcpy(stemtex_checkpoint.zeqtb_copy, zeqtb, sizeof(memoryword) * stemtex_checkpoint.zeqtb_count);
-  memcpy(stemtex_checkpoint.yhash_copy, yhash, sizeof(twohalves) * stemtex_checkpoint.yhash_count);
+  stemtex_snapshot_save(&stemtex_checkpoint.yzmem_copy, yzmem, sizeof(memoryword) * (size_t)stemtex_checkpoint.yzmem_count, sizeof(memoryword));
+  stemtex_snapshot_save(&stemtex_checkpoint.zeqtb_copy, zeqtb, sizeof(memoryword) * (size_t)stemtex_checkpoint.zeqtb_count, sizeof(memoryword));
+  stemtex_snapshot_save(&stemtex_checkpoint.yhash_copy, yhash, sizeof(twohalves) * (size_t)stemtex_checkpoint.yhash_count, sizeof(twohalves));
   memcpy(stemtex_checkpoint.savestack_copy, savestack, sizeof(memoryword) * savesize);
   memcpy(stemtex_checkpoint.nest_copy, nest, sizeof(liststaterecord) * nestsize);
   memcpy(stemtex_checkpoint.inputstack_copy, inputstack, sizeof(instaterecord) * stacksize);
@@ -301,9 +423,9 @@ static void stemtex_save_checkpoint(void)
 static void stemtex_restore_checkpoint(void)
 {
   if (!stemtex_checkpoint.valid) return;
-  memcpy(yzmem, stemtex_checkpoint.yzmem_copy, sizeof(memoryword) * stemtex_checkpoint.yzmem_count);
-  memcpy(zeqtb, stemtex_checkpoint.zeqtb_copy, sizeof(memoryword) * stemtex_checkpoint.zeqtb_count);
-  memcpy(yhash, stemtex_checkpoint.yhash_copy, sizeof(twohalves) * stemtex_checkpoint.yhash_count);
+  stemtex_snapshot_restore(&stemtex_checkpoint.yzmem_copy, yzmem, sizeof(memoryword) * (size_t)stemtex_checkpoint.yzmem_count, sizeof(memoryword));
+  stemtex_snapshot_restore(&stemtex_checkpoint.zeqtb_copy, zeqtb, sizeof(memoryword) * (size_t)stemtex_checkpoint.zeqtb_count, sizeof(memoryword));
+  stemtex_snapshot_restore(&stemtex_checkpoint.yhash_copy, yhash, sizeof(twohalves) * (size_t)stemtex_checkpoint.yhash_count, sizeof(twohalves));
   memcpy(savestack, stemtex_checkpoint.savestack_copy, sizeof(memoryword) * savesize);
   memcpy(nest, stemtex_checkpoint.nest_copy, sizeof(liststaterecord) * nestsize);
   memcpy(inputstack, stemtex_checkpoint.inputstack_copy, sizeof(instaterecord) * stacksize);

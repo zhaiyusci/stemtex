@@ -32,7 +32,7 @@ struct SmokeOptions {
   fs::path profile_root;
   int runs = 1;
   std::string case_name;
-  int spare_workers = 1;
+  int spare_workers = 0;
   std::string worker_template;
   bool allow_exe = false;
 };
@@ -65,7 +65,7 @@ static SmokeOptions parse_options(int argc, char **argv) {
     opts.runtime_root = argc > 2 && argv[2] && *argv[2] ? fs::absolute(argv[2]) : default_runtime_root(opts.repo_root);
     opts.runs = argc > 3 ? std::atoi(argv[3]) : 1;
     opts.case_name = argc > 4 ? canonical_case(argv[4]) : "";
-    opts.spare_workers = argc > 5 ? std::atoi(argv[5]) : 1;
+    opts.spare_workers = argc > 5 ? std::atoi(argv[5]) : 0;
     opts.profile_root = argc > 6 && argv[6] && *argv[6] ? fs::absolute(argv[6]) : fs::path();
     opts.worker_template = argc > 7 ? argv[7] : "";
     return opts;

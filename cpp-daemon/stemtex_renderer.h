@@ -25,7 +25,7 @@ typedef struct StemTeXConfig {
   int min_width_pt;
   int max_width_pt;
   int default_width_pt;
-  /* 0 means the default hot spare count. Positive values are clamped internally. */
+  /* 0 means no hot spare workers. Positive values are clamped internally. */
   int spare_worker_count;
   int auto_restart;
   int delete_intermediates;
