@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-build_dir="${BUILD_DIR:-$repo_root/build/cpp-daemon}"
+build_dir="${BUILD_DIR:-$repo_root/build/stemtex-renderer}"
 
 win_path() {
   local p="$1"
@@ -51,5 +51,6 @@ if [[ ! -x "$cmake_bin" ]]; then
   exit 1
 fi
 
-"$cmake_bin" -S "$(win_path "$repo_root/cpp-daemon")" -B "$(win_path "$build_dir")" -G "Visual Studio 17 2022" -A x64
+"$cmake_bin" -S "$(win_path "$repo_root")" -B "$(win_path "$build_dir")" -G "Visual Studio 17 2022" -A x64 \
+  -DSTEMTEX_BUILD_GUI=OFF
 "$cmake_bin" --build "$(win_path "$build_dir")" --config Release --target stemtex-renderer stemtex-renderer-smoke --parallel "${JOBS:-8}"

@@ -57,6 +57,13 @@ Name: "{autoprograms}\StemTeX Renderer GUI"; Filename: "{app}\gui\stemtex-render
 [Run]
 Filename: "{app}\runtime\refresh-profile-cache.bat"; Parameters: """{app}\gui\profiles\unicodemath_cjk"""; WorkingDir: "{app}\runtime"; Flags: runhidden waituntilterminated; StatusMsg: "Preparing StemTeX font and profile cache..."; Check: ShouldRunInstallWarmup
 
+[InstallDelete]
+Type: files; Name: "{app}\gui\profiles\*\warmup.xdv"
+Type: files; Name: "{app}\gui\profiles\*\warmup.aux"
+Type: files; Name: "{app}\gui\profiles\*\warmup.log"
+Type: files; Name: "{app}\gui\profiles\*\warmup.pdf"
+Type: files; Name: "{app}\gui\profiles\*\warmup.synctex.gz"
+
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\runtime\texmf-var\fonts\cache"
 Type: filesandordirs; Name: "{app}\runtime\texmf-var\cache-warmup"

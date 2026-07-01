@@ -1,0 +1,97 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "vs2022",
+      "displayName": "Visual Studio 2022 x64",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/stemtex",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "C:/Qt/6.11.1/msvc2022_64"
+      }
+    },
+    {
+      "name": "renderer-vs2022",
+      "displayName": "Renderer only, Visual Studio 2022 x64",
+      "inherits": "vs2022",
+      "binaryDir": "${sourceDir}/build/stemtex-renderer",
+      "cacheVariables": {
+        "STEMTEX_BUILD_GUI": "OFF"
+      }
+    },
+    {
+      "name": "ninja-msvc",
+      "displayName": "Ninja with an initialized MSVC environment",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/stemtex-ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_MAKE_PROGRAM": "C:/Qt/Tools/Ninja/ninja.exe",
+        "CMAKE_PREFIX_PATH": "C:/Qt/6.11.1/msvc2022_64"
+      }
+    },
+    {
+      "name": "renderer-ninja-msvc",
+      "displayName": "Renderer only, Ninja with an initialized MSVC environment",
+      "inherits": "ninja-msvc",
+      "binaryDir": "${sourceDir}/build/stemtex-renderer-ninja",
+      "cacheVariables": {
+        "STEMTEX_BUILD_GUI": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "release",
+      "configurePreset": "vs2022",
+      "configuration": "Release",
+      "targets": [
+        "stemtex-renderer",
+        "stemtex-renderer-smoke",
+        "stemtex-renderer-gui"
+      ]
+    },
+    {
+      "name": "renderer-release",
+      "configurePreset": "renderer-vs2022",
+      "configuration": "Release",
+      "targets": [
+        "stemtex-renderer",
+        "stemtex-renderer-smoke"
+      ]
+    },
+    {
+      "name": "ninja-release",
+      "configurePreset": "ninja-msvc",
+      "targets": [
+        "stemtex-renderer",
+        "stemtex-renderer-smoke",
+        "stemtex-renderer-gui"
+      ]
+    },
+    {
+      "name": "renderer-ninja-release",
+      "configurePreset": "renderer-ninja-msvc",
+      "targets": [
+        "stemtex-renderer",
+        "stemtex-renderer-smoke"
+      ]
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "vs2022"
+        },
+        {
+          "type": "build",
+          "name": "release"
+        }
+      ]
+    }
+  ]
+}

@@ -1233,6 +1233,7 @@ struct StemTeXRenderer {
   struct WorkerSlot {
     std::string name;
     fs::path live_out;
+    fs::path root;
     ChildProcess child;
     LineWatcher lines;
     std::mutex mu;
@@ -1314,8 +1315,8 @@ struct StemTeXRenderer {
   std::unique_ptr<WorkerSlot> create_ready_worker(const std::string &name, bool prime = true) {
     auto slot = std::make_unique<WorkerSlot>();
     slot->name = name;
-    slot->live_out = cfg.state_root / "workers" / name / "live";
-    fs::remove_all(cfg.state_root / "workers" / name);
+    slot->root = cfg.state_root / "workers" / (name + "-" + random_id());
+    slot->live_out = slot->root / "live";
     fs::create_directories(slot->live_out);
     materialize_worker_template(cfg, slot->live_out);
     slot->ready = false;
@@ -1395,7 +1396,7 @@ struct StemTeXRenderer {
   }
 
   void prime_worker(WorkerSlot &slot) {
-    fs::path req_path = cfg.state_root / "workers" / slot.name / "warmup-request" / "req1.tex";
+    fs::path req_path = slot.root / "warmup-request" / "req1.tex";
     write_text_file(req_path, installed_warmup_body(cfg));
     {
       std::lock_guard<std::mutex> lock(slot.mu);
@@ -1486,6 +1487,8 @@ struct StemTeXRenderer {
       if (slot) slot->child.stop();
     }
     converter.reset();
+    std::error_code ec;
+    fs::remove_all(cfg.state_root, ec);
   }
 
   void join_spare_builder() {

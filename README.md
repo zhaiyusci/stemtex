@@ -123,12 +123,29 @@ cd /path/to/stemtex
 ./scripts/refresh-static-runtime-cache.sh ./dist/stemtex-texlive-daemon-static ./gui/profiles/unicodemath_cjk
 ```
 
-Build the renderer and GUI:
+Build the renderer and GUI through the unified CMake project:
+
+```sh
+cmake -S . -B build/stemtex -G "Visual Studio 17 2022" -A x64 \
+  -DCMAKE_PREFIX_PATH=/c/Qt/6.11.1/msvc2022_64
+cmake --build build/stemtex --config Release --target stemtex-renderer stemtex-renderer-smoke stemtex-renderer-gui
+cmake --install build/stemtex --config Release --prefix staging
+```
+
+On newer Visual Studio installations whose CMake generator is not recognized,
+initialize the MSVC environment and use Ninja instead:
+
+```bat
+call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
+cmake --preset renderer-ninja-msvc
+cmake --build --preset renderer-ninja-release
+```
+
+The legacy wrapper scripts still work and call the same top-level CMake targets:
 
 ```sh
 ./scripts/build-cpp-daemon.sh
 ./scripts/build-gui.sh
-./scripts/stage-stemtex.sh
 ```
 
 Run the C++ renderer smoke suite:

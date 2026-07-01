@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-build_dir="${BUILD_DIR:-$repo_root/build/gui}"
+build_dir="${BUILD_DIR:-$repo_root/build/stemtex}"
 
 resolve_qt_prefix() {
   if [[ -n "${QT_PREFIX:-}" ]]; then
@@ -71,6 +71,6 @@ if [[ ! -x "$cmake_bin" ]]; then
   exit 1
 fi
 
-"$cmake_bin" -S "$(win_path "$repo_root/gui")" -B "$(win_path "$build_dir")" -G "Visual Studio 17 2022" -A x64 \
+"$cmake_bin" -S "$(win_path "$repo_root")" -B "$(win_path "$build_dir")" -G "Visual Studio 17 2022" -A x64 \
   -DCMAKE_PREFIX_PATH="$(win_path "$qt_prefix")"
 "$cmake_bin" --build "$(win_path "$build_dir")" --config Release --target stemtex-renderer-gui --parallel "${JOBS:-8}"
