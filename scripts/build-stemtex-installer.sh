@@ -13,16 +13,13 @@ if [[ -z "$app_version" ]]; then
 fi
 stage_root="${STAGE_ROOT:-$repo_root/dist/stemtex-installer/StemTeX}"
 output_dir="${OUTPUT_DIR:-$repo_root/dist/installer}"
-gui_root="${GUI_ROOT:-$repo_root/build/gui/Release}"
-cpp_daemon_root="${CPP_DAEMON_ROOT:-$repo_root/build/cpp-daemon/Release}"
+build_dir="${BUILD_DIR:-$repo_root/build/stemtex}"
+cmake_bin="${CMAKE:-cmake}"
 iscc="${ISCC:-}"
 
-if [[ ! -f "$gui_root/stemtex-renderer-gui.exe" ]]; then
-  echo "Renderer GUI build not found: $gui_root/stemtex-renderer-gui.exe" >&2
-  exit 1
-fi
-if [[ ! -f "$cpp_daemon_root/stemtex-renderer.dll" || ! -f "$cpp_daemon_root/stemtex-renderer.lib" ]]; then
-  echo "C++ renderer build not found under: $cpp_daemon_root" >&2
+if [[ ! -d "$build_dir" ]]; then
+  echo "CMake build directory not found: $build_dir" >&2
+  echo "Set BUILD_DIR=/path/to/build or configure/build the top-level CMake project first." >&2
   exit 1
 fi
 
@@ -48,8 +45,8 @@ if [[ -z "$iscc" || ! -x "$iscc" ]]; then
 fi
 
 mkdir -p "$output_dir"
-STAGE_ROOT="$stage_root" GUI_ROOT="$gui_root" CPP_DAEMON_ROOT="$cpp_daemon_root" \
-  "$repo_root/scripts/stage-stemtex.sh" >/tmp/stemtex-installer-stage.log
+rm -rf "$stage_root"
+"$cmake_bin" --install "$build_dir" --prefix "$stage_root" >/tmp/stemtex-installer-stage.log
 
 MSYS2_ARG_CONV_EXCL='*' "$iscc" \
   "/DSourceDir=$(cygpath -w "$stage_root")" \
