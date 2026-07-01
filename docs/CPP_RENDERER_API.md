@@ -122,8 +122,10 @@ Fields:
 - `profile_root_utf8`: required profile directory. It must directly contain
   `preamble.tex` and `warmup.tex`. The renderer does not guess a default
   profile.
-- `state_root_utf8`: optional worker state directory. If null, the renderer
-  uses a unique directory under the system temporary directory.
+- `state_root_utf8`: optional worker state base directory. Each renderer
+  instance creates and later removes its own unique child directory there. If
+  null, the renderer uses a unique directory under the system temporary
+  directory.
 - `renders_root_utf8`: optional render output directory. If null, the renderer
   uses a unique directory under the system temporary directory.
 - `request_timeout_ms`: worker request timeout. `0` uses `90000`.

@@ -45,7 +45,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -512,15 +515,54 @@ class MainWindow : public QMainWindow {
     setUiReady(true);
     updatePreviewMinimumWidth(widthSpin_->value());
     editorPollTimer_->start();
+    startBackgroundWorker();
     initializeRenderer(true);
   }
 
   ~MainWindow() override {
     shuttingDown_.store(true);
     stopRenderer(false);
+    stopBackgroundWorker();
   }
 
  private:
+  void startBackgroundWorker() {
+    backgroundWorker_ = std::thread([this]() { backgroundLoop(); });
+  }
+
+  bool postBackground(std::function<void()> task) {
+    {
+      std::lock_guard<std::mutex> lock(backgroundMutex_);
+      if (backgroundStop_) return false;
+      backgroundQueue_.push_back(std::move(task));
+    }
+    backgroundCv_.notify_one();
+    return true;
+  }
+
+  void backgroundLoop() {
+    while (true) {
+      std::function<void()> task;
+      {
+        std::unique_lock<std::mutex> lock(backgroundMutex_);
+        backgroundCv_.wait(lock, [this]() { return backgroundStop_ || !backgroundQueue_.empty(); });
+        if (backgroundStop_ && backgroundQueue_.empty()) return;
+        task = std::move(backgroundQueue_.front());
+        backgroundQueue_.pop_front();
+      }
+      task();
+    }
+  }
+
+  void stopBackgroundWorker() {
+    {
+      std::lock_guard<std::mutex> lock(backgroundMutex_);
+      backgroundStop_ = true;
+    }
+    backgroundCv_.notify_all();
+    if (backgroundWorker_.joinable()) backgroundWorker_.join();
+  }
+
   void setUiReady(bool ready) {
     (void)ready;
     bool hasProfile = profileCombo_ && profileCombo_->currentIndex() >= 0;
@@ -622,10 +664,14 @@ class MainWindow : public QMainWindow {
 
   void destroyRendererLater(StemTeXRenderer *renderer) {
     if (!renderer) return;
-    std::thread([renderer]() {
+    if (postBackground([renderer]() {
       std::lock_guard<std::mutex> lock(gRendererLifecycleMutex);
       stemtex_renderer_destroy(renderer);
-    }).detach();
+    })) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(gRendererLifecycleMutex);
+    stemtex_renderer_destroy(renderer);
   }
 
   void stopRenderer(bool asyncDestroy = true) {
@@ -719,11 +765,15 @@ class MainWindow : public QMainWindow {
     setUiReady(false);
     updateEngineStatus(false, 0, spareTarget_, QString("starting profile: %1").arg(QFileInfo(profileRoot).fileName()));
     uint64_t generation = ++rendererGeneration_;
-    std::thread([this, profileRoot, generation, renderAfterInit]() {
+    QString repoRoot = repo_root_;
+    QString runtimeRoot = runtime_root_;
+    QString texmfRoot = texmf_root_;
+    postBackground([this, repoRoot, runtimeRoot, texmfRoot, profileRoot, generation, renderAfterInit]() {
+      if (shuttingDown_.load() || generation != rendererGeneration_.load()) return;
       auto start = std::chrono::steady_clock::now();
-      QByteArray repo = QDir::cleanPath(repo_root_).toUtf8();
-      QByteArray runtime = QDir::cleanPath(runtime_root_).toUtf8();
-      QByteArray texmf = QDir::cleanPath(texmf_root_).toUtf8();
+      QByteArray repo = QDir::cleanPath(repoRoot).toUtf8();
+      QByteArray runtime = QDir::cleanPath(runtimeRoot).toUtf8();
+      QByteArray texmf = QDir::cleanPath(texmfRoot).toUtf8();
       QByteArray profile = QDir::cleanPath(profileRoot).toUtf8();
       StemTeXConfig cfg{};
       cfg.repo_root_utf8 = repo.constData();
@@ -781,7 +831,7 @@ class MainWindow : public QMainWindow {
           scheduleAutoRender();
         }
       }, Qt::QueuedConnection);
-    }).detach();
+    });
   }
 
   void renderSnippet() {
@@ -848,7 +898,7 @@ class MainWindow : public QMainWindow {
         self->updateDetailsText();
       }, Qt::QueuedConnection);
     };
-    std::thread([this, renderer, text, width, callback, context, uiRequestId, generation]() {
+    if (!postBackground([this, renderer, text, width, callback, context, uiRequestId, generation]() {
       StemTeXErrorCode code = STEMTEX_OK;
       char *error = nullptr;
       uint64_t rendererJobId = 0;
@@ -864,13 +914,16 @@ class MainWindow : public QMainWindow {
       stemtex_renderer_free_string(error);
       if (!submitted) {
         delete context;
+        if (shuttingDown_.load()) return;
         QMetaObject::invokeMethod(this, [this, uiRequestId, generation, code, errorText]() {
           if (shuttingDown_.load() || generation != rendererGeneration_.load() || uiRequestId != latestUiRequestId_) return;
           refreshEngineStatus(QString("failed to submit request, code %1").arg((int)code));
           details_->setPlainText(errorText);
         }, Qt::QueuedConnection);
       }
-    }).detach();
+    })) {
+      delete context;
+    }
   }
 
   void showCroppedPreview(const QString &pdfPath, int widthPt) {
@@ -1007,6 +1060,11 @@ class MainWindow : public QMainWindow {
   QTimer *enginePollTimer_ = nullptr;
   QTimer *editorPollTimer_ = nullptr;
   QTimer *autoRenderTimer_ = nullptr;
+  std::mutex backgroundMutex_;
+  std::condition_variable backgroundCv_;
+  std::deque<std::function<void()>> backgroundQueue_;
+  std::thread backgroundWorker_;
+  bool backgroundStop_ = false;
   QString observedEditorText_;
   int spareReady_ = 0;
   int spareTarget_ = 0;

@@ -511,11 +511,30 @@ class ChildProcess {
     HANDLE stdin_read = nullptr, stdin_write = nullptr;
     HANDLE stdout_read = nullptr, stdout_write = nullptr;
     HANDLE stderr_read = nullptr, stderr_write = nullptr;
-    if (!CreatePipe(&stdin_read, &stdin_write, &sa, 0)) throw std::runtime_error("CreatePipe stdin failed");
+    auto close_pipe_handles = [&]() {
+      close_handle(stdin_read);
+      close_handle(stdin_write);
+      close_handle(stdout_read);
+      close_handle(stdout_write);
+      close_handle(stderr_read);
+      close_handle(stderr_write);
+    };
+    if (!CreatePipe(&stdin_read, &stdin_write, &sa, 0)) {
+      close_handle(job_);
+      throw std::runtime_error("CreatePipe stdin failed");
+    }
     SetHandleInformation(stdin_write, HANDLE_FLAG_INHERIT, 0);
-    if (!CreatePipe(&stdout_read, &stdout_write, &sa, 0)) throw std::runtime_error("CreatePipe stdout failed");
+    if (!CreatePipe(&stdout_read, &stdout_write, &sa, 0)) {
+      close_pipe_handles();
+      close_handle(job_);
+      throw std::runtime_error("CreatePipe stdout failed");
+    }
     SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0);
-    if (!CreatePipe(&stderr_read, &stderr_write, &sa, 0)) throw std::runtime_error("CreatePipe stderr failed");
+    if (!CreatePipe(&stderr_read, &stderr_write, &sa, 0)) {
+      close_pipe_handles();
+      close_handle(job_);
+      throw std::runtime_error("CreatePipe stderr failed");
+    }
     SetHandleInformation(stderr_read, HANDLE_FLAG_INHERIT, 0);
 
     STARTUPINFOW si{};
@@ -529,26 +548,26 @@ class ChildProcess {
     std::wstring cmd = command_line;
     std::wstring cwdw = cwd.wstring();
     LPVOID env = environment.empty() ? nullptr : const_cast<wchar_t *>(environment.data());
-    BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
-                             env, cwdw.c_str(), &si, &pi);
+    DWORD creation_flags = CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED;
+    BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, creation_flags, env, cwdw.c_str(), &si, &pi);
     CloseHandle(stdin_read);
+    stdin_read = nullptr;
     CloseHandle(stdout_write);
+    stdout_write = nullptr;
     CloseHandle(stderr_write);
+    stderr_write = nullptr;
     if (!ok) {
-      CloseHandle(stdin_write);
-      CloseHandle(stdout_read);
-      CloseHandle(stderr_read);
+      DWORD err = GetLastError();
+      close_pipe_handles();
       close_handle(job_);
-      throw std::runtime_error("CreateProcess failed");
+      throw std::runtime_error("CreateProcess failed: " + std::to_string(err));
     }
 
     if (!AssignProcessToJobObject(job_, pi.hProcess)) {
       DWORD err = GetLastError();
       TerminateProcess(pi.hProcess, 1);
       WaitForSingleObject(pi.hProcess, 5000);
-      CloseHandle(stdin_write);
-      CloseHandle(stdout_read);
-      CloseHandle(stderr_read);
+      close_pipe_handles();
       CloseHandle(pi.hThread);
       CloseHandle(pi.hProcess);
       close_handle(job_);
@@ -561,6 +580,11 @@ class ChildProcess {
     stderr_ = stderr_read;
     stdout_thread_ = std::thread([this, on_data]() { read_loop(stdout_, on_data); });
     stderr_thread_ = std::thread([this, on_data]() { read_loop(stderr_, on_data); });
+    if (ResumeThread(pi_.hThread) == (DWORD)-1) {
+      DWORD err = GetLastError();
+      stop();
+      throw std::runtime_error("ResumeThread failed: " + std::to_string(err));
+    }
   }
 
   void write_stdin(const std::string &text) {
@@ -1187,12 +1211,13 @@ RendererConfig config_from_api(const StemTeXConfig *config) {
                       : cfg.profile_root;
   std::string instance_id = random_id();
   fs::path default_work_root = fs::temp_directory_path() / "stemtex-renderer" / instance_id;
-  cfg.state_root = config && config->state_root_utf8 && *config->state_root_utf8
-                       ? fs::absolute(config->state_root_utf8)
-                       : default_work_root / "state";
+  fs::path state_base_root = config && config->state_root_utf8 && *config->state_root_utf8
+                                 ? fs::absolute(config->state_root_utf8)
+                                 : default_work_root / "state";
+  cfg.state_root = state_base_root / ("instance-" + instance_id);
   cfg.renders_root = config && config->renders_root_utf8 && *config->renders_root_utf8
-                         ? fs::absolute(config->renders_root_utf8)
-                         : default_work_root / "renders";
+                          ? fs::absolute(config->renders_root_utf8)
+                          : default_work_root / "renders";
   cfg.warmup_tex = cfg.profile_root / "warmup.tex";
   if (config && config->worker_template_utf8 && *config->worker_template_utf8) {
     cfg.worker_template = fs::absolute(config->worker_template_utf8);
