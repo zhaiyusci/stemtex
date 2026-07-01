@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFont>
@@ -32,6 +33,7 @@
 #include <QString>
 #include <QStringList>
 #include <QTextBrowser>
+#include <QTextStream>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -240,6 +242,15 @@ CroppedPreview renderCroppedPdfPreview(const QString &pdfPath, int minWidthPt, i
 }
 
 int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString &profileRoot, const QString &texmfRoot) {
+  QDir(QDir(repoRoot).filePath("build")).mkpath(".");
+  QFile smokeLog(QDir(repoRoot).filePath("build/gui-smoke.log"));
+  smokeLog.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append);
+  QTextStream log(&smokeLog);
+  auto logLine = [&](const QString &text) {
+    if (!smokeLog.isOpen()) return;
+    log << text << '\n';
+    log.flush();
+  };
   QByteArray repo = QDir::cleanPath(repoRoot).toUtf8();
   QByteArray runtime = QDir::cleanPath(runtimeRoot).toUtf8();
   QByteArray texmf = QDir::cleanPath(texmfRoot).toUtf8();
@@ -250,6 +261,10 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
          QFileInfo::exists(runtimeDir.filePath("bin/windows/xetexdaemon.exe")) ? 1 : 0,
          QFileInfo::exists(runtimeDir.filePath("bin/windows/dvipdfmxdaemon.dll")) ? 1 : 0,
          QFileInfo::exists(QDir(QString::fromUtf8(profile)).filePath("warmup.tex")) ? 1 : 0);
+  logLine(QString("repoRoot=%1").arg(QString::fromUtf8(repo)));
+  logLine(QString("runtimeRoot=%1").arg(QString::fromUtf8(runtime)));
+  logLine(QString("texmfRoot=%1").arg(QString::fromUtf8(texmf)));
+  logLine(QString("profileRoot=%1").arg(QString::fromUtf8(profile)));
   StemTeXConfig cfg{};
   cfg.repo_root_utf8 = repo.constData();
   cfg.runtime_root_utf8 = runtime.constData();
@@ -264,15 +279,18 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
   StemTeXRenderer *renderer = stemtex_renderer_create(&cfg, &code, &error);
   if (!renderer) {
     fprintf(stderr, "create failed code=%d: %s\n", (int)code, error ? error : "");
+    logLine(QString("create failed code=%1: %2").arg((int)code).arg(error ? QString::fromUtf8(error) : QString()));
     stemtex_renderer_free_string(error);
     return 1;
   }
+  logLine(QString("renderer version=%1 abi=%2").arg(stemtex_renderer_version(), stemtex_renderer_abi_version()));
 
   StemTeXRenderResult result{};
   QByteArray snippet = defaultSnippet().toUtf8();
   int ok = stemtex_renderer_render(renderer, snippet.constData(), 360, &result, &code, &error);
   if (!ok) {
     fprintf(stderr, "render failed code=%d: %s\n", (int)code, error ? error : "");
+    logLine(QString("render failed code=%1: %2").arg((int)code).arg(error ? QString::fromUtf8(error) : QString()));
     stemtex_renderer_free_string(error);
     stemtex_renderer_destroy(renderer);
     return 1;
@@ -288,10 +306,20 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
   printf("pdf=%s\nsummary=%s\nqtPdfError=%d pages=%d pagePoints=%.2fx%.2f croppedPixels=%dx%d\n",
          pdfPath.toUtf8().constData(), summary.toUtf8().constData(),
          (int)pdfError, pages, pageSize.width(), pageSize.height(), cropped.image.width(), cropped.image.height());
+  logLine(QString("pdf=%1").arg(pdfPath));
+  logLine(QString("summary=%1").arg(summary));
+  logLine(QString("qtPdfError=%1 pages=%2 pagePoints=%3x%4 croppedPixels=%5x%6")
+              .arg((int)pdfError)
+              .arg(pages)
+              .arg(pageSize.width())
+              .arg(pageSize.height())
+              .arg(cropped.image.width())
+              .arg(cropped.image.height()));
   if (!summary.contains("\"xdvipdfmxMode\":\"daemon-dll\"") &&
       !summary.contains("\"xdvipdfmxMode\":\"dll\"") &&
       !summary.contains("\"xdvipdfmxMode\":\"process-isolated\"")) {
     fprintf(stderr, "expected a supported xdvipdfmxMode, got summary=%s\n", summary.toUtf8().constData());
+    logLine(QString("expected supported xdvipdfmxMode"));
     stemtex_renderer_free_result(&result);
     stemtex_renderer_destroy(renderer);
     return 1;

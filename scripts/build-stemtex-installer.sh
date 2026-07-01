@@ -17,10 +17,23 @@ build_dir="${BUILD_DIR:-$repo_root/build/stemtex}"
 cmake_bin="${CMAKE:-cmake}"
 iscc="${ISCC:-}"
 
-if [[ ! -d "$build_dir" ]]; then
-  echo "CMake build directory not found: $build_dir" >&2
-  echo "Set BUILD_DIR=/path/to/build or configure/build the top-level CMake project first." >&2
-  exit 1
+configure_args=(-S "$repo_root" -B "$build_dir")
+if [[ ! -f "$build_dir/CMakeCache.txt" ]]; then
+  if [[ -n "${CMAKE_GENERATOR:-}" ]]; then
+    configure_args+=(-G "$CMAKE_GENERATOR")
+    if [[ -n "${CMAKE_GENERATOR_PLATFORM:-}" ]]; then
+      configure_args+=(-A "$CMAKE_GENERATOR_PLATFORM")
+    fi
+  else
+    configure_args+=(-G "Visual Studio 17 2022" -A x64)
+  fi
+fi
+if [[ -n "${QT_PREFIX:-}" ]]; then
+  configure_args+=("-DCMAKE_PREFIX_PATH=$QT_PREFIX")
+elif [[ -n "${CMAKE_PREFIX_PATH:-}" ]]; then
+  configure_args+=("-DCMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH")
+elif [[ -d "/c/Qt/6.11.1/msvc2022_64" ]]; then
+  configure_args+=("-DCMAKE_PREFIX_PATH=/c/Qt/6.11.1/msvc2022_64")
 fi
 
 if [[ -z "$iscc" ]]; then
@@ -45,8 +58,10 @@ if [[ -z "$iscc" || ! -x "$iscc" ]]; then
 fi
 
 mkdir -p "$output_dir"
+"$cmake_bin" "${configure_args[@]}"
+"$cmake_bin" --build "$build_dir" --config Release --target stemtex-renderer stemtex-renderer-smoke stemtex-renderer-gui --parallel "${JOBS:-8}"
 rm -rf "$stage_root"
-"$cmake_bin" --install "$build_dir" --prefix "$stage_root" >/tmp/stemtex-installer-stage.log
+"$cmake_bin" --install "$build_dir" --config Release --prefix "$stage_root" >/tmp/stemtex-installer-stage.log
 
 MSYS2_ARG_CONV_EXCL='*' "$iscc" \
   "/DSourceDir=$(cygpath -w "$stage_root")" \
