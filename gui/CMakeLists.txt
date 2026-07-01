@@ -37,12 +37,20 @@ add_custom_command(TARGET stemtex-renderer-gui POST_BUILD
           ${CMAKE_CURRENT_SOURCE_DIR}/qt.conf
           $<TARGET_FILE_DIR:stemtex-renderer-gui>/qt.conf
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
-          $<TARGET_FILE:stemtex-renderer>
-          $<TARGET_FILE_DIR:stemtex-renderer-gui>
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
           ${QSCINTILLA_DLL}
           $<TARGET_FILE_DIR:stemtex-renderer-gui>
 )
+
+add_custom_target(stemtex-renderer-gui-copy-renderer
+  COMMAND ${CMAKE_COMMAND} -E make_directory
+          $<TARGET_FILE_DIR:stemtex-renderer-gui>
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          $<TARGET_FILE:stemtex-renderer>
+          $<TARGET_FILE_DIR:stemtex-renderer-gui>
+  DEPENDS stemtex-renderer
+  VERBATIM
+)
+add_dependencies(stemtex-renderer-gui stemtex-renderer-gui-copy-renderer)
 
 if(TARGET Qt6::windeployqt)
   add_custom_command(TARGET stemtex-renderer-gui POST_BUILD

@@ -1071,33 +1071,45 @@ void run_sync(const std::string &command, const fs::path &cwd, const std::vector
   }
 }
 
+std::optional<XdvParts> try_read_xdv_parts(const fs::path &path) {
+  if (!fs::exists(path)) return std::nullopt;
+  try {
+    return read_xdv_parts(path);
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
 XdvParts run_warmup(const RendererConfig &cfg) {
-  fs::create_directories(cfg.profile_root);
-  fs::path profile_xdv = cfg.profile_root / "warmup.xdv";
-  fs::remove(profile_xdv);
-  fs::remove(cfg.profile_root / "warmup.aux");
-  fs::remove(cfg.profile_root / "warmup.log");
+  fs::path warmup_dir = cfg.state_root / "warmup";
+  std::error_code cleanup_ec;
+  fs::remove_all(warmup_dir, cleanup_ec);
+  fs::create_directories(warmup_dir);
   fs::path exe = cfg.runtime_root / "bin" / "windows" / "xetexdaemon.exe";
   auto env = worker_environment(cfg);
-  std::ostringstream cmd;
-  cmd << quote_cmd_arg(exe.string()) << " -fmt=xelatexdaemon -no-pdf -interaction=nonstopmode -halt-on-error"
-      << " -output-directory=" << quote_cmd_arg(cfg.profile_root.string()) << " " << quote_cmd_arg(cfg.warmup_tex.string());
-  run_sync(cmd.str(), cfg.profile_root, env, (DWORD)cfg.request_timeout_ms);
-  if (!fs::exists(profile_xdv)) throw std::runtime_error("Warmup XDV was not written: " + profile_xdv.string());
-  return read_xdv_parts(profile_xdv);
+  try {
+    std::ostringstream cmd;
+    cmd << quote_cmd_arg(exe.string()) << " -fmt=xelatexdaemon -no-pdf -interaction=nonstopmode -halt-on-error"
+        << " -output-directory=" << quote_cmd_arg(warmup_dir.string()) << " " << quote_cmd_arg(cfg.warmup_tex.string());
+    run_sync(cmd.str(), cfg.profile_root, env, (DWORD)cfg.request_timeout_ms);
+    fs::path temp_xdv = warmup_dir / "warmup.xdv";
+    if (!fs::exists(temp_xdv)) throw std::runtime_error("Warmup XDV was not written: " + temp_xdv.string());
+    XdvParts parts = read_xdv_parts(temp_xdv);
+    return parts;
+  } catch (...) {
+    std::error_code ec;
+    fs::remove_all(warmup_dir, ec);
+    throw;
+  }
 }
 
 XdvParts load_or_run_warmup(const RendererConfig &cfg) {
+  fs::path profile_xdv = cfg.profile_root / "warmup.xdv";
   for (const fs::path &candidate : {
-           cfg.profile_root / "warmup.xdv",
+           profile_xdv,
            cfg.profile_root / "worker-template.xdv",
        }) {
-    if (fs::exists(candidate)) {
-      try {
-        return read_xdv_parts(candidate);
-      } catch (...) {
-      }
-    }
+    if (auto parts = try_read_xdv_parts(candidate)) return *parts;
   }
   return run_warmup(cfg);
 }

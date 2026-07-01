@@ -43,12 +43,12 @@ hosts may opt into hot spares by passing a positive `spare_worker_count`:
 On create, it:
 
 1. Reads the configured StemTeX runtime.
-2. Loads XDV font definitions for the selected profile. Distributions normally
-   ship `warmup.tex`, not `warmup.xdv`; if the XDV is missing or unreadable the
-   renderer compiles `warmup.tex` and saves `profile_root\warmup.xdv` for that
-   local installation.
-4. Starts and primes a primary live worker.
-5. If requested, starts building spare live workers in the background.
+2. Loads XDV font definitions for the selected profile. The renderer reuses a
+   valid `profile_root\warmup.xdv` cache when present. If the cache is missing
+   or unreadable, it compiles `warmup.tex` in the renderer instance state
+   directory and does not update the profile cache.
+3. Starts and primes a primary live worker.
+4. If requested, starts building spare live workers in the background.
 
 `create` returns after the primary worker is ready. Spare workers are then built
 asynchronously, so increasing the spare count does not lengthen the foreground
