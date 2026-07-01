@@ -493,6 +493,17 @@ class ChildProcess {
 
   void start(const std::wstring &command_line, const fs::path &cwd, const std::vector<wchar_t> &environment,
              DataCallback on_data) {
+    close_handles();
+    job_ = CreateJobObjectW(nullptr, nullptr);
+    if (!job_) throw std::runtime_error("CreateJobObject failed: " + std::to_string(GetLastError()));
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION job_info{};
+    job_info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(job_, JobObjectExtendedLimitInformation, &job_info, sizeof(job_info))) {
+      DWORD err = GetLastError();
+      close_handle(job_);
+      throw std::runtime_error("SetInformationJobObject failed: " + std::to_string(err));
+    }
+
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
@@ -527,7 +538,21 @@ class ChildProcess {
       CloseHandle(stdin_write);
       CloseHandle(stdout_read);
       CloseHandle(stderr_read);
+      close_handle(job_);
       throw std::runtime_error("CreateProcess failed");
+    }
+
+    if (!AssignProcessToJobObject(job_, pi.hProcess)) {
+      DWORD err = GetLastError();
+      TerminateProcess(pi.hProcess, 1);
+      WaitForSingleObject(pi.hProcess, 5000);
+      CloseHandle(stdin_write);
+      CloseHandle(stdout_read);
+      CloseHandle(stderr_read);
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+      close_handle(job_);
+      throw std::runtime_error("AssignProcessToJobObject failed: " + std::to_string(err));
     }
 
     pi_ = pi;
@@ -597,9 +622,11 @@ class ChildProcess {
     close_handle(stderr_);
     close_handle(pi_.hThread);
     close_handle(pi_.hProcess);
+    close_handle(job_);
   }
 
   PROCESS_INFORMATION pi_{};
+  HANDLE job_ = nullptr;
   HANDLE stdin_ = nullptr;
   HANDLE stdout_ = nullptr;
   HANDLE stderr_ = nullptr;
