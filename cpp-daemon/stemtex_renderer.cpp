@@ -78,63 +78,6 @@ int64_t now_ms() {
   return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
-bool create_process_in_job(std::wstring command_line, const fs::path &cwd, LPVOID environment, DWORD creation_flags,
-                           STARTUPINFOW startup, HANDLE job, PROCESS_INFORMATION &pi, DWORD &error,
-                           std::string &phase) {
-  std::wstring cwdw = cwd.wstring();
-  error = 0;
-  phase.clear();
-  pi = PROCESS_INFORMATION{};
-#ifdef PROC_THREAD_ATTRIBUTE_JOB_LIST
-  SIZE_T attr_size = 0;
-  InitializeProcThreadAttributeList(nullptr, 1, 0, &attr_size);
-  if (attr_size > 0) {
-    std::vector<uint8_t> attr_buffer(attr_size);
-    auto *attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attr_buffer.data());
-    if (InitializeProcThreadAttributeList(attrs, 1, 0, &attr_size)) {
-      HANDLE jobs[] = {job};
-      if (UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST, jobs, sizeof(jobs), nullptr, nullptr)) {
-        STARTUPINFOEXW startup_ex{};
-        startup_ex.StartupInfo = startup;
-        startup_ex.StartupInfo.cb = sizeof(startup_ex);
-        startup_ex.lpAttributeList = attrs;
-        std::wstring attr_cmd = command_line;
-        BOOL ok = CreateProcessW(nullptr, attr_cmd.data(), nullptr, nullptr, TRUE,
-                                 creation_flags | EXTENDED_STARTUPINFO_PRESENT, environment, cwdw.c_str(),
-                                 &startup_ex.StartupInfo, &pi);
-        error = ok ? 0 : GetLastError();
-        DeleteProcThreadAttributeList(attrs);
-        if (ok) return true;
-        if (error != ERROR_INVALID_PARAMETER && error != ERROR_NOT_SUPPORTED) {
-          phase = "CreateProcess";
-          return false;
-        }
-      } else {
-        DeleteProcThreadAttributeList(attrs);
-      }
-    }
-  }
-#endif
-  BOOL ok = CreateProcessW(nullptr, command_line.data(), nullptr, nullptr, TRUE, creation_flags, environment, cwdw.c_str(),
-                           &startup, &pi);
-  if (!ok) {
-    error = GetLastError();
-    phase = "CreateProcess";
-    return false;
-  }
-  if (!AssignProcessToJobObject(job, pi.hProcess)) {
-    error = GetLastError();
-    phase = "AssignProcessToJobObject";
-    TerminateProcess(pi.hProcess, 1);
-    WaitForSingleObject(pi.hProcess, 5000);
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    pi = PROCESS_INFORMATION{};
-    return false;
-  }
-  return true;
-}
-
 std::string dup_to_c_string(const std::string &s) {
   return s;
 }
@@ -603,21 +546,33 @@ class ChildProcess {
 
     PROCESS_INFORMATION pi{};
     std::wstring cmd = command_line;
+    std::wstring cwdw = cwd.wstring();
     LPVOID env = environment.empty() ? nullptr : const_cast<wchar_t *>(environment.data());
     DWORD creation_flags = CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED;
-    DWORD err = 0;
-    std::string phase;
-    if (!create_process_in_job(cmd, cwd, env, creation_flags, si, job_, pi, err, phase)) {
-      close_pipe_handles();
-      close_handle(job_);
-      throw std::runtime_error(phase + " failed: " + std::to_string(err));
-    }
+    BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, creation_flags, env, cwdw.c_str(), &si, &pi);
     CloseHandle(stdin_read);
     stdin_read = nullptr;
     CloseHandle(stdout_write);
     stdout_write = nullptr;
     CloseHandle(stderr_write);
     stderr_write = nullptr;
+    if (!ok) {
+      DWORD err = GetLastError();
+      close_pipe_handles();
+      close_handle(job_);
+      throw std::runtime_error("CreateProcess failed: " + std::to_string(err));
+    }
+
+    if (!AssignProcessToJobObject(job_, pi.hProcess)) {
+      DWORD err = GetLastError();
+      TerminateProcess(pi.hProcess, 1);
+      WaitForSingleObject(pi.hProcess, 5000);
+      close_pipe_handles();
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+      close_handle(job_);
+      throw std::runtime_error("AssignProcessToJobObject failed: " + std::to_string(err));
+    }
 
     pi_ = pi;
     stdin_ = stdin_write;
@@ -652,11 +607,7 @@ class ChildProcess {
 
   void stop() {
     if (pi_.hProcess) {
-      if (job_) {
-        TerminateJobObject(job_, 1);
-      } else {
-        TerminateProcess(pi_.hProcess, 1);
-      }
+      TerminateProcess(pi_.hProcess, 1);
       WaitForSingleObject(pi_.hProcess, 5000);
     }
     join_readers();
@@ -1081,79 +1032,36 @@ class DvipdfmxDaemon {
 
 void run_sync(const std::string &command, const fs::path &cwd, const std::vector<wchar_t> &environment,
               DWORD timeout_ms = 10000) {
-  HANDLE job = CreateJobObjectW(nullptr, nullptr);
-  if (!job) throw std::runtime_error("CreateJobObject failed: " + std::to_string(GetLastError()));
-  auto close_handle = [](HANDLE &h) {
-    if (h) {
-      CloseHandle(h);
-      h = nullptr;
-    }
-  };
-  JOBOBJECT_EXTENDED_LIMIT_INFORMATION job_info{};
-  job_info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-  if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &job_info, sizeof(job_info))) {
-    DWORD err = GetLastError();
-    close_handle(job);
-    throw std::runtime_error("SetInformationJobObject failed: " + std::to_string(err));
-  }
-
   SECURITY_ATTRIBUTES sa{};
   sa.nLength = sizeof(sa);
   sa.bInheritHandle = TRUE;
-  HANDLE stdin_read = nullptr, stdin_write = nullptr;
   HANDLE stdout_read = nullptr, stdout_write = nullptr;
   HANDLE stderr_read = nullptr, stderr_write = nullptr;
-  auto close_pipe_handles = [&]() {
-    close_handle(stdin_read);
-    close_handle(stdin_write);
-    close_handle(stdout_read);
-    close_handle(stdout_write);
-    close_handle(stderr_read);
-    close_handle(stderr_write);
-  };
-  if (!CreatePipe(&stdin_read, &stdin_write, &sa, 0)) {
-    close_handle(job);
-    throw std::runtime_error("CreatePipe stdin failed");
-  }
-  SetHandleInformation(stdin_write, HANDLE_FLAG_INHERIT, 0);
-  if (!CreatePipe(&stdout_read, &stdout_write, &sa, 0)) {
-    close_pipe_handles();
-    close_handle(job);
-    throw std::runtime_error("CreatePipe stdout failed");
-  }
+  if (!CreatePipe(&stdout_read, &stdout_write, &sa, 0)) throw std::runtime_error("CreatePipe stdout failed");
   SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0);
-  if (!CreatePipe(&stderr_read, &stderr_write, &sa, 0)) {
-    close_pipe_handles();
-    close_handle(job);
-    throw std::runtime_error("CreatePipe stderr failed");
-  }
+  if (!CreatePipe(&stderr_read, &stderr_write, &sa, 0)) throw std::runtime_error("CreatePipe stderr failed");
   SetHandleInformation(stderr_read, HANDLE_FLAG_INHERIT, 0);
 
   STARTUPINFOW si{};
   si.cb = sizeof(si);
   si.dwFlags = STARTF_USESTDHANDLES;
-  si.hStdInput = stdin_read;
+  si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
   si.hStdOutput = stdout_write;
   si.hStdError = stderr_write;
   PROCESS_INFORMATION pi{};
   std::wstring cmd = widen_utf8(command);
+  std::wstring cwdw = cwd.wstring();
   LPVOID env = environment.empty() ? nullptr : const_cast<wchar_t *>(environment.data());
-  DWORD creation_flags = CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED;
-  DWORD err = 0;
-  std::string phase;
-  if (!create_process_in_job(cmd, cwd, env, creation_flags, si, job, pi, err, phase)) {
-    close_pipe_handles();
-    close_handle(job);
-    throw std::runtime_error(phase + " failed: " + std::to_string(err) + ": " + command);
+  if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+                      env, cwdw.c_str(), &si, &pi)) {
+    CloseHandle(stdout_read);
+    CloseHandle(stdout_write);
+    CloseHandle(stderr_read);
+    CloseHandle(stderr_write);
+    throw std::runtime_error("CreateProcess failed: " + command);
   }
-  CloseHandle(stdin_read);
-  stdin_read = nullptr;
-  CloseHandle(stdin_write);
-  stdin_write = nullptr;
   CloseHandle(stdout_write);
-  stdout_write = nullptr;
   CloseHandle(stderr_write);
-  stderr_write = nullptr;
 
   auto read_pipe = [](HANDLE h) {
     std::string out;
@@ -1169,31 +1077,16 @@ void run_sync(const std::string &command, const fs::path &cwd, const std::vector
   std::string stderr_text;
   std::thread stdout_thread([&]() { stdout_text = read_pipe(stdout_read); });
   std::thread stderr_thread([&]() { stderr_text = read_pipe(stderr_read); });
-  if (ResumeThread(pi.hThread) == (DWORD)-1) {
-    DWORD err = GetLastError();
-    TerminateJobObject(job, 1);
-    WaitForSingleObject(pi.hProcess, 5000);
-    if (stdout_thread.joinable()) stdout_thread.join();
-    if (stderr_thread.joinable()) stderr_thread.join();
-    CloseHandle(stdout_read);
-    CloseHandle(stderr_read);
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    close_handle(job);
-    throw std::runtime_error("ResumeThread failed: " + std::to_string(err) + ": " + command);
-  }
 
   DWORD wait = WaitForSingleObject(pi.hProcess, timeout_ms);
   if (wait == WAIT_TIMEOUT) {
-    TerminateJobObject(job, 1);
-    WaitForSingleObject(pi.hProcess, 5000);
+    TerminateProcess(pi.hProcess, 1);
     if (stdout_thread.joinable()) stdout_thread.join();
     if (stderr_thread.joinable()) stderr_thread.join();
     CloseHandle(stdout_read);
     CloseHandle(stderr_read);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
-    close_handle(job);
     throw std::runtime_error("Command timed out: " + command);
   }
   DWORD code = 0;
@@ -1204,7 +1097,6 @@ void run_sync(const std::string &command, const fs::path &cwd, const std::vector
   CloseHandle(stderr_read);
   CloseHandle(pi.hThread);
   CloseHandle(pi.hProcess);
-  close_handle(job);
   if (code != 0) {
     throw std::runtime_error("Command failed with code " + std::to_string(code) + ": " + command + "\nstdout:\n" +
                              stdout_text + "\nstderr:\n" + stderr_text);
@@ -1212,26 +1104,26 @@ void run_sync(const std::string &command, const fs::path &cwd, const std::vector
 }
 
 XdvParts run_warmup(const RendererConfig &cfg) {
-  fs::path warmup_dir = cfg.state_root / "warmup";
-  fs::create_directories(warmup_dir);
-  fs::path warmup_xdv = warmup_dir / "warmup.xdv";
-  fs::remove(warmup_xdv);
-  fs::remove(warmup_dir / "warmup.aux");
-  fs::remove(warmup_dir / "warmup.log");
+  fs::create_directories(cfg.profile_root);
+  fs::path profile_xdv = cfg.profile_root / "warmup.xdv";
+  fs::remove(profile_xdv);
+  fs::remove(cfg.profile_root / "warmup.aux");
+  fs::remove(cfg.profile_root / "warmup.log");
   fs::path exe = cfg.runtime_root / "bin" / "windows" / "xetexdaemon.exe";
   auto env = worker_environment(cfg);
   std::ostringstream cmd;
   cmd << quote_cmd_arg(exe.string()) << " -fmt=xelatexdaemon -no-pdf -interaction=nonstopmode -halt-on-error"
-      << " -output-directory=" << quote_cmd_arg(warmup_dir.string()) << " " << quote_cmd_arg(cfg.warmup_tex.string());
+      << " -output-directory=" << quote_cmd_arg(cfg.profile_root.string()) << " " << quote_cmd_arg(cfg.warmup_tex.string());
   run_sync(cmd.str(), cfg.profile_root, env, (DWORD)cfg.request_timeout_ms);
-  if (!fs::exists(warmup_xdv)) throw std::runtime_error("Warmup XDV was not written: " + warmup_xdv.string());
-  return read_xdv_parts(warmup_xdv);
+  if (!fs::exists(profile_xdv)) throw std::runtime_error("Warmup XDV was not written: " + profile_xdv.string());
+  return read_xdv_parts(profile_xdv);
 }
 
 XdvParts load_or_run_warmup(const RendererConfig &cfg) {
   for (const fs::path &candidate : {
-           cfg.state_root / "warmup" / "warmup.xdv",
-        }) {
+           cfg.profile_root / "warmup.xdv",
+           cfg.profile_root / "worker-template.xdv",
+       }) {
     if (fs::exists(candidate)) {
       try {
         return read_xdv_parts(candidate);
