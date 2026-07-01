@@ -494,16 +494,6 @@ class ChildProcess {
   void start(const std::wstring &command_line, const fs::path &cwd, const std::vector<wchar_t> &environment,
              DataCallback on_data) {
     close_handles();
-    job_ = CreateJobObjectW(nullptr, nullptr);
-    if (!job_) throw std::runtime_error("CreateJobObject failed: " + std::to_string(GetLastError()));
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION job_info{};
-    job_info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if (!SetInformationJobObject(job_, JobObjectExtendedLimitInformation, &job_info, sizeof(job_info))) {
-      DWORD err = GetLastError();
-      close_handle(job_);
-      throw std::runtime_error("SetInformationJobObject failed: " + std::to_string(err));
-    }
-
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
@@ -520,19 +510,16 @@ class ChildProcess {
       close_handle(stderr_write);
     };
     if (!CreatePipe(&stdin_read, &stdin_write, &sa, 0)) {
-      close_handle(job_);
       throw std::runtime_error("CreatePipe stdin failed");
     }
     SetHandleInformation(stdin_write, HANDLE_FLAG_INHERIT, 0);
     if (!CreatePipe(&stdout_read, &stdout_write, &sa, 0)) {
       close_pipe_handles();
-      close_handle(job_);
       throw std::runtime_error("CreatePipe stdout failed");
     }
     SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0);
     if (!CreatePipe(&stderr_read, &stderr_write, &sa, 0)) {
       close_pipe_handles();
-      close_handle(job_);
       throw std::runtime_error("CreatePipe stderr failed");
     }
     SetHandleInformation(stderr_read, HANDLE_FLAG_INHERIT, 0);
@@ -548,8 +535,9 @@ class ChildProcess {
     std::wstring cmd = command_line;
     std::wstring cwdw = cwd.wstring();
     LPVOID env = environment.empty() ? nullptr : const_cast<wchar_t *>(environment.data());
-    DWORD creation_flags = CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED;
-    BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, creation_flags, env, cwdw.c_str(), &si, &pi);
+    BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+                             env, cwdw.c_str(), &si, &pi);
+    DWORD create_err = ok ? 0 : GetLastError();
     CloseHandle(stdin_read);
     stdin_read = nullptr;
     CloseHandle(stdout_write);
@@ -557,21 +545,8 @@ class ChildProcess {
     CloseHandle(stderr_write);
     stderr_write = nullptr;
     if (!ok) {
-      DWORD err = GetLastError();
       close_pipe_handles();
-      close_handle(job_);
-      throw std::runtime_error("CreateProcess failed: " + std::to_string(err));
-    }
-
-    if (!AssignProcessToJobObject(job_, pi.hProcess)) {
-      DWORD err = GetLastError();
-      TerminateProcess(pi.hProcess, 1);
-      WaitForSingleObject(pi.hProcess, 5000);
-      close_pipe_handles();
-      CloseHandle(pi.hThread);
-      CloseHandle(pi.hProcess);
-      close_handle(job_);
-      throw std::runtime_error("AssignProcessToJobObject failed: " + std::to_string(err));
+      throw std::runtime_error("CreateProcess failed: " + std::to_string(create_err));
     }
 
     pi_ = pi;
@@ -580,11 +555,6 @@ class ChildProcess {
     stderr_ = stderr_read;
     stdout_thread_ = std::thread([this, on_data]() { read_loop(stdout_, on_data); });
     stderr_thread_ = std::thread([this, on_data]() { read_loop(stderr_, on_data); });
-    if (ResumeThread(pi_.hThread) == (DWORD)-1) {
-      DWORD err = GetLastError();
-      stop();
-      throw std::runtime_error("ResumeThread failed: " + std::to_string(err));
-    }
   }
 
   void write_stdin(const std::string &text) {
@@ -646,11 +616,9 @@ class ChildProcess {
     close_handle(stderr_);
     close_handle(pi_.hThread);
     close_handle(pi_.hProcess);
-    close_handle(job_);
   }
 
   PROCESS_INFORMATION pi_{};
-  HANDLE job_ = nullptr;
   HANDLE stdin_ = nullptr;
   HANDLE stdout_ = nullptr;
   HANDLE stderr_ = nullptr;
