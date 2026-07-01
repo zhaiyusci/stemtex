@@ -44,11 +44,11 @@ On create, it:
 
 1. Reads the configured StemTeX runtime.
 2. Loads XDV font definitions for the selected profile. Distributions normally
-   ship `warmup.tex`, not `warmup.xdv`; if the XDV is missing or unreadable the
-   renderer compiles `warmup.tex` and saves `profile_root\warmup.xdv` for that
-   local installation.
-4. Starts and primes a primary live worker.
-5. If requested, starts building spare live workers in the background.
+   ship `warmup.tex`, not `warmup.xdv`; the renderer compiles `warmup.tex` into
+   its per-instance `state_root\warmup` directory so profile directories remain
+   read-only during startup.
+3. Starts and primes a primary live worker.
+4. If requested, starts building spare live workers in the background.
 
 `create` returns after the primary worker is ready. Spare workers are then built
 asynchronously, so increasing the spare count does not lengthen the foreground
