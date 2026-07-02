@@ -222,6 +222,16 @@ std::string path_utf8(const fs::path &p) {
   return narrow_utf8(path_to_wstring(p));
 }
 
+fs::path local_app_data_root() {
+  DWORD needed = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+  if (needed > 1) {
+    std::wstring value(needed - 1, L'\0');
+    GetEnvironmentVariableW(L"LOCALAPPDATA", value.data(), needed);
+    if (!value.empty()) return fs::path(value);
+  }
+  return fs::temp_directory_path();
+}
+
 bool has_file_with_prefix_suffix(const fs::path &dir, const std::wstring &prefix, const std::wstring &suffix) {
   if (!fs::exists(dir)) return false;
   for (const auto &entry : fs::directory_iterator(dir)) {
@@ -655,6 +665,8 @@ struct RendererConfig {
   fs::path profile_root;
   fs::path state_root;
   fs::path renders_root;
+  fs::path fontconfig_conf_root;
+  fs::path fontconfig_cache_root;
   fs::path warmup_tex;
   fs::path worker_template;
   fs::path preamble_tex;
@@ -718,14 +730,17 @@ constexpr const char *kDefaultWorkerTemplate = R"STEMTEX_WORKER(\input{@@STEMTEX
 
 std::string installed_warmup_body(const RendererConfig &cfg) {
   std::string warmup = read_text_file(cfg.warmup_tex);
-  const std::string begin = "\\begin{document}";
-  const std::string end = "\\end{document}";
-  size_t body_start = warmup.find(begin);
-  if (body_start != std::string::npos) {
+  auto strip_environment = [](std::string text, const std::string &name) {
+    const std::string begin = "\\begin{" + name + "}";
+    const std::string end = "\\end{" + name + "}";
+    size_t body_start = text.find(begin);
+    if (body_start == std::string::npos) return text;
     body_start += begin.size();
-    size_t body_end = warmup.find(end, body_start);
-    warmup = warmup.substr(body_start, body_end == std::string::npos ? std::string::npos : body_end - body_start);
-  }
+    size_t body_end = text.find(end, body_start);
+    return text.substr(body_start, body_end == std::string::npos ? std::string::npos : body_end - body_start);
+  };
+  warmup = strip_environment(warmup, "document");
+  warmup = strip_environment(warmup, "preview");
   return warmup;
 }
 
@@ -749,8 +764,8 @@ void materialize_worker_template(const RendererConfig &cfg, const fs::path &out_
 }
 
 void write_fontconfig_config(const RendererConfig &cfg) {
-  fs::path conf_dir = cfg.runtime_root / "texmf-var" / "fonts" / "conf";
-  fs::path cache_dir = cfg.runtime_root / "texmf-var" / "fonts" / "cache";
+  fs::path conf_dir = cfg.fontconfig_conf_root;
+  fs::path cache_dir = cfg.fontconfig_cache_root;
   fs::create_directories(conf_dir / "conf.d");
   fs::create_directories(cache_dir);
 
@@ -776,8 +791,8 @@ std::vector<wchar_t> worker_environment(const RendererConfig &cfg) {
   fs::path bin = cfg.runtime_root / "bin" / "windows";
   fs::path texmfcnf = cfg.texmf_root / "texmf-dist" / "web2c";
   fs::path fmt = cfg.runtime_root / "texmf-var" / "web2c" / "xetex";
-  fs::path fontconf = cfg.runtime_root / "texmf-var" / "fonts" / "conf";
-  fs::path fontcache = cfg.runtime_root / "texmf-var" / "fonts" / "cache";
+  fs::path fontconf = cfg.fontconfig_conf_root;
+  fs::path fontcache = cfg.fontconfig_cache_root;
   std::wstring fontmaps =
       widen_utf8(slash_path(cfg.texmf_root / "texmf-var" / "fonts" / "map" / "pdftex" / "updmap")) + L";" +
       widen_utf8(slash_path(cfg.texmf_root / "texmf-var" / "fonts" / "map" / "dvipdfmx" / "updmap")) + L";" +
@@ -857,8 +872,8 @@ std::map<std::wstring, std::wstring> runtime_environment_overrides(const Rendere
   fs::path bin = cfg.runtime_root / "bin" / "windows";
   fs::path texmfcnf = cfg.texmf_root / "texmf-dist" / "web2c";
   fs::path fmt = cfg.runtime_root / "texmf-var" / "web2c" / "xetex";
-  fs::path fontconf = cfg.runtime_root / "texmf-var" / "fonts" / "conf";
-  fs::path fontcache = cfg.runtime_root / "texmf-var" / "fonts" / "cache";
+  fs::path fontconf = cfg.fontconfig_conf_root;
+  fs::path fontcache = cfg.fontconfig_cache_root;
   std::wstring fontmaps =
       widen_utf8(slash_path(cfg.texmf_root / "texmf-var" / "fonts" / "map" / "pdftex" / "updmap")) + L";" +
       widen_utf8(slash_path(cfg.texmf_root / "texmf-var" / "fonts" / "map" / "dvipdfmx" / "updmap")) + L";" +
@@ -912,7 +927,7 @@ class DvipdfmxDaemon {
   explicit DvipdfmxDaemon(const RendererConfig &cfg)
       : program_arg_(slash_path(cfg.runtime_root / "bin" / "windows" / "xdvipdfmxdaemon.exe")),
         env_(runtime_environment_overrides(cfg)) {
-    fs::path init_trace_path = cfg.runtime_root / "texmf-var" / "xdvipdfmx-init-trace.log";
+    fs::path init_trace_path = cfg.state_root / "xdvipdfmx-init-trace.log";
     env_[L"STEMTEX_XDVIPDFMX_TRACE"] = path_to_wstring(init_trace_path);
     fs::path dll_path = cfg.runtime_root / "bin" / "windows" / "dvipdfmxdaemon.dll";
     if (!fs::exists(dll_path)) throw std::runtime_error("dvipdfmxdaemon.dll missing");
@@ -1195,6 +1210,8 @@ RendererConfig config_from_api(const StemTeXConfig *config) {
                                  ? fs::absolute(config->state_root_utf8)
                                  : default_work_root / "state";
   cfg.state_root = state_base_root / ("instance-" + instance_id);
+  cfg.fontconfig_conf_root = cfg.state_root / "fontconfig" / "conf";
+  cfg.fontconfig_cache_root = state_base_root / "fontconfig" / "cache";
   cfg.renders_root = config && config->renders_root_utf8 && *config->renders_root_utf8
                           ? fs::absolute(config->renders_root_utf8)
                           : default_work_root / "renders";
@@ -1236,8 +1253,6 @@ std::string validate_config_text(const RendererConfig &cfg) {
   require_file(cfg.warmup_tex, "warmup tex");
   if (!cfg.worker_template.empty()) require_file(cfg.worker_template, "worker template");
   require_file(cfg.preamble_tex, "preamble tex");
-  require_dir(cfg.runtime_root / "texmf-var" / "fonts" / "conf", "fontconfig conf");
-  require_dir(cfg.runtime_root / "texmf-var" / "fonts" / "cache", "fontconfig cache");
   fs::path icu = cfg.runtime_root / "bin" / "windows" / "icu-data";
   if (!has_file_with_prefix_suffix(icu, L"icudt", L"l.dat")) out << "ICU data missing: " << icu.string() << "\n";
   return out.str();
@@ -2314,8 +2329,12 @@ STEMTEX_API int stemtex_refresh_font_cache(const char *runtime_root_utf8, const 
     cfg.texmf_root = cfg.runtime_root;
     cfg.profile_root = fs::absolute(profile_root_utf8);
     cfg.repo_root = cfg.profile_root;
-    cfg.state_root = cfg.runtime_root / "texmf-var" / "cache-warmup-state";
-    cfg.renders_root = cfg.runtime_root / "texmf-var" / "cache-warmup-renders";
+    fs::path stemtex_user_root = local_app_data_root() / "StemTeX";
+    fs::path refresh_root = stemtex_user_root / "refresh";
+    cfg.state_root = refresh_root / "state" / ("instance-" + random_id());
+    cfg.renders_root = refresh_root / "renders";
+    cfg.fontconfig_conf_root = cfg.state_root / "fontconfig" / "conf";
+    cfg.fontconfig_cache_root = stemtex_user_root / "fontconfig" / "cache";
     cfg.warmup_tex = cfg.profile_root / "warmup.tex";
     cfg.preamble_tex = cfg.profile_root / "preamble.tex";
     cfg.request_timeout_ms = 90000;
