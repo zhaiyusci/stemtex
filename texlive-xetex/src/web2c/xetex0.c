@@ -290,8 +290,8 @@ static void stemtex_checkpoint_alloc(void)
   if (stemtex_checkpoint.sourcefilenamestack_copy == NULL) stemtex_checkpoint.sourcefilenamestack_copy = xmallocarray(strnumber, maxinopen);
   if (stemtex_checkpoint.fullsourcefilenamestack_copy == NULL) stemtex_checkpoint.fullsourcefilenamestack_copy = xmallocarray(strnumber, maxinopen);
   if (stemtex_checkpoint.paramstack_copy == NULL) stemtex_checkpoint.paramstack_copy = xmallocarray(halfword, paramsize);
-  if (stemtex_checkpoint.ifstack_copy == NULL) stemtex_checkpoint.ifstack_copy = xmallocarray(halfword, savesize);
-  if (stemtex_checkpoint.grpstack_copy == NULL) stemtex_checkpoint.grpstack_copy = xmallocarray(savepointer, savesize);
+  if (stemtex_checkpoint.ifstack_copy == NULL) stemtex_checkpoint.ifstack_copy = xmallocarray(halfword, maxinopen);
+  if (stemtex_checkpoint.grpstack_copy == NULL) stemtex_checkpoint.grpstack_copy = xmallocarray(savepointer, maxinopen);
   if (stemtex_checkpoint.strpool_count < strpool_count) {
     libcfree(stemtex_checkpoint.strpool_copy);
     stemtex_checkpoint.strpool_copy = xmallocarray(packedUTF16code, strpool_count);
@@ -317,8 +317,8 @@ static void stemtex_save_checkpoint(void)
   memcpy(stemtex_checkpoint.sourcefilenamestack_copy, sourcefilenamestack, sizeof(strnumber) * maxinopen);
   memcpy(stemtex_checkpoint.fullsourcefilenamestack_copy, fullsourcefilenamestack, sizeof(strnumber) * maxinopen);
   memcpy(stemtex_checkpoint.paramstack_copy, paramstack, sizeof(halfword) * paramsize);
-  memcpy(stemtex_checkpoint.ifstack_copy, ifstack, sizeof(halfword) * savesize);
-  memcpy(stemtex_checkpoint.grpstack_copy, grpstack, sizeof(savepointer) * savesize);
+  memcpy(stemtex_checkpoint.ifstack_copy, ifstack, sizeof(halfword) * maxinopen);
+  memcpy(stemtex_checkpoint.grpstack_copy, grpstack, sizeof(savepointer) * maxinopen);
   memcpy(stemtex_checkpoint.strpool_copy, strpool, sizeof(packedUTF16code) * poolptr);
   memcpy(stemtex_checkpoint.strstart_copy, strstart, sizeof(poolpointer) * (strptr - 65536L + 1));
   stemtex_checkpoint.lomemmax_copy = lomemmax;
@@ -433,8 +433,8 @@ static void stemtex_restore_checkpoint(void)
   memcpy(sourcefilenamestack, stemtex_checkpoint.sourcefilenamestack_copy, sizeof(strnumber) * maxinopen);
   memcpy(fullsourcefilenamestack, stemtex_checkpoint.fullsourcefilenamestack_copy, sizeof(strnumber) * maxinopen);
   memcpy(paramstack, stemtex_checkpoint.paramstack_copy, sizeof(halfword) * paramsize);
-  memcpy(ifstack, stemtex_checkpoint.ifstack_copy, sizeof(halfword) * savesize);
-  memcpy(grpstack, stemtex_checkpoint.grpstack_copy, sizeof(savepointer) * savesize);
+  memcpy(ifstack, stemtex_checkpoint.ifstack_copy, sizeof(halfword) * maxinopen);
+  memcpy(grpstack, stemtex_checkpoint.grpstack_copy, sizeof(savepointer) * maxinopen);
   memcpy(strpool, stemtex_checkpoint.strpool_copy, sizeof(packedUTF16code) * stemtex_checkpoint.poolptr_copy);
   memcpy(strstart, stemtex_checkpoint.strstart_copy, sizeof(poolpointer) * (stemtex_checkpoint.strptr_copy - 65536L + 1));
   lomemmax = stemtex_checkpoint.lomemmax_copy;
