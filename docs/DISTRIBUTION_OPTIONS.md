@@ -4,12 +4,9 @@ StemTeX currently supports one concrete distribution shape: an embedded Windows
 runtime with the patched daemon engine, native renderer DLL, SDK header/import
 library, and the optional GUI.
 
-Older package-manager and Node prototype routes were useful during research, but
-they are not current delivery paths.
-
 ## Supported: Embedded StemTeX Runtime
 
-The installer stages this layout:
+The installer consumes a CMake-installed staging tree with this layout:
 
 ```text
 StemTeX\
@@ -30,7 +27,8 @@ StemTeX\
       stemtex-renderer.lib
     texmf-dist\
     texmf-var\
-    refresh-font-cache.ps1
+    run-xelatexdaemon.bat
+    refresh-profile-cache.bat
   gui\
     profiles\
       <name>\
@@ -40,15 +38,16 @@ StemTeX\
 
 Build sequence:
 
-```sh
-./texlive-xetex/build-standalone-msvc.sh
-./texlive-xetex/install-msvc-standalone-to-side-tree.sh
-./scripts/refresh-static-runtime-cache.sh ./dist/stemtex-texlive-daemon-static ./gui/profiles/unicodemath_cjk
-./scripts/build-cpp-daemon.sh
-./scripts/build-gui.sh
-./scripts/stage-stemtex.sh
-./scripts/build-stemtex-installer.sh
+```bat
+cmake --preset ninja-msvc
+cmake --build --preset ninja-release
+cmake --install build/stemtex-ninja --prefix dist\stemtex-installer\StemTeX
 ```
+
+The Inno Setup package is then built from that CMake-installed tree by passing
+`SourceDir`, `OutputDir`, and `AppVersion` to `installer/stemtex.iss`.
+Maintainers can point CMake at non-default daemon/runtime inputs with
+`STEMTEX_STANDALONE_DIR`, `STEMTEX_RUNTIME_SOURCE`, and `STEMTEX_TEXLIVE_ROOT`.
 
 Strengths:
 
@@ -75,6 +74,16 @@ content pages instead of full paper pages.
 An application could ship only `stemtex-renderer.dll` and a daemon-engine
 overlay, then use a user-provided full TeX installation for packages.  This is
 not implemented as a supported installer path.
+
+The implemented expert-mode hook is narrower than generic "user TeX" support:
+`texmf_root_utf8` may point at a TeX Live-style root that contains
+`texmf-dist/` and `texmf-dist/web2c/`. StemTeX still runs its own patched
+daemon binaries and uses that TeX Live tree for kpathsea configuration,
+packages, fonts, maps, CMaps, and related backend resources.
+
+MiKTeX is not supported as that root. Its multi-root FNDB/package-manager model
+and configuration layout are different from the TeX Live `texmf-dist/web2c`
+contract used by the current renderer.
 
 Such an integration would need to:
 

@@ -46,10 +46,10 @@ Source: "{#SourceDir}\runtime\VERSION"; DestDir: "{app}\runtime"; Flags: ignorev
 Source: "{#SourceDir}\runtime\StemTeX.ico"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#SourceDir}\runtime\run-xelatexdaemon.bat"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#SourceDir}\runtime\refresh-profile-cache.bat"; DestDir: "{app}\runtime"; Flags: ignoreversion
-Source: "{#SourceDir}\runtime\texmf-var\web2c\*"; DestDir: "{app}\runtime\texmf-var\web2c"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.aux;*.log"
+Source: "{#SourceDir}\runtime\texmf-var\web2c\*"; DestDir: "{app}\runtime\texmf-var\web2c"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.aux,*.log"
 Source: "{#SourceDir}\runtime\texmf-var\fonts\conf\*"; DestDir: "{app}\runtime\texmf-var\fonts\conf"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#SourceDir}\runtime\texmf-dist\*"; DestDir: "{app}\runtime\texmf-dist"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: texmf
-Source: "{#SourceDir}\gui\*"; DestDir: "{app}\gui"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: gui; Excludes: "*.aux;*.log;*.pdf;*.xdv;*.synctex.gz"
+Source: "{#SourceDir}\gui\*"; DestDir: "{app}\gui"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: gui; Excludes: "build\*,*.aux,*.log,*.pdf,*.xdv,*.synctex.gz"
 
 [Icons]
 Name: "{autoprograms}\StemTeX Renderer GUI"; Filename: "{app}\gui\stemtex-renderer-gui.exe"; WorkingDir: "{app}\gui"; Components: gui
@@ -66,7 +66,6 @@ Type: files; Name: "{app}\gui\profiles\*\warmup.synctex.gz"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\runtime\texmf-var\fonts\cache"
-Type: filesandordirs; Name: "{app}\runtime\texmf-var\cache-warmup"
 Type: files; Name: "{app}\gui\profiles\*\warmup.xdv"
 Type: files; Name: "{app}\gui\profiles\*\warmup.aux"
 Type: files; Name: "{app}\gui\profiles\*\warmup.log"

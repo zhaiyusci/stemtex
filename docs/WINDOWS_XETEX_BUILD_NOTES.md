@@ -4,9 +4,14 @@ StemTeX currently builds its daemon engine from the generated-C source bundle in
 `texlive-xetex/`.  The preferred Windows route is MSVC with static third-party
 dependencies.
 
-## Current Build Route
+## Current Engine Rebuild Route
 
-Build from MSYS2, using the installed Visual Studio toolchain:
+The normal application and installer build is driven by the top-level CMake
+project.  This document covers the lower-level maintainer path for regenerating
+the patched daemon binaries that CMake later stages into the runtime.
+
+Build the daemon bundle from the generated-C source snapshot, using the
+installed Visual Studio toolchain:
 
 ```sh
 cd /path/to/stemtex
@@ -50,10 +55,14 @@ Install the built binaries into the static StemTeX side tree:
 ./texlive-xetex/install-msvc-standalone-to-side-tree.sh
 ```
 
-Then refresh the runtime warmup/cache data:
+The maintained CMake install tree copies profile warmup sources and installs
+`runtime/refresh-profile-cache.bat`. The installer runs that batch file for the
+default GUI profile during installation. For a manual staged tree, run the same
+installed helper from the runtime directory and pass the staged profile path:
 
-```sh
-./scripts/refresh-static-runtime-cache.sh ./dist/stemtex-texlive-daemon-static ./gui/profiles/unicodemath_cjk
+```bat
+cd /d dist\stemtex-installer\StemTeX\runtime
+refresh-profile-cache.bat ..\gui\profiles\unicodemath_cjk
 ```
 
 ## Source Inputs
@@ -130,7 +139,7 @@ capacity values and crash in `dvi_init()`.
 
 ## StemTeX Runtime Tree
 
-The build/install scripts assemble:
+The runtime side tree and the CMake install stage use this shape:
 
 ```text
 dist/stemtex-texlive-daemon-static/
@@ -164,21 +173,3 @@ The renderer requires the host or GUI to pass a profile directory explicitly.
 The preamble loads `preview` with `active,tightpage`; the live worker wraps each
 request in a `preview` environment so the resulting PDF page is already cropped
 to the snippet content.
-
-## Historical Routes
-
-The earlier W32TeX source route produced `ptx/texk/web2c/xetex.dll` and patched
-bundled fontconfig sources.  That work is retained only as notes in:
-
-```text
-patches/w32tex-2025-runtime-switches.md
-```
-
-The UCRT64 route is still present for comparison:
-
-```sh
-./texlive-xetex/build-standalone-ucrt64.sh
-```
-
-It is not the preferred distribution route because it pulls in a larger MSYS2
-runtime dependency set.

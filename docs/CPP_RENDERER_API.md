@@ -116,9 +116,12 @@ Fields:
   contains `bin\windows\xetexdaemon.exe`. In the installer layout this is
   normally `C:\StemTeX\runtime`.
 - `texmf_root_utf8`: optional TeX Live tree used for packages and TeX fonts.
-  If null, it defaults to `runtime_root_utf8`. The renderer still runs patched
-  binaries, formats, fontconfig configuration, and cache from `runtime_root_utf8`;
-  this field redirects `TEXMFROOT`, `TEXMFDIST`, `TEXMFCNF`, and `WEB2C`.
+  If null, it defaults to `runtime_root_utf8`. When set, the path must be a
+  TeX Live-style root that contains `texmf-dist` and `texmf-dist\web2c`, such as
+  `C:\texlive\2026`. The renderer still runs patched binaries, formats,
+  fontconfig configuration, and cache from `runtime_root_utf8`; this field
+  redirects `TEXMFROOT`, `TEXMFDIST`, `TEXMFCNF`, and `WEB2C`. It does not switch
+  to a user-provided TeX engine, and it does not support MiKTeX roots.
 - `profile_root_utf8`: required profile directory. It must directly contain
   `preamble.tex` and `warmup.tex`. The renderer does not guess a default
   profile.
@@ -143,6 +146,17 @@ Fields:
   render while keeping PDF and summary.
 - `worker_template_utf8`: optional worker template override. Leave this null for
   the built-in live XeTeX worker template.
+
+### TeX Distribution Boundary
+
+The external `texmf_root_utf8` option is deliberately narrow: it lets StemTeX's
+patched TeX Live-derived daemon read package/font data from another TeX Live
+installation. The selected tree supplies kpathsea configuration and data files;
+the running binaries still come from the StemTeX runtime.
+
+MiKTeX is not accepted as a `texmf_root_utf8` value. It has a different
+multi-root and FNDB model, and StemTeX does not query MiKTeX Core, invoke
+MiKTeX package installation, or run MiKTeX's `xelatex.exe`.
 
 Create a renderer:
 
@@ -450,62 +464,49 @@ global TeX Live or old StemTeX install does not leak into the render.
 
 ## Smoke Tests
 
-Use the script wrapper rather than invoking the smoke executable by hand. The
-wrapper fixes the repo/runtime paths, builds the current target, applies a
-timeout, and uses named arguments so flags cannot be mistaken for positional
-paths.
+Build the smoke executable through CMake, then pass repo/runtime/profile paths
+explicitly.  The smoke executable accepts named options only; test cases are
+selected with `--case NAME`.
 
-```bash
-cd /path/to/stemtex
-./scripts/smoke-cpp-renderer.sh quick
-./scripts/smoke-cpp-renderer.sh errors
-./scripts/smoke-cpp-renderer.sh timing
-./scripts/smoke-cpp-renderer.sh case physics
+```powershell
+cmake --build --preset renderer-release
+
+$repo = (Get-Location).Path
+$smoke = ".\build\stemtex-renderer\cpp-daemon\Release\stemtex-renderer-smoke.exe"
+$runtime = ".\dist\stemtex-texlive-daemon-static"
+$profile = ".\gui\profiles\unicodemath_cjk"
+
+& $smoke --repo $repo --runtime $runtime --profile $profile --case validate
+& $smoke --repo $repo --runtime $runtime --profile $profile --runs 2
+& $smoke --repo $repo --runtime $runtime --profile $profile --case physics
+& $smoke --repo $repo --runtime $runtime --profile $profile --case bad-corpus --spares 0
 ```
 
-Useful environment variables:
+Useful options:
 
 ```text
-STAGE_ROOT       Staged StemTeX tree used by the smoke script.
-STEMTEX_RUNTIME  Explicit runtime tree override for smoke/timing scripts.
-STEMTEX_PROFILE  Explicit profile override for smoke/timing scripts.
-RUNS             Number of repeated renders for applicable cases.
-SPARES           Hot spare target for the renderer.
-TIMEOUT          Per smoke command timeout in seconds.
-BUILD=0          Reuse an existing build instead of rebuilding first.
+--repo PATH              Source tree root.
+--runtime PATH           Runtime tree containing bin/windows and texmf-var.
+--texmf PATH             Optional external TeX Live tree for packages/fonts.
+--profile PATH           Profile directory containing preamble.tex and warmup.tex.
+--runs N                 Number of repeated renders for applicable cases.
+--case NAME              Test case such as validate, physics, bad-corpus, async.
+--spares N               Hot spare target for the renderer.
+--worker-template PATH   Optional worker-state template.
+--allow-exe              Allow xdvipdfmx process fallback during diagnostics.
 ```
 
-The underlying executable still accepts named options for diagnostics:
+Examples:
 
 ```text
-stemtex-renderer-smoke.exe --repo PATH --runtime PATH --runs N --case physics --spares 2
-stemtex-renderer-smoke.exe --async --runs 5 --spares 2
+stemtex-renderer-smoke.exe --repo PATH --runtime PATH --profile PROFILE --case physics --spares 2
+stemtex-renderer-smoke.exe --repo PATH --runtime PATH --profile PROFILE --case async --runs 5 --spares 2
 ```
 
-Legacy positional arguments are accepted only for old logs and ad-hoc debugging;
-new scripts and docs should not use them.
-
-## Timing Report
-
-Run the timing report from MSYS2:
-
-```bash
-cd /path/to/stemtex
-./scripts/run-cpp-timing-report.sh
-```
-
-The script writes:
-
-```text
-out/timing/cpp-renderer-YYYYMMDD-HHMMSS/summary.json
-out/timing/cpp-renderer-YYYYMMDD-HHMMSS/report.md
-out/timing/cpp-renderer-YYYYMMDD-HHMMSS/raw/*.log
-```
-
-The report covers:
+For timing checks, run representative cases with `--runs` and capture the
+console output from the smoke executable. Useful cases are:
 
 - cold create/warmup/live-worker startup;
-- five hot default renders;
 - physics, font, and chemistry representative snippets;
 - the expected bad-snippet error path;
 - the hot-spare failover path.

@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -41,7 +42,7 @@ static void print_usage(const char *argv0) {
   std::fprintf(stderr,
                "Usage:\n"
                "  %s [--repo PATH] [--runtime PATH] [--texmf PATH] --profile PATH [--runs N] [--case NAME] [--spares N]\n"
-               "  %s --async --runs 5 --spares 2\n"
+               "  %s --profile PATH --case async --runs 5 --spares 2\n"
                "\n"
                "Cases: default, validate, refresh, physics, fonts, chem-text, bad,\n"
                "       bad-then-good, bad-then-good-wait, bad-then-good-wait-long,\n"
@@ -59,18 +60,6 @@ static std::string canonical_case(std::string value) {
 
 static SmokeOptions parse_options(int argc, char **argv) {
   SmokeOptions opts;
-  bool legacy_positional = argc > 1 && argv[1] && std::string(argv[1]).rfind("--", 0) != 0;
-  if (legacy_positional) {
-    opts.repo_root = argc > 1 && argv[1] && *argv[1] ? fs::absolute(argv[1]) : fs::current_path();
-    opts.runtime_root = argc > 2 && argv[2] && *argv[2] ? fs::absolute(argv[2]) : default_runtime_root(opts.repo_root);
-    opts.runs = argc > 3 ? std::atoi(argv[3]) : 1;
-    opts.case_name = argc > 4 ? canonical_case(argv[4]) : "";
-    opts.spare_workers = argc > 5 ? std::atoi(argv[5]) : 0;
-    opts.profile_root = argc > 6 && argv[6] && *argv[6] ? fs::absolute(argv[6]) : fs::path();
-    opts.worker_template = argc > 7 ? argv[7] : "";
-    return opts;
-  }
-
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i] ? argv[i] : "";
     auto need_value = [&](const char *name) -> const char * {
@@ -101,10 +90,6 @@ static SmokeOptions parse_options(int argc, char **argv) {
       opts.worker_template = need_value("--worker-template");
     } else if (arg == "--allow-exe") {
       opts.allow_exe = true;
-    } else if (arg.rfind("--", 0) == 0) {
-      opts.case_name = canonical_case(arg);
-    } else if (opts.case_name.empty()) {
-      opts.case_name = canonical_case(arg);
     } else {
       print_usage(argv[0]);
       throw std::runtime_error("unexpected argument: " + arg);
@@ -166,10 +151,11 @@ int main(int argc, char **argv) {
   fs::path repo_root = opts.repo_root;
   fs::path runtime_root = opts.runtime_root;
   fs::path texmf_root = opts.texmf_root.empty() ? runtime_root : opts.texmf_root;
+  fs::path profile_root = opts.profile_root;
   std::string repo_root_utf8 = repo_root.generic_string();
   std::string runtime_root_utf8 = runtime_root.generic_string();
   std::string texmf_root_utf8 = texmf_root.generic_string();
-  std::string profile_root_utf8 = opts.profile_root.empty() ? "" : opts.profile_root.generic_string();
+  std::string profile_root_utf8 = profile_root.empty() ? "" : profile_root.generic_string();
   std::string state_root_utf8 = (repo_root / "build" / "smoke-state").generic_string();
   std::string renders_root_utf8 = (repo_root / "build" / "smoke-renders").generic_string();
 
@@ -193,10 +179,11 @@ int main(int argc, char **argv) {
   std::printf("runtimeRoot=%s\n", runtime_root_utf8.c_str());
   std::printf("texmfRoot=%s\n", texmf_root_utf8.c_str());
   std::printf("profileRoot=%s\n", profile_root_utf8.c_str());
-  std::printf("runtimeHasXetexdaemon=%d runtimeHasDvipdfmxDaemonDll=%d runtimeHasWarmup=%d\n",
+  std::printf("runtimeHasXetexdaemon=%d runtimeHasDvipdfmxDaemonDll=%d profileHasWarmup=%d profileHasWarmupXdv=%d\n",
               fs::exists(runtime_root / "bin" / "windows" / "xetexdaemon.exe") ? 1 : 0,
               fs::exists(runtime_root / "bin" / "windows" / "dvipdfmxdaemon.dll") ? 1 : 0,
-              fs::exists(runtime_root / "texmf-var" / "cache-warmup" / "warmup.xdv") ? 1 : 0);
+              fs::exists(profile_root / "warmup.tex") ? 1 : 0,
+              fs::exists(profile_root / "warmup.xdv") ? 1 : 0);
 
   char *error = nullptr;
   StemTeXErrorCode error_code = STEMTEX_OK;

@@ -30,7 +30,7 @@ tracked here as TODO:
 - `stemtex_renderer_engine_snapshot` is a synchronous cached-state read. It does
   not take the render lock and should be the single source of truth for GUI
   status indicators.
-- Render results now carry a normalized outcome code separate from the legacy
+- Render results now carry a normalized outcome code separate from the base
   `StemTeXErrorCode`. A successful render can return
   `STEMTEX_RENDER_OUTCOME_RECOVERABLE` with `issue_flags != 0`; hosts should show
   the PDF but surface the warning to users. Failed render calls update the same
@@ -48,8 +48,8 @@ tracked here as TODO:
 
 - Evaluate a persistent renderer helper process for fault isolation around
   startup/dependency-level failures. The source-level checkpoint path covers
-  body-level TeX errors, but it cannot stop a legacy TeX Live dependency from
-  calling `exit()` during initialization.
+  body-level TeX errors, but it cannot stop a TeX Live dependency from calling
+  `exit()` during initialization.
 - Add a stable host-language binding once the embedding language is known.
 - Decide whether `auto_restart` needs a real disabled mode; zero-initialized
   configs currently keep automatic recovery enabled.

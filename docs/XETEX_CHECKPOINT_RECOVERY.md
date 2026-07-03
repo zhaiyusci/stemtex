@@ -139,9 +139,15 @@ relevant cases are:
 
 The most important regression test is:
 
-```sh
-BUILD=0 SPARES=0 RUNS=1 TIMEOUT=240 \
-  ./scripts/smoke-cpp-renderer.sh case bad-corpus
+```powershell
+cmake --build --preset renderer-release
+
+$repo = (Get-Location).Path
+$smoke = ".\build\stemtex-renderer\cpp-daemon\Release\stemtex-renderer-smoke.exe"
+$runtime = ".\dist\stemtex-texlive-daemon-static"
+$profile = ".\gui\profiles\unicodemath_cjk"
+
+& $smoke --repo $repo --runtime $runtime --profile $profile --case bad-corpus --spares 0 --runs 1
 ```
 
 Expected result:

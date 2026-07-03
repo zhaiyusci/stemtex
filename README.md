@@ -3,8 +3,7 @@
 StemTeX is a Windows-native XeLaTeX daemon runtime for low-latency rendering of
 short STEM snippets.  The current version is recorded in `VERSION`.
 
-The project is no longer organized around the old Node worker/web preview
-experiments.  The supported path is:
+The supported path is:
 
 - a trimmed StemTeX runtime tree;
 - patched `xetexdaemon` and `xdvipdfmxdaemon` binaries;
@@ -63,14 +62,8 @@ installer/
   stemtex.iss                     Inno Setup definition.
 
 scripts/
-  build-cpp-daemon.sh             Build stemtex-renderer.dll.
-  build-gui.sh                    Build StemTeX Renderer GUI.
-  smoke-cpp-renderer.sh           Canonical C++ renderer smoke entrypoint.
-  stage-stemtex.sh                Stage bin/dll/include/share/texmf-dist.
-  build-stemtex-installer.sh      Stage runtime/GUI/SDK and build installer.
   generate-profile-warmup.py      Generate profile warmup.tex from preamble capabilities.
   generate-gui-icon.py            Regenerate GUI PNG/ICO from SVG.
-  refresh-static-runtime-cache.sh Rebuild profile warmup/cache data.
 
 texlive-xetex/
   src/                            Generated-C XeTeX and xdvipdfmx sources.
@@ -78,9 +71,6 @@ texlive-xetex/
   third_party-msvc-src/           Source snapshots for rebuilding those libs.
   build-standalone-msvc.sh        Build xetexdaemon/xdvipdfmxdaemon.
   install-msvc-standalone-to-side-tree.sh
-
-test/
-  test_*.tex                      Historical/manual test documents.
 
 gui/profiles/
   <name>/
@@ -111,60 +101,73 @@ meaningful:
 
 ## Build
 
-Run from MSYS2.  The scripts may call Visual Studio, CMake, Qt, and Inno Setup,
-but the orchestration is shell-based.
+The supported application build is CMake-driven.  Use a Visual Studio x64
+developer environment, or initialize `vcvars64.bat` before using the Ninja
+preset.
 
-Build the daemon engine bundle:
+Configure and build the renderer and GUI:
 
-```sh
-cd /path/to/stemtex
-./texlive-xetex/build-standalone-msvc.sh
-./texlive-xetex/install-msvc-standalone-to-side-tree.sh
-./scripts/refresh-static-runtime-cache.sh ./dist/stemtex-texlive-daemon-static ./gui/profiles/unicodemath_cjk
+```bat
+cmake --preset ninja-msvc
+cmake --build --preset ninja-release
 ```
 
-Build the renderer and GUI through the unified CMake project:
+Install a staged tree:
 
-```sh
-cmake -S . -B build/stemtex -G "Visual Studio 17 2022" -A x64 \
-  -DCMAKE_PREFIX_PATH=/c/Qt/6.11.1/msvc2022_64
-cmake --build build/stemtex --config Release --target stemtex-renderer stemtex-renderer-smoke stemtex-renderer-gui
+```bat
+cmake --install build/stemtex-ninja --prefix staging
+```
+
+The Visual Studio generator preset is also available:
+
+```bat
+cmake --preset vs2022
+cmake --build --preset release
 cmake --install build/stemtex --config Release --prefix staging
 ```
 
-On newer Visual Studio installations whose CMake generator is not recognized,
-initialize the MSVC environment and use Ninja instead:
+The CMake install step expects the daemon binaries and runtime side tree to
+exist.  The default inputs are:
+
+```text
+texlive-xetex/out/standalone-msvc
+dist/stemtex-texlive-daemon-static
+```
+
+Override them with `STEMTEX_STANDALONE_DIR` and `STEMTEX_RUNTIME_SOURCE` CMake
+cache variables when using a different local layout.  Rebuilding the daemon
+engine itself is a maintainer workflow documented in
+[docs/WINDOWS_XETEX_BUILD_NOTES.md](docs/WINDOWS_XETEX_BUILD_NOTES.md).
+
+Run a native renderer smoke test against the staged tree:
 
 ```bat
-call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"
-cmake --preset renderer-ninja-msvc
-cmake --build --preset renderer-ninja-release
-```
-
-The legacy wrapper scripts still work and call the same top-level CMake targets:
-
-```sh
-./scripts/build-cpp-daemon.sh
-./scripts/build-gui.sh
-```
-
-Run the C++ renderer smoke suite:
-
-```sh
-./scripts/smoke-cpp-renderer.sh quick
-./scripts/smoke-cpp-renderer.sh errors
+build\stemtex-ninja\cpp-daemon\stemtex-renderer-smoke.exe ^
+  --repo "%CD%" ^
+  --runtime "%CD%\staging\runtime" ^
+  --profile "%CD%\staging\gui\profiles\unicodemath_cjk" ^
+  --case validate
 ```
 
 Run a native GUI smoke test:
 
-```sh
-timeout 90s ./staging/gui/stemtex-renderer-gui.exe --smoke
+```bat
+staging\gui\stemtex-renderer-gui.exe --smoke
 ```
 
-Build the installer:
+Build the installer from a CMake-installed staging tree:
 
-```sh
-./scripts/build-stemtex-installer.sh
+```powershell
+$version = (Get-Content .\VERSION).Trim()
+$stage = "$PWD\dist\stemtex-installer\StemTeX"
+$output = "$PWD\dist\installer"
+cmake --install build/stemtex-ninja --prefix $stage
+New-Item -ItemType Directory -Force $output | Out-Null
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+  "/DSourceDir=$stage" `
+  "/DOutputDir=$output" `
+  "/DAppVersion=$version" `
+  .\installer\stemtex.iss
 ```
 
 The installer is written under:
@@ -173,9 +176,11 @@ The installer is written under:
 dist/installer/StemTeX-<version>-Setup.exe
 ```
 
-The installer intentionally does not ship generated font cache files.  During
-The installer does not pick a default profile. A host application or the GUI
-chooses a profile directory and passes it to the renderer.
+The installer intentionally does not ship generated font cache files.  It
+refreshes the selected profile cache during installation when the GUI and
+bundled TeX tree are selected.  The installer does not pick a default profile.
+A host application or the GUI chooses a profile directory and passes it to the
+renderer.
 
 ## Runtime Layout
 
@@ -205,6 +210,23 @@ StemTeX/
     texmf-var/
 ```
 
+## External TeX Trees
+
+The installed runtime is the supported default. Advanced hosts may set the
+renderer's `texmf_root_utf8` field, or use the GUI's TeX tree selector, to read
+packages and fonts from a full external TeX tree. That external tree must use
+the TeX Live layout: the selected root is expected to contain `texmf-dist/` and
+`texmf-dist/web2c/`, for example `C:\texlive\2026`.
+
+This does not switch the engine to the user's TeX binaries. StemTeX still runs
+its patched `xetexdaemon` and `xdvipdfmxdaemon` from the StemTeX runtime; the
+external TeX Live tree supplies the kpathsea configuration, packages, fonts,
+maps, CMaps, and related data.
+
+MiKTeX roots are not supported by this option. MiKTeX uses a different root
+model, FNDB/package-management layer, and configuration layout, and StemTeX does
+not query MiKTeX Core or run MiKTeX's `xelatex.exe`.
+
 ## Native Renderer API
 
 Host applications should use `stemtex-renderer.dll` through the C ABI in
@@ -218,10 +240,5 @@ The current API completion/status notes are in
 
 ## Notes
 
-- `docs/XELATEX_PROFILING_NOTES.md` is historical.  It records earlier timing
-  work, Tectonic checks, Node prototypes, and the abandoned independent-XDV
-  experiment.
-- `patches/w32tex-2025-runtime-switches.md` is historical source archaeology
-  for the earlier W32TeX route.
 - The current source-of-truth engine patch for the generated-C tree is
   `patches/texlive-generated-daemon-runtime-switches.patch`.
