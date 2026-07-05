@@ -32,6 +32,7 @@ install(TARGETS stemtex-renderer
   LIBRARY DESTINATION runtime/bin/sdk
   ARCHIVE DESTINATION runtime/sdk/lib
 )
+install(TARGETS stemtex-worker-host RUNTIME DESTINATION runtime/bin/windows)
 install(FILES cpp-daemon/stemtex_renderer.h DESTINATION runtime/sdk/include)
 install(FILES VERSION DESTINATION runtime)
 install(FILES gui/assets/stemtex-renderer-gui.ico DESTINATION runtime RENAME StemTeX.ico)

@@ -113,7 +113,7 @@ Fields:
 - `repo_root_utf8`: optional working directory for relative TeX inputs inside
   snippets. It is not used for renderer resource discovery.
 - `runtime_root_utf8`: StemTeX runtime root, meaning the directory that directly
-  contains `bin\windows\xetexdaemon.exe`. In the installer layout this is
+  contains `bin\windows\stemtex-worker-host.exe` and `bin\windows\xetexdaemon.exe`. In the installer layout this is
   normally `C:\StemTeX\runtime`.
 - `texmf_root_utf8`: optional TeX Live tree used for packages and TeX fonts.
   If null, it defaults to `runtime_root_utf8`. When set, the path must be a
@@ -131,7 +131,9 @@ Fields:
   directory.
 - `renders_root_utf8`: optional render output directory. If null, the renderer
   uses a unique directory under the system temporary directory.
-- `request_timeout_ms`: worker request timeout. `0` uses `90000`.
+- `request_timeout_ms`: startup, warmup, and active-render request timeout.
+  `0` uses `90000`. This is not an idle timeout; a ready worker can wait
+  indefinitely for the next render request.
 - `xdvipdfmx_timeout_ms`: PDF conversion timeout. `0` uses `90000`.
 - `default_width_pt`: width used when a render call passes `width_pt <= 0`.
   `0` uses `360`.
@@ -444,8 +446,14 @@ Memory returned through `error_utf8` belongs to the DLL and must be freed with
 
 ## Environment Isolation
 
-The renderer launches `xetexdaemon.exe` and `xdvipdfmxdaemon.exe` with a StemTeX-local
-environment. It sets paths such as:
+The renderer launches `xetexdaemon.exe` through `stemtex-worker-host.exe` for
+warmup compilation, profile-cache refresh, and live XeTeX workers. The helper
+starts the daemon with the renderer's stdio pipes and a private lifetime pipe.
+For live workers, the helper blocks indefinitely while the worker is idle. It
+cleans up `xetexdaemon` when the renderer closes the lifetime pipe during
+destroy, restart, cancellation, timeout, or host-process death.
+
+The renderer and helper use a StemTeX-local environment. It sets paths such as:
 
 ```text
 PATH

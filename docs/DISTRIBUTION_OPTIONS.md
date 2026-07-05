@@ -15,6 +15,7 @@ StemTeX\
     Qt runtime files
   runtime\
     bin\windows\
+      stemtex-worker-host.exe
       xetexdaemon.exe
       xetexdaemon.dll
       xdvipdfmxdaemon.exe
@@ -89,8 +90,8 @@ Such an integration would need to:
 
 1. Discover and validate the user's TeX installation.
 2. Build or select a daemon-specific format.
-3. Ensure `xetexdaemon` and `xdvipdfmxdaemon` are first on the runtime search
-   path used by the renderer.
+3. Ensure `stemtex-worker-host`, `xetexdaemon`, and `xdvipdfmxdaemon` are first
+   on the runtime search path used by the renderer.
 4. Generate cache/warmup data for that environment.
 5. Store the validated paths in renderer configuration.
 

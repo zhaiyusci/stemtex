@@ -7,6 +7,7 @@ The supported path is:
 
 - a trimmed StemTeX runtime tree;
 - patched `xetexdaemon` and `xdvipdfmxdaemon` binaries;
+- a tiny `stemtex-worker-host` process supervisor for XeTeX daemon invocations;
 - a native C ABI renderer DLL in `cpp-daemon/`;
 - a Qt-based **StemTeX Renderer GUI** in `gui/`;
 - an Inno Setup installer that packages the GUI, runtime, and renderer SDK.
@@ -21,6 +22,15 @@ LaTeX's `preview` environment, so the emitted page box is tightened around the
 typeset content instead of staying at a full paper size.  The renderer then
 synthesizes a valid final XDV postamble and asks the hot
 `dvipdfmxdaemon.dll` converter to convert only the newest page.
+
+The renderer does not launch `xetexdaemon` directly.  Warmup compilation,
+profile-cache refresh, and live XeTeX workers all go through
+`stemtex-worker-host`, which then starts `xetexdaemon` with the renderer's
+stdio pipes.  A private lifetime pipe stays open for as long as the renderer
+owns that invocation.  Closing that pipe during renderer destroy, restart,
+cancel, timeout, or host-process death makes the helper terminate the child
+`xetexdaemon`.  This is not an idle timeout; a hot worker may wait indefinitely
+for the next snippet.
 
 This is deliberately not a general LaTeX sandbox.  The intended input is short
 Chinese/English STEM text with math, chemistry, physics, color, and ordinary
@@ -52,6 +62,7 @@ transport.
 cpp-daemon/
   stemtex_renderer.h              Public C ABI.
   stemtex_renderer.cpp            Renderer DLL implementation.
+  stemtex_worker_host.cpp         Tiny worker-process supervisor.
   stemtex_renderer_smoke.cpp      Smoke/timing executable.
 
 gui/
@@ -193,6 +204,7 @@ StemTeX/
     Qt runtime files
   runtime/
     bin/windows/
+      stemtex-worker-host.exe
       xetexdaemon.exe
       xetexdaemon.dll
       xdvipdfmxdaemon.exe

@@ -19,6 +19,13 @@ target_compile_definitions(stemtex-renderer PRIVATE
   STEMTEX_RENDERER_VERSION="${STEMTEX_VERSION}"
 )
 
+add_executable(stemtex-worker-host stemtex_worker_host.cpp)
+target_compile_features(stemtex-worker-host PRIVATE cxx_std_17)
+target_compile_definitions(stemtex-worker-host PRIVATE
+  WIN32_LEAN_AND_MEAN
+  NOMINMAX
+)
+
 add_executable(stemtex-renderer-smoke stemtex_renderer_smoke.cpp)
 target_compile_features(stemtex-renderer-smoke PRIVATE cxx_std_17)
 target_link_libraries(stemtex-renderer-smoke PRIVATE stemtex-renderer)

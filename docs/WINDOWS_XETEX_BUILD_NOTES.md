@@ -139,11 +139,12 @@ capacity values and crash in `dvi_init()`.
 
 ## StemTeX Runtime Tree
 
-The runtime side tree and the CMake install stage use this shape:
+The CMake-installed runtime uses this shape:
 
 ```text
-dist/stemtex-texlive-daemon-static/
+runtime/
   bin/windows/
+    stemtex-worker-host.exe
     xetexdaemon.exe
     xetexdaemon.dll
     xdvipdfmxdaemon.exe

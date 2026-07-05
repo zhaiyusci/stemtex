@@ -259,8 +259,9 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
   QByteArray texmf = QDir::cleanPath(texmfRoot).toUtf8();
   QByteArray profile = QDir::cleanPath(profileRoot).toUtf8();
   QDir runtimeDir(QString::fromUtf8(runtime));
-  printf("repoRoot=%s\nruntimeRoot=%s\ntexmfRoot=%s\nprofileRoot=%s\nruntimeHasXetexdaemon=%d runtimeHasDvipdfmxDll=%d profileHasWarmup=%d\n",
+  printf("repoRoot=%s\nruntimeRoot=%s\ntexmfRoot=%s\nprofileRoot=%s\nruntimeHasWorkerHost=%d runtimeHasXetexdaemon=%d runtimeHasDvipdfmxDll=%d profileHasWarmup=%d\n",
          repo.constData(), runtime.constData(), texmf.constData(), profile.constData(),
+         QFileInfo::exists(runtimeDir.filePath("bin/windows/stemtex-worker-host.exe")) ? 1 : 0,
          QFileInfo::exists(runtimeDir.filePath("bin/windows/xetexdaemon.exe")) ? 1 : 0,
          QFileInfo::exists(runtimeDir.filePath("bin/windows/dvipdfmxdaemon.dll")) ? 1 : 0,
          QFileInfo::exists(QDir(QString::fromUtf8(profile)).filePath("warmup.tex")) ? 1 : 0);

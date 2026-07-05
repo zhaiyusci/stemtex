@@ -31,6 +31,7 @@ namespace fs = std::filesystem;
 namespace {
 
 const char *kWorkerStop = "\\workerstop";
+const wchar_t *kWorkerHostLifetimeEnv = L"STEMTEX_WORKER_HOST_LIFETIME_HANDLE";
 #ifndef STEMTEX_RENDERER_VERSION
 #define STEMTEX_RENDERER_VERSION "0.0.0-dev"
 #endif
@@ -197,6 +198,7 @@ std::vector<wchar_t> build_environment_block(const std::map<std::wstring, std::w
       L"SELFAUTOGRANDPARENT",
       L"ICU_DATA",
       L"command_line_encoding",
+      kWorkerHostLifetimeEnv,
   };
   for (const auto &name : tex_names) erase_env_name(env, name);
   for (const auto &kv : overrides) {
@@ -212,6 +214,18 @@ std::vector<wchar_t> build_environment_block(const std::map<std::wstring, std::w
   }
   block.push_back(L'\0');
   return block;
+}
+
+std::vector<wchar_t> environment_with_lifetime_handle(const std::vector<wchar_t> &environment, HANDLE lifetime_read) {
+  std::vector<wchar_t> out = environment;
+  if (out.empty()) out.push_back(L'\0');
+  if (!out.empty() && out.back() == L'\0') out.pop_back();
+  std::wstring entry =
+      std::wstring(kWorkerHostLifetimeEnv) + L"=" + std::to_wstring(reinterpret_cast<uintptr_t>(lifetime_read));
+  out.insert(out.end(), entry.begin(), entry.end());
+  out.push_back(L'\0');
+  out.push_back(L'\0');
+  return out;
 }
 
 std::string slash_path(const fs::path &p) {
@@ -511,6 +525,7 @@ class ChildProcess {
     HANDLE stdin_read = nullptr, stdin_write = nullptr;
     HANDLE stdout_read = nullptr, stdout_write = nullptr;
     HANDLE stderr_read = nullptr, stderr_write = nullptr;
+    HANDLE lifetime_read = nullptr, lifetime_write = nullptr;
     auto close_pipe_handles = [&]() {
       close_handle(stdin_read);
       close_handle(stdin_write);
@@ -518,6 +533,8 @@ class ChildProcess {
       close_handle(stdout_write);
       close_handle(stderr_read);
       close_handle(stderr_write);
+      close_handle(lifetime_read);
+      close_handle(lifetime_write);
     };
     if (!CreatePipe(&stdin_read, &stdin_write, &sa, 0)) {
       throw std::runtime_error("CreatePipe stdin failed");
@@ -533,6 +550,11 @@ class ChildProcess {
       throw std::runtime_error("CreatePipe stderr failed");
     }
     SetHandleInformation(stderr_read, HANDLE_FLAG_INHERIT, 0);
+    if (!CreatePipe(&lifetime_read, &lifetime_write, &sa, 0)) {
+      close_pipe_handles();
+      throw std::runtime_error("CreatePipe lifetime failed");
+    }
+    SetHandleInformation(lifetime_write, HANDLE_FLAG_INHERIT, 0);
 
     STARTUPINFOW si{};
     si.cb = sizeof(si);
@@ -544,7 +566,8 @@ class ChildProcess {
     PROCESS_INFORMATION pi{};
     std::wstring cmd = command_line;
     std::wstring cwdw = cwd.wstring();
-    LPVOID env = environment.empty() ? nullptr : const_cast<wchar_t *>(environment.data());
+    std::vector<wchar_t> child_environment = environment_with_lifetime_handle(environment, lifetime_read);
+    LPVOID env = child_environment.empty() ? nullptr : child_environment.data();
     BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
                              env, cwdw.c_str(), &si, &pi);
     DWORD create_err = ok ? 0 : GetLastError();
@@ -554,6 +577,8 @@ class ChildProcess {
     stdout_write = nullptr;
     CloseHandle(stderr_write);
     stderr_write = nullptr;
+    CloseHandle(lifetime_read);
+    lifetime_read = nullptr;
     if (!ok) {
       close_pipe_handles();
       throw std::runtime_error("CreateProcess failed: " + std::to_string(create_err));
@@ -563,6 +588,8 @@ class ChildProcess {
     stdin_ = stdin_write;
     stdout_ = stdout_read;
     stderr_ = stderr_read;
+    lifetime_ = lifetime_write;
+    lifetime_write = nullptr;
     stdout_thread_ = std::thread([this, on_data]() { read_loop(stdout_, on_data); });
     stderr_thread_ = std::thread([this, on_data]() { read_loop(stderr_, on_data); });
   }
@@ -587,8 +614,13 @@ class ChildProcess {
 
   void stop() {
     if (pi_.hProcess) {
-      TerminateProcess(pi_.hProcess, 1);
-      WaitForSingleObject(pi_.hProcess, 5000);
+      close_handle(lifetime_);
+      close_handle(stdin_);
+      DWORD wait = WaitForSingleObject(pi_.hProcess, 5000);
+      if (wait == WAIT_TIMEOUT) {
+        TerminateProcess(pi_.hProcess, 1);
+        WaitForSingleObject(pi_.hProcess, 5000);
+      }
     }
     join_readers();
     close_handles();
@@ -621,6 +653,7 @@ class ChildProcess {
   }
 
   void close_handles() {
+    close_handle(lifetime_);
     close_handle(stdin_);
     close_handle(stdout_);
     close_handle(stderr_);
@@ -632,6 +665,7 @@ class ChildProcess {
   HANDLE stdin_ = nullptr;
   HANDLE stdout_ = nullptr;
   HANDLE stderr_ = nullptr;
+  HANDLE lifetime_ = nullptr;
   std::thread stdout_thread_;
   std::thread stderr_thread_;
 };
@@ -744,12 +778,27 @@ std::string installed_warmup_body(const RendererConfig &cfg) {
   return warmup;
 }
 
+fs::path worker_host_exe(const RendererConfig &cfg) {
+  return cfg.runtime_root / "bin" / "windows" / "stemtex-worker-host.exe";
+}
+
+fs::path xetexdaemon_exe(const RendererConfig &cfg) {
+  return cfg.runtime_root / "bin" / "windows" / "xetexdaemon.exe";
+}
+
+std::string hosted_xetex_command(const RendererConfig &cfg, const std::string &xetex_command) {
+  return quote_cmd_arg(worker_host_exe(cfg).string()) + " -- " + xetex_command;
+}
+
 std::wstring worker_command(const RendererConfig &cfg, const fs::path &out_dir) {
-  fs::path exe = cfg.runtime_root / "bin" / "windows" / "xetexdaemon.exe";
+  fs::path host = worker_host_exe(cfg);
+  fs::path exe = xetexdaemon_exe(cfg);
   fs::path worker = out_dir / "worker-template.tex";
   std::string worker_arg = slash_path(worker);
   std::wostringstream cmd;
-  cmd << quote_cmd_arg_w(path_to_wstring(exe))
+  cmd << quote_cmd_arg_w(path_to_wstring(host))
+      << L" -- "
+      << quote_cmd_arg_w(path_to_wstring(exe))
       << L" -fmt=xelatexdaemon --no-font-cache-refresh"
       << L" -jobname=worker-template -interaction=errorstopmode -no-pdf -flush-output-on-shipout"
       << L" -output-directory=" << quote_cmd_arg_w(path_to_wstring(out_dir))
@@ -1014,37 +1063,77 @@ class DvipdfmxDaemon {
 };
 
 void run_sync(const std::string &command, const fs::path &cwd, const std::vector<wchar_t> &environment,
-              DWORD timeout_ms = 10000) {
+              DWORD timeout_ms = 10000, bool attach_lifetime = false) {
   SECURITY_ATTRIBUTES sa{};
   sa.nLength = sizeof(sa);
   sa.bInheritHandle = TRUE;
+  HANDLE stdin_read = nullptr, stdin_write = nullptr;
   HANDLE stdout_read = nullptr, stdout_write = nullptr;
   HANDLE stderr_read = nullptr, stderr_write = nullptr;
-  if (!CreatePipe(&stdout_read, &stdout_write, &sa, 0)) throw std::runtime_error("CreatePipe stdout failed");
+  HANDLE lifetime_read = nullptr, lifetime_write = nullptr;
+  auto close_handle = [](HANDLE &h) {
+    if (h) {
+      CloseHandle(h);
+      h = nullptr;
+    }
+  };
+  auto close_local_handles = [&]() {
+    close_handle(stdin_read);
+    close_handle(stdin_write);
+    close_handle(stdout_read);
+    close_handle(stdout_write);
+    close_handle(stderr_read);
+    close_handle(stderr_write);
+    close_handle(lifetime_read);
+    close_handle(lifetime_write);
+  };
+  if (!CreatePipe(&stdin_read, &stdin_write, &sa, 0)) throw std::runtime_error("CreatePipe stdin failed");
+  SetHandleInformation(stdin_write, HANDLE_FLAG_INHERIT, 0);
+  if (!CreatePipe(&stdout_read, &stdout_write, &sa, 0)) {
+    close_local_handles();
+    throw std::runtime_error("CreatePipe stdout failed");
+  }
   SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0);
-  if (!CreatePipe(&stderr_read, &stderr_write, &sa, 0)) throw std::runtime_error("CreatePipe stderr failed");
+  if (!CreatePipe(&stderr_read, &stderr_write, &sa, 0)) {
+    close_local_handles();
+    throw std::runtime_error("CreatePipe stderr failed");
+  }
   SetHandleInformation(stderr_read, HANDLE_FLAG_INHERIT, 0);
+  if (attach_lifetime) {
+    if (!CreatePipe(&lifetime_read, &lifetime_write, &sa, 0)) {
+      close_local_handles();
+      throw std::runtime_error("CreatePipe lifetime failed");
+    }
+    SetHandleInformation(lifetime_write, HANDLE_FLAG_INHERIT, 0);
+  }
 
   STARTUPINFOW si{};
   si.cb = sizeof(si);
   si.dwFlags = STARTF_USESTDHANDLES;
-  si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  si.hStdInput = stdin_read;
   si.hStdOutput = stdout_write;
   si.hStdError = stderr_write;
   PROCESS_INFORMATION pi{};
   std::wstring cmd = widen_utf8(command);
   std::wstring cwdw = cwd.wstring();
+  std::vector<wchar_t> child_environment;
   LPVOID env = environment.empty() ? nullptr : const_cast<wchar_t *>(environment.data());
-  if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
-                      env, cwdw.c_str(), &si, &pi)) {
-    CloseHandle(stdout_read);
-    CloseHandle(stdout_write);
-    CloseHandle(stderr_read);
-    CloseHandle(stderr_write);
-    throw std::runtime_error("CreateProcess failed: " + command);
+  if (attach_lifetime) {
+    child_environment = environment_with_lifetime_handle(environment, lifetime_read);
+    env = child_environment.empty() ? nullptr : child_environment.data();
   }
-  CloseHandle(stdout_write);
-  CloseHandle(stderr_write);
+  BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+                           env, cwdw.c_str(), &si, &pi);
+  DWORD create_err = ok ? 0 : GetLastError();
+  close_handle(stdin_read);
+  close_handle(stdin_write);
+  close_handle(stdout_write);
+  close_handle(stderr_write);
+  close_handle(lifetime_read);
+  if (!ok) {
+    close_local_handles();
+    throw std::runtime_error("CreateProcess failed: " + std::to_string(create_err) + ": " + command);
+  }
 
   auto read_pipe = [](HANDLE h) {
     std::string out;
@@ -1063,21 +1152,25 @@ void run_sync(const std::string &command, const fs::path &cwd, const std::vector
 
   DWORD wait = WaitForSingleObject(pi.hProcess, timeout_ms);
   if (wait == WAIT_TIMEOUT) {
-    TerminateProcess(pi.hProcess, 1);
+    close_handle(lifetime_write);
+    wait = WaitForSingleObject(pi.hProcess, 5000);
+    if (wait == WAIT_TIMEOUT) {
+      TerminateProcess(pi.hProcess, 1);
+      WaitForSingleObject(pi.hProcess, 5000);
+    }
     if (stdout_thread.joinable()) stdout_thread.join();
     if (stderr_thread.joinable()) stderr_thread.join();
-    CloseHandle(stdout_read);
-    CloseHandle(stderr_read);
+    close_local_handles();
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     throw std::runtime_error("Command timed out: " + command);
   }
+  close_handle(lifetime_write);
   DWORD code = 0;
   GetExitCodeProcess(pi.hProcess, &code);
   if (stdout_thread.joinable()) stdout_thread.join();
   if (stderr_thread.joinable()) stderr_thread.join();
-  CloseHandle(stdout_read);
-  CloseHandle(stderr_read);
+  close_local_handles();
   CloseHandle(pi.hThread);
   CloseHandle(pi.hProcess);
   if (code != 0) {
@@ -1100,13 +1193,13 @@ XdvParts run_warmup(const RendererConfig &cfg) {
   std::error_code cleanup_ec;
   fs::remove_all(warmup_dir, cleanup_ec);
   fs::create_directories(warmup_dir);
-  fs::path exe = cfg.runtime_root / "bin" / "windows" / "xetexdaemon.exe";
+  fs::path exe = xetexdaemon_exe(cfg);
   auto env = worker_environment(cfg);
   try {
     std::ostringstream cmd;
     cmd << quote_cmd_arg(exe.string()) << " -fmt=xelatexdaemon -no-pdf -interaction=nonstopmode -halt-on-error"
         << " -output-directory=" << quote_cmd_arg(warmup_dir.string()) << " " << quote_cmd_arg(cfg.warmup_tex.string());
-    run_sync(cmd.str(), cfg.profile_root, env, (DWORD)cfg.request_timeout_ms);
+    run_sync(hosted_xetex_command(cfg, cmd.str()), cfg.profile_root, env, (DWORD)cfg.request_timeout_ms, true);
     fs::path temp_xdv = warmup_dir / "warmup.xdv";
     if (!fs::exists(temp_xdv)) throw std::runtime_error("Warmup XDV was not written: " + temp_xdv.string());
     XdvParts parts = read_xdv_parts(temp_xdv);
@@ -1245,6 +1338,7 @@ std::string validate_config_text(const RendererConfig &cfg) {
   require_dir(cfg.texmf_root, "texmf root");
   require_dir(cfg.profile_root, "profile root");
   require_file(cfg.runtime_root / "run-xelatexdaemon.bat", "runtime launcher");
+  require_file(cfg.runtime_root / "bin" / "windows" / "stemtex-worker-host.exe", "stemtex-worker-host.exe");
   require_file(cfg.runtime_root / "bin" / "windows" / "xetexdaemon.exe", "xetexdaemon.exe");
   require_file(cfg.runtime_root / "bin" / "windows" / "xdvipdfmxdaemon.exe", "xdvipdfmxdaemon.exe");
   require_file(cfg.runtime_root / "texmf-var" / "web2c" / "xetex" / "xelatexdaemon.fmt", "xelatexdaemon.fmt");
@@ -2344,11 +2438,11 @@ STEMTEX_API int stemtex_refresh_font_cache(const char *runtime_root_utf8, const 
     fs::path output_dir = cfg.profile_root;
     fs::create_directories(output_dir);
     auto env = worker_environment(cfg);
-    fs::path exe = cfg.runtime_root / "bin" / "windows" / "xetexdaemon.exe";
+    fs::path exe = xetexdaemon_exe(cfg);
     std::ostringstream cmd;
     cmd << quote_cmd_arg(exe.string()) << " -fmt=xelatexdaemon -no-pdf -interaction=nonstopmode -halt-on-error"
         << " -output-directory=" << quote_cmd_arg(output_dir.string()) << " " << quote_cmd_arg(cfg.warmup_tex.string());
-    run_sync(cmd.str(), cfg.warmup_tex.parent_path(), env, 90000);
+    run_sync(hosted_xetex_command(cfg, cmd.str()), cfg.warmup_tex.parent_path(), env, 90000, true);
     fs::path warmup_xdv = output_dir / (cfg.warmup_tex.stem().string() + ".xdv");
     if (!fs::exists(warmup_xdv)) throw ApiException(STEMTEX_ERROR_FILESYSTEM, "Warmup XDV was not written: " + warmup_xdv.string());
     if (error_code) *error_code = STEMTEX_OK;

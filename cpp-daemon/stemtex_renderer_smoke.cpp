@@ -20,7 +20,8 @@ static long long now_ms() {
 
 static fs::path default_runtime_root(const fs::path &repo_root) {
   fs::path side_tree = repo_root / "dist" / "stemtex-texlive-daemon-static";
-  if (fs::exists(side_tree / "bin" / "windows" / "xetexdaemon.exe")) {
+  if (fs::exists(side_tree / "bin" / "windows" / "stemtex-worker-host.exe") &&
+      fs::exists(side_tree / "bin" / "windows" / "xetexdaemon.exe")) {
     return side_tree;
   }
   return fs::path();
@@ -179,7 +180,8 @@ int main(int argc, char **argv) {
   std::printf("runtimeRoot=%s\n", runtime_root_utf8.c_str());
   std::printf("texmfRoot=%s\n", texmf_root_utf8.c_str());
   std::printf("profileRoot=%s\n", profile_root_utf8.c_str());
-  std::printf("runtimeHasXetexdaemon=%d runtimeHasDvipdfmxDaemonDll=%d profileHasWarmup=%d profileHasWarmupXdv=%d\n",
+  std::printf("runtimeHasWorkerHost=%d runtimeHasXetexdaemon=%d runtimeHasDvipdfmxDaemonDll=%d profileHasWarmup=%d profileHasWarmupXdv=%d\n",
+              fs::exists(runtime_root / "bin" / "windows" / "stemtex-worker-host.exe") ? 1 : 0,
               fs::exists(runtime_root / "bin" / "windows" / "xetexdaemon.exe") ? 1 : 0,
               fs::exists(runtime_root / "bin" / "windows" / "dvipdfmxdaemon.dll") ? 1 : 0,
               fs::exists(profile_root / "warmup.tex") ? 1 : 0,
