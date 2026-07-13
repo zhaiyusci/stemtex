@@ -7,8 +7,9 @@ dependencies.
 ## Current Engine Rebuild Route
 
 The normal application and installer build is driven by the top-level CMake
-project.  This document covers the lower-level maintainer path for regenerating
-the patched daemon binaries that CMake later stages into the runtime.
+project and does not require bash.  This document covers the lower-level
+maintainer path for regenerating the patched daemon binaries that CMake later
+stages into the runtime.
 
 Build the daemon bundle from the generated-C source snapshot, using the
 installed Visual Studio toolchain:
@@ -27,12 +28,26 @@ texlive-xetex/out/standalone-msvc/dvipdfmxdaemon.dll
 texlive-xetex/out/standalone-msvc/xdvipdfmxdaemon.exe
 ```
 
+Build the dvisvgm-based SVG daemon with PowerShell:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\texlive-xetex\build-dvisvgmdaemon-msvc.ps1
+```
+
+Additional outputs:
+
+```text
+texlive-xetex/out/standalone-msvc/dvisvgmdaemon.dll
+texlive-xetex/out/standalone-msvc/dvisvgmdaemon.exe
+```
+
 The `.exe` files are small `calldll` wrappers.  The actual engine/converter
 code lives in the DLLs:
 
 ```text
 xetexdaemon.exe     -> xetexdaemon.dll:dllxetexmain
 xdvipdfmxdaemon.exe -> dvipdfmxdaemon.dll:dlldvipdfmxmain
+dvisvgmdaemon.exe   -> dvisvgmdaemon.dll:dlldvisvgmmain
 ```
 
 `dvipdfmxdaemon.dll` also exports a StemTeX hot-start API:
@@ -48,6 +63,23 @@ The C++ renderer uses this API instead of repeatedly calling
 once; each `convert` handles one XDV-to-PDF request; `shutdown` closes the
 cached fontmaps.  The old `dlldvipdfmxmain` export remains for the command-line
 wrapper.
+
+`dvisvgmdaemon.dll` exports a matching hot-start API for XDV-to-SVG conversion:
+
+```text
+dvisvgmdaemon_init
+dvisvgmdaemon_convert
+dvisvgmdaemon_shutdown
+dvisvgmdaemon_last_error_message
+```
+
+The converter accepts a small command-line subset through
+`dvisvgmdaemon_convert`: `--page`, `--bbox`, `--output`, `--exact-bbox`,
+`--no-fonts`, and one XDV input path. The renderer passes
+`--bbox=papersize` so SVG output uses the same `pdf:pagesize` page box that
+xdvipdfmx uses for PDF output. It keeps kpathsea/font-map initialization warm
+but resets dvisvgm document state, including FreeType's current font handle,
+before each conversion.
 
 Install the built binaries into the static StemTeX side tree:
 
@@ -73,6 +105,7 @@ uses:
 ```text
 texlive-xetex/src/web2c
 texlive-xetex/src/dvipdfm-x
+texlive-xetex/src/dvisvgm
 texlive-xetex/src/libpaper
 texlive-xetex/src/libs
 texlive-xetex/src/texk
@@ -109,6 +142,9 @@ Rebuild them with:
 This regenerates the static dependency inputs used by
 `build-standalone-msvc.sh`.  Build products inside `third_party-msvc-src/` are
 not source and should not be committed.
+
+The dvisvgm daemon uses the same checked-in static dependency inputs and can be
+rebuilt after that with `build-dvisvgmdaemon-msvc.ps1`.
 
 ## Runtime Switches
 
@@ -149,6 +185,8 @@ runtime/
     xetexdaemon.dll
     xdvipdfmxdaemon.exe
     dvipdfmxdaemon.dll
+    dvisvgmdaemon.exe
+    dvisvgmdaemon.dll
   gui/profiles/
   texmf-dist/
   texmf-var/

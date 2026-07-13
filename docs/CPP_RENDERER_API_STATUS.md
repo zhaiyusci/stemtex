@@ -11,7 +11,7 @@ tracked here as TODO:
 - richer configuration, including timeouts, width policy, resource overrides,
   spare count, and intermediate-file cleanup;
 - version and runtime-version queries;
-- PDF-bytes output;
+- PDF/SVG output, including in-memory bytes for either format;
 - configuration validation;
 - font-cache refresh without calling PowerShell or batch scripts;
 - async render callback on a DLL-owned worker thread.
@@ -21,7 +21,9 @@ tracked here as TODO:
 - One renderer uses one primary XeTeX worker for actual rendering.
 - Concurrent render calls on one renderer are serialized by the renderer.
 - Spare workers are failover capacity only; they are not a throughput pool.
-- Async render is a convenience wrapper around the same serialized render path.
+- Async render is a PDF convenience wrapper around the same serialized render
+  path. SVG callers use the generic synchronous output API from their own worker
+  thread.
 - Body-level TeX errors are recovered in the live XeTeX worker through the
   source-level checkpoint path described in
   `docs/XETEX_CHECKPOINT_RECOVERY.md`. The renderer waits for the restored worker
@@ -42,7 +44,9 @@ tracked here as TODO:
   loop in place.
 - Cancellation kills the active worker and makes that active render fail with
   `STEMTEX_ERROR_CANCELLED`; queued work continues after failover/rebuild.
-- Default request and `xdvipdfmx` timeouts are both 90000 ms.
+- Default request and `xdvipdfmx` timeouts are both 90000 ms. SVG conversion is
+  currently covered by the render request path and reports `dvisvgmMs` in the
+  summary.
 
 ## Remaining Product Work
 
@@ -54,5 +58,5 @@ tracked here as TODO:
 - Decide whether `auto_restart` needs a real disabled mode; zero-initialized
   configs currently keep automatic recovery enabled.
 - Decide whether callers need fixed output filenames. The current API returns a
-  generated PDF path and optional in-memory bytes.
+  generated output path and optional in-memory bytes.
 - Add long-running stress tests around repeated cancel/restart cycles.

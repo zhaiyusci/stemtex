@@ -5,7 +5,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Pdf)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Pdf Svg)
 
 if(NOT TARGET stemtex-renderer)
   add_subdirectory(../cpp-daemon cpp-daemon-build)
@@ -25,7 +25,7 @@ add_executable(stemtex-renderer-gui WIN32
   stemtex-renderer-gui.rc
 )
 target_compile_features(stemtex-renderer-gui PRIVATE cxx_std_17)
-target_link_libraries(stemtex-renderer-gui PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Pdf stemtex-renderer "${QSCINTILLA_LIBRARY}")
+target_link_libraries(stemtex-renderer-gui PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Pdf Qt6::Svg stemtex-renderer "${QSCINTILLA_LIBRARY}")
 target_include_directories(stemtex-renderer-gui PRIVATE ../cpp-daemon "${QSCINTILLA_INCLUDE_DIR}")
 if(MSVC)
   target_link_libraries(stemtex-renderer-gui PRIVATE delayimp)
@@ -66,7 +66,6 @@ if(TARGET Qt6::windeployqt)
             $<TARGET_FILE_DIR:stemtex-renderer-gui>/dxcompiler.dll
             $<TARGET_FILE_DIR:stemtex-renderer-gui>/dxil.dll
             $<TARGET_FILE_DIR:stemtex-renderer-gui>/vc_redist.x64.exe
-            $<TARGET_FILE_DIR:stemtex-renderer-gui>/Qt6Svg.dll
     COMMAND ${CMAKE_COMMAND} -E rm -rf
             $<TARGET_FILE_DIR:stemtex-renderer-gui>/generic
             $<TARGET_FILE_DIR:stemtex-renderer-gui>/iconengines

@@ -14,7 +14,7 @@ option(STEMTEX_INSTALL_TEXMF "Install the bundled trimmed texmf-dist tree" ON)
 set(STEMTEX_TEXLIVE_ROOT "C:/texlive/2026" CACHE PATH "TeX Live root used as the texmf source")
 set(STEMTEX_STANDALONE_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/texlive-xetex/out/standalone-msvc"
-    CACHE PATH "Directory containing xetexdaemon/xdvipdfmxdaemon build outputs")
+    CACHE PATH "Directory containing daemon engine build outputs")
 set(STEMTEX_RUNTIME_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/dist/stemtex-texlive-daemon-static"
     CACHE PATH "Runtime side tree containing xelatexdaemon.fmt")
@@ -41,6 +41,8 @@ install(FILES
   "${STEMTEX_STANDALONE_DIR}/xetexdaemon.dll"
   "${STEMTEX_STANDALONE_DIR}/xdvipdfmxdaemon.exe"
   "${STEMTEX_STANDALONE_DIR}/dvipdfmxdaemon.dll"
+  "${STEMTEX_STANDALONE_DIR}/dvisvgmdaemon.exe"
+  "${STEMTEX_STANDALONE_DIR}/dvisvgmdaemon.dll"
   DESTINATION runtime/bin/windows
 )
 install(FILES "${STEMTEX_ICU_DATA}" DESTINATION runtime/bin/windows/icu-data)
@@ -227,3 +229,13 @@ add_custom_target(stage
   COMMAND "${CMAKE_COMMAND}" --install "${CMAKE_BINARY_DIR}" --config "$<CONFIG>" --prefix "${CMAKE_CURRENT_SOURCE_DIR}/staging"
   COMMENT "Installing StemTeX staging tree"
 )
+
+if(WIN32)
+  add_custom_target(dvisvgmdaemon-msvc
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
+            "${CMAKE_CURRENT_SOURCE_DIR}/texlive-xetex/build-dvisvgmdaemon-msvc.ps1"
+            -OutDir "${STEMTEX_STANDALONE_DIR}"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Building dvisvgmdaemon with MSVC"
+  )
+endif()

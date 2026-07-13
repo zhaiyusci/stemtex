@@ -20,6 +20,8 @@ StemTeX\
       xetexdaemon.dll
       xdvipdfmxdaemon.exe
       dvipdfmxdaemon.dll
+      dvisvgmdaemon.exe
+      dvisvgmdaemon.dll
     bin\sdk\
       stemtex-renderer.dll
     sdk\include\
@@ -90,8 +92,8 @@ Such an integration would need to:
 
 1. Discover and validate the user's TeX installation.
 2. Build or select a daemon-specific format.
-3. Ensure `stemtex-worker-host`, `xetexdaemon`, and `xdvipdfmxdaemon` are first
-   on the runtime search path used by the renderer.
+3. Ensure `stemtex-worker-host`, `xetexdaemon`, `xdvipdfmxdaemon`, and
+   `dvisvgmdaemon` are first on the runtime search path used by the renderer.
 4. Generate cache/warmup data for that environment.
 5. Store the validated paths in renderer configuration.
 
@@ -101,8 +103,9 @@ significantly more validation and support burden.
 ## Font Cache And Warmup
 
 `--no-font-cache-refresh` is mainly a cold-start/runtime hygiene switch.  After
-workers are hot, per-snippet latency is dominated by XeTeX page work and
-`xdvipdfmxdaemon` conversion.
+workers are hot, per-snippet latency is dominated by XeTeX page work and the
+selected backend conversion (`xdvipdfmxdaemon` for PDF, `dvisvgmdaemon` for
+SVG).
 
 New glyphs in an already selected font are handled during PDF subsetting.  The
 important warmup boundary is new font instances: CJK fallback fonts, bold or

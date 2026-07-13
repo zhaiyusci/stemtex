@@ -31,6 +31,7 @@
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QSvgRenderer>
 #include <QString>
 #include <QStringList>
 #include <QTextBrowser>
@@ -169,18 +170,26 @@ QString oneLineJsonMetric(const QString &summaryJson) {
   QJsonDocument doc = QJsonDocument::fromJson(summaryJson.toUtf8(), &err);
   if (err.error != QJsonParseError::NoError || !doc.isObject()) return summaryJson;
   QJsonObject obj = doc.object();
-  int totalMs = obj.value("requestToPdfMs").toInt();
-  int xdvipdfmxMs = obj.value("xdvipdfmxMs").toInt();
+  QString format = obj.value("outputFormat").toString("pdf").toUpper();
+  QString backend = obj.value("backend").toString(format == "SVG" ? "dvisvgmdaemon" : "xdvipdfmxdaemon");
+  int totalMs = obj.value("requestToOutputMs").toInt(obj.value("requestToPdfMs").toInt());
+  int convertMs = format == "SVG" ? obj.value("dvisvgmMs").toInt(obj.value("convertMs").toInt())
+                                  : obj.value("xdvipdfmxMs").toInt(obj.value("convertMs").toInt());
   int finalizeXdvMs = obj.value("finalizeXdvMs").toInt();
-  int xetexNoPdfMs = qMax(0, totalMs - finalizeXdvMs - xdvipdfmxMs);
-  return QString("XeTeX --no-pdf time: %1 ms\n"
-                 "xdvipdfmx time: %2 ms\n"
-                 "Total time until PDF complete: %3 ms\n"
-                 "PDF: %4 bytes, spare: %5/%6")
+  int outputBytes = obj.value("outputBytes").toInt(format == "SVG" ? obj.value("svgBytes").toInt()
+                                                                    : obj.value("pdfBytes").toInt());
+  int xetexNoPdfMs = qMax(0, totalMs - finalizeXdvMs - convertMs);
+  return QString("Output: %1 via %2\n"
+                 "XeTeX --no-pdf time: %3 ms\n"
+                 "conversion time: %4 ms\n"
+                 "Total time until %1 complete: %5 ms\n"
+                 "%1: %6 bytes, spare: %7/%8")
+      .arg(format)
+      .arg(backend)
       .arg(xetexNoPdfMs)
-      .arg(xdvipdfmxMs)
+      .arg(convertMs)
       .arg(totalMs)
-      .arg(obj.value("pdfBytes").toInt())
+      .arg(outputBytes)
       .arg(obj.value("spareReady").toInt())
       .arg(obj.value("spareTarget").toInt());
 }
@@ -216,19 +225,7 @@ struct CroppedPreview {
   QSize displaySize;
 };
 
-CroppedPreview renderCroppedPdfPreview(const QString &pdfPath, double minWidthPt, int dpi, double paddingPt) {
-  QPdfDocument source;
-  QPdfDocument::Error error = source.load(pdfPath);
-  if (error != QPdfDocument::Error::None || source.pageCount() <= 0) return {};
-
-  double pixelsPerPoint = qMax(1.0, static_cast<double>(dpi) / 72.0);
-  QSizeF points = source.pagePointSize(0);
-  QSize imageSize(qMax(1, static_cast<int>(std::ceil(points.width() * pixelsPerPoint))),
-                  qMax(1, static_cast<int>(std::ceil(points.height() * pixelsPerPoint))));
-  QImage page = source.render(0, imageSize);
-  if (page.isNull()) return {};
-
-  QImage rgba = page.convertToFormat(QImage::Format_ARGB32);
+QRect contentBounds(const QImage &rgba) {
   QRect bounds;
   const int threshold = 245;
   for (int y = 0; y < rgba.height(); ++y) {
@@ -241,7 +238,21 @@ CroppedPreview renderCroppedPdfPreview(const QString &pdfPath, double minWidthPt
       }
     }
   }
-  if (bounds.isNull()) return {rgba, rgba.size()};
+  return bounds;
+}
+
+QSize displaySizeForRenderedPixels(const QSize &pixels, double pixelsPerPoint) {
+  constexpr double screenPixelsPerPoint = 96.0 / 72.0;
+  return QSize(qMax(1, static_cast<int>(std::ceil(pixels.width() / pixelsPerPoint * screenPixelsPerPoint))),
+               qMax(1, static_cast<int>(std::ceil(pixels.height() / pixelsPerPoint * screenPixelsPerPoint))));
+}
+
+CroppedPreview cropRenderedPreview(const QImage &source, double minWidthPt, int dpi, double paddingPt) {
+  if (source.isNull()) return {};
+  double pixelsPerPoint = qMax(1.0, static_cast<double>(dpi) / 72.0);
+  QImage rgba = source.convertToFormat(QImage::Format_ARGB32);
+  QRect bounds = contentBounds(rgba);
+  if (bounds.isNull()) return {rgba.convertToFormat(QImage::Format_RGB32), displaySizeForRenderedPixels(rgba.size(), pixelsPerPoint)};
 
   int pad = qMax(0, qRound(paddingPt * pixelsPerPoint));
   bounds = expandRectRightToWidth(bounds, qMax(1, static_cast<int>(std::ceil(minWidthPt * pixelsPerPoint))), rgba.rect());
@@ -251,10 +262,77 @@ CroppedPreview renderCroppedPdfPreview(const QString &pdfPath, double minWidthPt
   QPainter painter(&white);
   painter.drawImage(pad, pad, cropped);
   painter.end();
-  constexpr double screenPixelsPerPoint = 96.0 / 72.0;
-  QSize displaySize(qMax(1, static_cast<int>(std::ceil(white.width() / pixelsPerPoint * screenPixelsPerPoint))),
-                    qMax(1, static_cast<int>(std::ceil(white.height() / pixelsPerPoint * screenPixelsPerPoint))));
-  return {white, displaySize};
+  return {white, displaySizeForRenderedPixels(white.size(), pixelsPerPoint)};
+}
+
+CroppedPreview renderCroppedPdfPreview(const QString &pdfPath, double minWidthPt, int dpi, double paddingPt) {
+  QPdfDocument source;
+  QPdfDocument::Error error = source.load(pdfPath);
+  if (error != QPdfDocument::Error::None || source.pageCount() <= 0) return {};
+
+  double pixelsPerPoint = qMax(1.0, static_cast<double>(dpi) / 72.0);
+  QSizeF points = source.pagePointSize(0);
+  QSize imageSize(qMax(1, static_cast<int>(std::ceil(points.width() * pixelsPerPoint))),
+                  qMax(1, static_cast<int>(std::ceil(points.height() * pixelsPerPoint))));
+  QImage page = source.render(0, imageSize);
+  return cropRenderedPreview(page, minWidthPt, dpi, paddingPt);
+}
+
+double svgLengthPt(const QString &svg, const QString &attribute) {
+  QString single = attribute + "='";
+  QString dbl = attribute + "=\"";
+  int start = svg.indexOf(single);
+  int quoteLen = single.size();
+  if (start < 0) {
+    start = svg.indexOf(dbl);
+    quoteLen = dbl.size();
+  }
+  if (start < 0) return 0.0;
+  start += quoteLen;
+  int end = svg.indexOf(svg.at(start - 1), start);
+  if (end <= start) return 0.0;
+  QString value = svg.mid(start, end - start).trimmed();
+  if (value.endsWith("pt", Qt::CaseInsensitive)) value.chop(2);
+  bool ok = false;
+  double number = value.toDouble(&ok);
+  return ok ? number : 0.0;
+}
+
+QSizeF svgPointSize(const QString &svgPath) {
+  QFile file(svgPath);
+  if (!file.open(QIODevice::ReadOnly)) return {};
+  QString head = QString::fromUtf8(file.read(4096));
+  double widthPt = svgLengthPt(head, "width");
+  double heightPt = svgLengthPt(head, "height");
+  return widthPt > 0.0 && heightPt > 0.0 ? QSizeF(widthPt, heightPt) : QSizeF();
+}
+
+CroppedPreview renderSvgPreview(const QString &svgPath, double minWidthPt, int dpi, double paddingPt) {
+  QSvgRenderer renderer(svgPath);
+  if (!renderer.isValid()) return {};
+
+  QSizeF points = svgPointSize(svgPath);
+  if (!points.isValid() || points.isEmpty()) {
+    QSizeF viewBox = renderer.viewBoxF().size();
+    if (viewBox.isValid() && !viewBox.isEmpty()) {
+      points = viewBox;
+    } else {
+      QSize defaultSize = renderer.defaultSize();
+      points = QSizeF(defaultSize.width() * 72.0 / 96.0, defaultSize.height() * 72.0 / 96.0);
+    }
+  }
+  if (!points.isValid() || points.isEmpty()) return {};
+
+  double pixelsPerPoint = qMax(1.0, static_cast<double>(dpi) / 72.0);
+  QSize imageSize(qMax(1, static_cast<int>(std::ceil(points.width() * pixelsPerPoint))),
+                  qMax(1, static_cast<int>(std::ceil(points.height() * pixelsPerPoint))));
+  QImage image(imageSize, QImage::Format_ARGB32_Premultiplied);
+  image.fill(Qt::transparent);
+  QPainter painter(&image);
+  renderer.render(&painter, QRectF(0, 0, imageSize.width(), imageSize.height()));
+  painter.end();
+
+  return cropRenderedPreview(image, minWidthPt, dpi, paddingPt);
 }
 
 int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString &profileRoot, const QString &texmfRoot) {
@@ -272,11 +350,12 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
   QByteArray texmf = QDir::cleanPath(texmfRoot).toUtf8();
   QByteArray profile = QDir::cleanPath(profileRoot).toUtf8();
   QDir runtimeDir(QString::fromUtf8(runtime));
-  printf("repoRoot=%s\nruntimeRoot=%s\ntexmfRoot=%s\nprofileRoot=%s\nruntimeHasWorkerHost=%d runtimeHasXetexdaemon=%d runtimeHasDvipdfmxDll=%d profileHasWarmup=%d\n",
+  printf("repoRoot=%s\nruntimeRoot=%s\ntexmfRoot=%s\nprofileRoot=%s\nruntimeHasWorkerHost=%d runtimeHasXetexdaemon=%d runtimeHasDvipdfmxDll=%d runtimeHasDvisvgmDll=%d profileHasWarmup=%d\n",
          repo.constData(), runtime.constData(), texmf.constData(), profile.constData(),
          QFileInfo::exists(runtimeDir.filePath("bin/windows/stemtex-worker-host.exe")) ? 1 : 0,
          QFileInfo::exists(runtimeDir.filePath("bin/windows/xetexdaemon.exe")) ? 1 : 0,
          QFileInfo::exists(runtimeDir.filePath("bin/windows/dvipdfmxdaemon.dll")) ? 1 : 0,
+         QFileInfo::exists(runtimeDir.filePath("bin/windows/dvisvgmdaemon.dll")) ? 1 : 0,
          QFileInfo::exists(QDir(QString::fromUtf8(profile)).filePath("warmup.tex")) ? 1 : 0);
   logLine(QString("repoRoot=%1").arg(QString::fromUtf8(repo)));
   logLine(QString("runtimeRoot=%1").arg(QString::fromUtf8(runtime)));
@@ -302,19 +381,20 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
   }
   logLine(QString("renderer version=%1 abi=%2").arg(stemtex_renderer_version(), stemtex_renderer_abi_version()));
 
-  StemTeXRenderResult result{};
   QByteArray snippet = defaultSnippet().toUtf8();
-  int ok = stemtex_renderer_render(renderer, snippet.constData(), 360.5, &result, &code, &error);
+  StemTeXRenderOutputResult pdfResult{};
+  int ok = stemtex_renderer_render_output(renderer, snippet.constData(), 360.5, STEMTEX_OUTPUT_PDF, &pdfResult,
+                                          &code, &error);
   if (!ok) {
-    fprintf(stderr, "render failed code=%d: %s\n", (int)code, error ? error : "");
-    logLine(QString("render failed code=%1: %2").arg((int)code).arg(error ? QString::fromUtf8(error) : QString()));
+    fprintf(stderr, "PDF render failed code=%d: %s\n", (int)code, error ? error : "");
+    logLine(QString("PDF render failed code=%1: %2").arg((int)code).arg(error ? QString::fromUtf8(error) : QString()));
     stemtex_renderer_free_string(error);
     stemtex_renderer_destroy(renderer);
     return 1;
   }
 
-  QString pdfPath = QString::fromUtf8(result.pdf_path_utf8);
-  QString summary = QString::fromUtf8(result.summary_json_utf8);
+  QString pdfPath = QString::fromUtf8(pdfResult.output_path_utf8);
+  QString summary = QString::fromUtf8(pdfResult.summary_json_utf8);
   QPdfDocument pdf;
   QPdfDocument::Error pdfError = pdf.load(pdfPath);
   int pages = pdf.pageCount();
@@ -337,13 +417,77 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
       !summary.contains("\"xdvipdfmxMode\":\"process-isolated\"")) {
     fprintf(stderr, "expected a supported xdvipdfmxMode, got summary=%s\n", summary.toUtf8().constData());
     logLine(QString("expected supported xdvipdfmxMode"));
-    stemtex_renderer_free_result(&result);
+    stemtex_renderer_free_output_result(&pdfResult);
     stemtex_renderer_destroy(renderer);
     return 1;
   }
-  stemtex_renderer_free_result(&result);
+
+  StemTeXRenderOutputResult svgResult{};
+  ok = stemtex_renderer_render_output(renderer, snippet.constData(), 360.5, STEMTEX_OUTPUT_SVG, &svgResult, &code,
+                                      &error);
+  if (!ok) {
+    fprintf(stderr, "SVG render failed code=%d: %s\n", (int)code, error ? error : "");
+    logLine(QString("SVG render failed code=%1: %2").arg((int)code).arg(error ? QString::fromUtf8(error) : QString()));
+    stemtex_renderer_free_string(error);
+    stemtex_renderer_free_output_result(&pdfResult);
+    stemtex_renderer_destroy(renderer);
+    return 1;
+  }
+  QString svgPath = QString::fromUtf8(svgResult.output_path_utf8);
+  QString svgSummary = QString::fromUtf8(svgResult.summary_json_utf8);
+  QSizeF svgSize = svgPointSize(svgPath);
+  CroppedPreview svgPreview = renderSvgPreview(svgPath, 360.5, 300, 8.0);
+  printf("svg=%s\nsummary=%s\nsvgPreviewPixels=%dx%d\n", svgPath.toUtf8().constData(),
+         svgSummary.toUtf8().constData(), svgPreview.image.width(), svgPreview.image.height());
+  logLine(QString("svg=%1").arg(svgPath));
+  logLine(QString("svgSummary=%1").arg(svgSummary));
+  logLine(QString("svgPoints=%1x%2 svgPreviewPixels=%3x%4")
+              .arg(svgSize.width())
+              .arg(svgSize.height())
+              .arg(svgPreview.image.width())
+              .arg(svgPreview.image.height()));
+  if (!svgSummary.contains("\"dvisvgmMode\":\"daemon-dll\"") || svgPreview.image.isNull()) {
+    fprintf(stderr, "expected dvisvgm SVG output, got summary=%s\n", svgSummary.toUtf8().constData());
+    logLine(QString("expected dvisvgm SVG output"));
+    stemtex_renderer_free_output_result(&svgResult);
+    stemtex_renderer_free_output_result(&pdfResult);
+    stemtex_renderer_destroy(renderer);
+    return 1;
+  }
+  if (pageSize.isValid() && svgSize.isValid() &&
+      (std::abs(pageSize.width() - svgSize.width()) > 0.25 ||
+       std::abs(pageSize.height() - svgSize.height()) > 0.25)) {
+    fprintf(stderr, "SVG page size %.3fx%.3f does not match PDF page size %.3fx%.3f\n",
+            svgSize.width(), svgSize.height(), pageSize.width(), pageSize.height());
+    logLine(QString("SVG page size mismatch svg=%1x%2 pdf=%3x%4")
+                .arg(svgSize.width())
+                .arg(svgSize.height())
+                .arg(pageSize.width())
+                .arg(pageSize.height()));
+    stemtex_renderer_free_output_result(&svgResult);
+    stemtex_renderer_free_output_result(&pdfResult);
+    stemtex_renderer_destroy(renderer);
+    return 1;
+  }
+  if (!cropped.image.isNull() && !svgPreview.image.isNull() &&
+      (std::abs(cropped.image.width() - svgPreview.image.width()) > 8 ||
+       std::abs(cropped.image.height() - svgPreview.image.height()) > 8)) {
+    fprintf(stderr, "SVG preview crop %dx%d does not match PDF preview crop %dx%d\n",
+            svgPreview.image.width(), svgPreview.image.height(), cropped.image.width(), cropped.image.height());
+    logLine(QString("SVG preview crop mismatch svg=%1x%2 pdf=%3x%4")
+                .arg(svgPreview.image.width())
+                .arg(svgPreview.image.height())
+                .arg(cropped.image.width())
+                .arg(cropped.image.height()));
+    stemtex_renderer_free_output_result(&svgResult);
+    stemtex_renderer_free_output_result(&pdfResult);
+    stemtex_renderer_destroy(renderer);
+    return 1;
+  }
+  stemtex_renderer_free_output_result(&svgResult);
+  stemtex_renderer_free_output_result(&pdfResult);
   stemtex_renderer_destroy(renderer);
-  return pdfError == QPdfDocument::Error::None && pages > 0 ? 0 : 1;
+  return pdfError == QPdfDocument::Error::None && pages > 0 && !svgPreview.image.isNull() ? 0 : 1;
 }
 
 }  // namespace
@@ -399,6 +543,10 @@ class MainWindow : public QMainWindow {
     encodingCombo_ = new QComboBox(central);
     encodingCombo_->addItems({"UTF-8", "GBK", "Big5"});
     encodingCombo_->setCurrentText("UTF-8");
+    outputCombo_ = new QComboBox(central);
+    outputCombo_->addItem("PDF", STEMTEX_OUTPUT_PDF);
+    outputCombo_->addItem("SVG", STEMTEX_OUTPUT_SVG);
+    outputCombo_->setCurrentIndex(0);
     renderButton_ = new QPushButton("排版", central);
     copyImageButton_ = new QPushButton("复制图像", central);
     copyImageButton_->setEnabled(false);
@@ -422,6 +570,8 @@ class MainWindow : public QMainWindow {
     runtimeRow->addWidget(profileCombo_);
     runtimeRow->addWidget(new QLabel("输入编码", central));
     runtimeRow->addWidget(encodingCombo_);
+    runtimeRow->addWidget(new QLabel("Output", central));
+    runtimeRow->addWidget(outputCombo_);
     runtimeRow->addStretch(1);
     runtimeRow->addWidget(renderButton_);
     runtimeRow->addWidget(copyImageButton_);
@@ -517,9 +667,13 @@ class MainWindow : public QMainWindow {
       updatePreviewMinimumWidth(value);
       scheduleAutoRender();
     });
-    connect(dpiSpin_, &QSpinBox::valueChanged, this, [this](int) { rerenderLastPdfPreview(); });
-    connect(paddingSpin_, &QDoubleSpinBox::valueChanged, this, [this](double) { rerenderLastPdfPreview(); });
+    connect(dpiSpin_, &QSpinBox::valueChanged, this, [this](int) { rerenderLastPreview(); });
+    connect(paddingSpin_, &QDoubleSpinBox::valueChanged, this, [this](double) { rerenderLastPreview(); });
     connect(encodingCombo_, &QComboBox::currentTextChanged, this, [this](const QString &) { scheduleAutoRender(); });
+    connect(outputCombo_, &QComboBox::currentIndexChanged, this, [this](int) {
+      updateOpenButtonText();
+      scheduleAutoRender();
+    });
     connect(texmfButton_, &QPushButton::clicked, this, [this]() { chooseTexmfRoot(); });
     connect(profileCombo_, &QComboBox::currentIndexChanged, this, [this](int) { switchProfile(); });
     connect(renderButton_, &QPushButton::clicked, this, [this]() {
@@ -529,7 +683,7 @@ class MainWindow : public QMainWindow {
     connect(copyImageButton_, &QPushButton::clicked, this, [this]() { copyPreviewImage(); });
     connect(saveImageButton_, &QPushButton::clicked, this, [this]() { savePreviewImage(); });
     connect(openButton_, &QPushButton::clicked, this, [this]() {
-      if (!lastPdf_.isEmpty()) QDesktopServices::openUrl(QUrl::fromLocalFile(lastPdf_));
+      if (!lastOutputPath_.isEmpty()) QDesktopServices::openUrl(QUrl::fromLocalFile(lastOutputPath_));
     });
 
     updateEngineStatus(false, spareReady_, spareTarget_);
@@ -589,6 +743,7 @@ class MainWindow : public QMainWindow {
     bool hasProfile = profileCombo_ && profileCombo_->currentIndex() >= 0;
     renderButton_->setEnabled(hasProfile);
     if (profileCombo_) profileCombo_->setEnabled(profileCombo_->count() > 0);
+    if (outputCombo_) outputCombo_->setEnabled(true);
   }
 
   void setPreviewImageReady(bool ready) {
@@ -604,6 +759,21 @@ class MainWindow : public QMainWindow {
       return;
     }
     autoRenderTimer_->start();
+  }
+
+  StemTeXOutputFormat selectedOutputFormat() const {
+    int value = outputCombo_ ? outputCombo_->currentData().toInt() : STEMTEX_OUTPUT_PDF;
+    return value == STEMTEX_OUTPUT_SVG ? STEMTEX_OUTPUT_SVG : STEMTEX_OUTPUT_PDF;
+  }
+
+  QString selectedOutputFormatText() const {
+    return selectedOutputFormat() == STEMTEX_OUTPUT_SVG ? "SVG" : "PDF";
+  }
+
+  void updateOpenButtonText() {
+    if (!openButton_) return;
+    QString label = lastOutputFormat_.isEmpty() ? selectedOutputFormatText() : lastOutputFormat_.toUpper();
+    openButton_->setText(QString("打开 %1").arg(label));
   }
 
   QString lightHtml(bool ok) const {
@@ -637,7 +807,7 @@ class MainWindow : public QMainWindow {
     switch (snapshot.stage) {
       case STEMTEX_STAGE_QUEUED: note = "latest request queued"; break;
       case STEMTEX_STAGE_TYPESETTING: note = "XeTeX typesetting"; break;
-      case STEMTEX_STAGE_CONVERTING: note = "xdvipdfmx converting PDF"; break;
+      case STEMTEX_STAGE_CONVERTING: note = "converting output"; break;
       case STEMTEX_STAGE_REBUILDING: note = "worker rebuilding"; break;
       case STEMTEX_STAGE_STOPPING: note = "renderer stopping"; break;
       case STEMTEX_STAGE_IDLE:
@@ -716,7 +886,8 @@ class MainWindow : public QMainWindow {
   }
 
   void clearProfileOutput() {
-    lastPdf_.clear();
+    lastOutputPath_.clear();
+    lastOutputFormat_.clear();
     lastPreview_ = QImage();
     lastPreviewDisplaySize_ = QSize();
     lastSummaryText_.clear();
@@ -728,6 +899,7 @@ class MainWindow : public QMainWindow {
     setPreviewWarning(STEMTEX_RENDER_OUTCOME_OK, 0, QString());
     details_->clear();
     openButton_->setEnabled(false);
+    updateOpenButtonText();
     setPreviewImageReady(false);
   }
 
@@ -858,8 +1030,7 @@ class MainWindow : public QMainWindow {
   void renderSnippet() {
     if (autoRenderTimer_) autoRenderTimer_->stop();
     uint64_t generation = rendererGeneration_.load();
-    StemTeXRenderer *renderer = currentRenderer();
-    if (!renderer) {
+    if (!hasRenderer()) {
       pendingStartupRender_ = true;
       updateEngineStatus(false, spareReady_, spareTarget_, "renderer is still starting; this request will run after init");
       setPreviewImageReady(false);
@@ -869,87 +1040,85 @@ class MainWindow : public QMainWindow {
     QString snippet = editor_->text();
     QString encoding = encodingCombo_->currentText();
     double width = widthSpin_->value();
-    refreshEngineStatus("render request submitted; waiting for renderer scheduler");
+    StemTeXOutputFormat outputFormat = selectedOutputFormat();
+    QString outputLabel = outputFormat == STEMTEX_OUTPUT_SVG ? "SVG" : "PDF";
+    refreshEngineStatus(QString("render %1 request submitted").arg(outputLabel));
     setPreviewImageReady(false);
     details_->clear();
     QByteArray text = encodeSnippetForTeX(snippet, encoding);
     uint64_t uiRequestId = ++latestUiRequestId_;
-    struct CallbackContext {
-      MainWindow *self = nullptr;
-      uint64_t uiRequestId = 0;
-      uint64_t generation = 0;
-    };
-    auto *context = new CallbackContext{this, uiRequestId, generation};
-    auto callback = [](uint64_t rendererJobId, int ok, const StemTeXRenderResult *result, StemTeXErrorCode code,
-                       const char *error, void *userData) {
-      std::unique_ptr<CallbackContext> context(static_cast<CallbackContext *>(userData));
-      MainWindow *self = context->self;
-      uint64_t uiRequestId = context->uiRequestId;
-      uint64_t generation = context->generation;
-      QString pdfPath = result && result->pdf_path_utf8 ? QString::fromUtf8(result->pdf_path_utf8) : QString();
-      QString summary = result && result->summary_json_utf8 ? QString::fromUtf8(result->summary_json_utf8) : QString();
-      StemTeXRenderOutcomeCode outcomeCode = result ? result->outcome_code : STEMTEX_RENDER_OUTCOME_INTERNAL;
-      int issueFlags = result ? result->issue_flags : 0;
-      QString outcomeMessage =
-          result && result->outcome_message_utf8 ? QString::fromUtf8(result->outcome_message_utf8) : QString();
-      QString errorText = error ? QString::fromUtf8(error) : QString();
-      QMetaObject::invokeMethod(self, [self, uiRequestId, generation, rendererJobId, ok, code, pdfPath, summary,
-                                       outcomeCode, issueFlags, outcomeMessage, errorText]() {
-        if (self->shuttingDown_.load() || generation != self->rendererGeneration_.load() ||
-            uiRequestId != self->latestUiRequestId_) return;
-        if (!ok) {
-          self->setPreviewWarning(STEMTEX_RENDER_OUTCOME_INTERNAL, 0, errorText);
-          self->refreshEngineStatus(code == STEMTEX_ERROR_CANCELLED
-                                        ? QString("older request skipped because a newer request was submitted")
-                                        : QString("render failed, code %1").arg((int)code));
-          if (code != STEMTEX_ERROR_CANCELLED) self->details_->setPlainText(errorText);
-          return;
-        }
-        self->refreshEngineStatus();
-        self->lastPdf_ = pdfPath;
-        self->openButton_->setEnabled(true);
-        self->showCroppedPreview(pdfPath, self->widthSpin_->value());
-        self->setPreviewImageReady(!self->lastPreview_.isNull());
-        self->lastOutcomeCode_ = outcomeCode;
-        self->lastIssueFlags_ = issueFlags;
-        self->lastOutcomeMessage_ = outcomeMessage;
-        self->setPreviewWarning(outcomeCode, issueFlags, outcomeMessage);
-        self->lastSummaryText_ = QString("renderer job: %1\n").arg(rendererJobId) + oneLineJsonMetric(summary) +
-                                 "\n\n" + summary;
-        self->updateDetailsText();
-      }, Qt::QueuedConnection);
-    };
-    if (!postBackground([this, renderer, text, width, callback, context, uiRequestId, generation]() {
+    if (!postBackground([this, text, width, outputFormat, outputLabel, uiRequestId, generation]() {
       StemTeXErrorCode code = STEMTEX_OK;
       char *error = nullptr;
-      uint64_t rendererJobId = 0;
-      int submitted = 0;
-      if (!shuttingDown_.load() && generation == rendererGeneration_.load()) {
-        std::lock_guard<std::mutex> lock(rendererMutex_);
-        if (renderer == renderer_) {
-          submitted = stemtex_renderer_render_async(renderer, text.constData(), width, &rendererJobId, callback,
-                                                    context, &code, &error);
+      StemTeXRenderOutputResult result{};
+      int ok = 0;
+      if (!shuttingDown_.load() && generation == rendererGeneration_.load() &&
+          uiRequestId == latestUiRequestId_.load()) {
+        std::lock_guard<std::mutex> lifecycleLock(gRendererLifecycleMutex);
+        StemTeXRenderer *renderer = nullptr;
+        {
+          std::lock_guard<std::mutex> rendererLock(rendererMutex_);
+          renderer = renderer_;
         }
+        if (renderer && !shuttingDown_.load() && generation == rendererGeneration_.load() &&
+            uiRequestId == latestUiRequestId_.load()) {
+          ok = stemtex_renderer_render_output(renderer, text.constData(), width, outputFormat, &result, &code, &error);
+        } else {
+          code = STEMTEX_ERROR_CANCELLED;
+        }
+      } else {
+        code = STEMTEX_ERROR_CANCELLED;
       }
+      QString outputPath = ok && result.output_path_utf8 ? QString::fromUtf8(result.output_path_utf8) : QString();
+      QString resultFormat = ok && result.output_format_utf8 ? QString::fromUtf8(result.output_format_utf8)
+                                                             : outputLabel.toLower();
+      QString summary = ok && result.summary_json_utf8 ? QString::fromUtf8(result.summary_json_utf8) : QString();
+      StemTeXRenderOutcomeCode outcomeCode = ok ? result.outcome_code : STEMTEX_RENDER_OUTCOME_INTERNAL;
+      int issueFlags = ok ? result.issue_flags : 0;
+      QString outcomeMessage =
+          ok && result.outcome_message_utf8 ? QString::fromUtf8(result.outcome_message_utf8) : QString();
       QString errorText = error ? QString::fromUtf8(error) : QString();
-      stemtex_renderer_free_string(error);
-      if (!submitted) {
-        delete context;
-        if (shuttingDown_.load()) return;
-        QMetaObject::invokeMethod(this, [this, uiRequestId, generation, code, errorText]() {
-          if (shuttingDown_.load() || generation != rendererGeneration_.load() || uiRequestId != latestUiRequestId_) return;
-          refreshEngineStatus(QString("failed to submit request, code %1").arg((int)code));
-          details_->setPlainText(errorText);
-        }, Qt::QueuedConnection);
+      if (!ok && code == STEMTEX_ERROR_CANCELLED && errorText.isEmpty()) {
+        errorText = "older request skipped because a newer request was submitted";
       }
-    })) {
-      delete context;
-    }
+      stemtex_renderer_free_string(error);
+      stemtex_renderer_free_output_result(&result);
+      QMetaObject::invokeMethod(this, [this, uiRequestId, generation, ok, code, outputPath, resultFormat, summary,
+                                       outcomeCode, issueFlags, outcomeMessage, errorText]() {
+        if (shuttingDown_.load() || generation != rendererGeneration_.load() ||
+            uiRequestId != latestUiRequestId_.load()) return;
+        if (!ok) {
+          setPreviewWarning(STEMTEX_RENDER_OUTCOME_INTERNAL, 0, errorText);
+          refreshEngineStatus(code == STEMTEX_ERROR_CANCELLED
+                                  ? QString("older request skipped because a newer request was submitted")
+                                  : QString("render failed, code %1").arg((int)code));
+          if (code != STEMTEX_ERROR_CANCELLED) details_->setPlainText(errorText);
+          return;
+        }
+        refreshEngineStatus();
+        lastOutputPath_ = outputPath;
+        lastOutputFormat_ = resultFormat;
+        updateOpenButtonText();
+        openButton_->setEnabled(!lastOutputPath_.isEmpty());
+        showOutputPreview(outputPath, resultFormat, widthSpin_->value());
+        setPreviewImageReady(!lastPreview_.isNull());
+        lastOutcomeCode_ = outcomeCode;
+        lastIssueFlags_ = issueFlags;
+        lastOutcomeMessage_ = outcomeMessage;
+        setPreviewWarning(outcomeCode, issueFlags, outcomeMessage);
+        lastSummaryText_ = QString("renderer request: %1\n").arg(uiRequestId) + oneLineJsonMetric(summary) +
+                           "\n\n" + summary;
+        updateDetailsText();
+      }, Qt::QueuedConnection);
+    })) {}
   }
 
   void showCroppedPreview(const QString &pdfPath, double widthPt) {
     CroppedPreview cropped = renderCroppedPdfPreview(pdfPath, widthPt, dpiSpin_->value(), paddingSpin_->value());
     if (cropped.image.isNull()) {
+      lastPreview_ = QImage();
+      lastPreviewDisplaySize_ = QSize();
+      croppedPreview_->clear();
       croppedPreview_->setText("PDF preview failed");
       return;
     }
@@ -958,12 +1127,34 @@ class MainWindow : public QMainWindow {
     updatePreviewPixmap();
   }
 
-  void rerenderLastPdfPreview() {
-    if (lastPdf_.isEmpty()) {
+  void showSvgPreview(const QString &svgPath, double widthPt) {
+    CroppedPreview preview = renderSvgPreview(svgPath, widthPt, dpiSpin_->value(), paddingSpin_->value());
+    if (preview.image.isNull()) {
+      lastPreview_ = QImage();
+      lastPreviewDisplaySize_ = QSize();
+      croppedPreview_->clear();
+      croppedPreview_->setText("SVG preview failed");
+      return;
+    }
+    lastPreview_ = preview.image;
+    lastPreviewDisplaySize_ = preview.displaySize;
+    updatePreviewPixmap();
+  }
+
+  void showOutputPreview(const QString &outputPath, const QString &format, double widthPt) {
+    if (format.compare("svg", Qt::CaseInsensitive) == 0) {
+      showSvgPreview(outputPath, widthPt);
+    } else {
+      showCroppedPreview(outputPath, widthPt);
+    }
+  }
+
+  void rerenderLastPreview() {
+    if (lastOutputPath_.isEmpty()) {
       updatePreviewPixmap();
       return;
     }
-    showCroppedPreview(lastPdf_, widthSpin_->value());
+    showOutputPreview(lastOutputPath_, lastOutputFormat_, widthSpin_->value());
     setPreviewImageReady(!lastPreview_.isNull());
     updateDetailsText();
   }
@@ -1019,6 +1210,8 @@ class MainWindow : public QMainWindow {
 
   void updateDetailsText() {
     if (!details_ || lastPreview_.isNull()) return;
+    QString previewLabel = lastOutputFormat_.compare("svg", Qt::CaseInsensitive) == 0 ? "SVG preview raster"
+                                                                                      : "cropped PDF preview";
     QString outcomeText;
     if (lastOutcomeCode_ != STEMTEX_RENDER_OUTCOME_OK || lastIssueFlags_ != 0) {
       outcomeText = QString("outcome: %1, issue flags: %2, %3\n")
@@ -1026,7 +1219,8 @@ class MainWindow : public QMainWindow {
                         .arg(lastIssueFlags_)
                         .arg(lastOutcomeMessage_);
     }
-    details_->setPlainText(QString("cropped preview: %1 x %2 px, displayed %3 x %4 px, %5 dpi, %6 pt padding\n")
+    details_->setPlainText(QString("%1: %2 x %3 px, displayed %4 x %5 px, %6 dpi, %7 pt padding\n")
+                               .arg(previewLabel)
                                .arg(lastPreview_.width())
                                .arg(lastPreview_.height())
                                .arg(lastPreviewDisplaySize_.width())
@@ -1054,7 +1248,8 @@ class MainWindow : public QMainWindow {
   mutable std::mutex rendererMutex_;
   std::atomic<bool> shuttingDown_{false};
   std::atomic<uint64_t> rendererGeneration_{0};
-  QString lastPdf_;
+  QString lastOutputPath_;
+  QString lastOutputFormat_;
   QsciScintilla *editor_ = nullptr;
   QSlider *widthSlider_ = nullptr;
   QDoubleSpinBox *widthSpin_ = nullptr;
@@ -1064,6 +1259,7 @@ class MainWindow : public QMainWindow {
   QPushButton *texmfButton_ = nullptr;
   QComboBox *profileCombo_ = nullptr;
   QComboBox *encodingCombo_ = nullptr;
+  QComboBox *outputCombo_ = nullptr;
   QPushButton *renderButton_ = nullptr;
   QPushButton *copyImageButton_ = nullptr;
   QPushButton *saveImageButton_ = nullptr;
@@ -1091,7 +1287,7 @@ class MainWindow : public QMainWindow {
   int spareTarget_ = 0;
   QString engineNote_;
   bool pendingStartupRender_ = false;
-  uint64_t latestUiRequestId_ = 0;
+  std::atomic<uint64_t> latestUiRequestId_{0};
 };
 
 int main(int argc, char **argv) {

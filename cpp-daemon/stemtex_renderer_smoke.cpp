@@ -50,7 +50,8 @@ static void print_usage(const char *argv0) {
                "       bad-then-good, bad-then-good-wait, bad-then-good-wait-long,\n"
                "       bad-stress, latin-math, latin-text, restart, async, cancel,\n"
                "       recover-no-worker, bad-corpus, lifecycle-stress,\n"
-               "       profile-switch-stress, bytes\n",
+               "       profile-switch-stress, bytes, output-pdf, output-pdf-bytes,\n"
+               "       svg, svg-bytes\n",
                argv0, argv0);
 }
 
@@ -114,6 +115,14 @@ static bool summary_has_dll_mode(const char *summary) {
   return text.find("\"xdvipdfmxMode\":\"daemon-dll\"") != std::string::npos ||
          text.find("\"xdvipdfmxMode\":\"dll\"") != std::string::npos ||
          text.find("\"xdvipdfmxMode\":\"process-isolated\"") != std::string::npos;
+}
+
+static bool summary_has_svg_dll_mode(const char *summary) {
+  if (!summary) return false;
+  std::string text(summary);
+  return text.find("\"outputFormat\":\"svg\"") != std::string::npos &&
+         text.find("\"backend\":\"dvisvgmdaemon\"") != std::string::npos &&
+         text.find("\"dvisvgmMode\":\"daemon-dll\"") != std::string::npos;
 }
 
 static void print_snapshot(StemTeXRenderer *renderer, const char *label) {
@@ -590,9 +599,59 @@ int main(int argc, char **argv) {
   }
 
   for (int i = 0; i < runs; ++i) {
+    bool output_case = case_name == "--output-pdf" || case_name == "--output-pdf-bytes" ||
+                       case_name == "--svg" || case_name == "--svg-bytes";
+    long long render_start = now_ms();
+    if (output_case) {
+      bool svg_case = case_name == "--svg" || case_name == "--svg-bytes";
+      bool bytes_case = case_name == "--output-pdf-bytes" || case_name == "--svg-bytes";
+      StemTeXOutputFormat format = svg_case ? STEMTEX_OUTPUT_SVG : STEMTEX_OUTPUT_PDF;
+      StemTeXRenderOutputResult result{};
+      StemTeXOutputBytes output{};
+      int ok = bytes_case
+                   ? stemtex_renderer_render_output_bytes(renderer, snippet, width_pt, format, &output, &result,
+                                                          &error_code, &error)
+                   : stemtex_renderer_render_output(renderer, snippet, width_pt, format, &result, &error_code, &error);
+      if (!ok) {
+        long long render_end = now_ms();
+        std::fprintf(stderr, "run=%d renderMs=%lld\n", i + 1, render_end - render_start);
+        std::fprintf(stderr, "render failed code=%d: %s\n", (int)error_code, error ? error : "");
+        print_snapshot(renderer, "afterFailure");
+        stemtex_renderer_free_string(error);
+        stemtex_renderer_destroy(renderer);
+        return 1;
+      }
+      long long render_end = now_ms();
+      std::printf("run=%d renderMs=%lld output=%s format=%s outputBytes=%zu\nsummary=%s\n", i + 1,
+                  render_end - render_start, result.output_path_utf8 ? result.output_path_utf8 : "",
+                  result.output_format_utf8 ? result.output_format_utf8 : "", output.size,
+                  result.summary_json_utf8 ? result.summary_json_utf8 : "");
+      print_snapshot(renderer, "afterSuccess");
+      if (!result.output_path_utf8 || !fs::exists(result.output_path_utf8)) {
+        std::fprintf(stderr, "expected output file, got path=%s\n",
+                     result.output_path_utf8 ? result.output_path_utf8 : "");
+        stemtex_renderer_free_output_bytes(&output);
+        stemtex_renderer_free_output_result(&result);
+        stemtex_renderer_destroy(renderer);
+        return 1;
+      }
+      bool dll_summary_ok = svg_case ? summary_has_svg_dll_mode(result.summary_json_utf8)
+                                     : summary_has_dll_mode(result.summary_json_utf8);
+      if (expect_dll && !dll_summary_ok) {
+        std::fprintf(stderr, "expected daemon-dll output summary, got summary=%s\n",
+                     result.summary_json_utf8 ? result.summary_json_utf8 : "");
+        stemtex_renderer_free_output_bytes(&output);
+        stemtex_renderer_free_output_result(&result);
+        stemtex_renderer_destroy(renderer);
+        return 1;
+      }
+      stemtex_renderer_free_output_bytes(&output);
+      stemtex_renderer_free_output_result(&result);
+      continue;
+    }
+
     StemTeXRenderResult result{};
     StemTeXPdfBytes pdf{};
-    long long render_start = now_ms();
     int ok = case_name == "--bytes"
                  ? stemtex_renderer_render_pdf_bytes(renderer, snippet, width_pt, &pdf, &result, &error_code, &error)
                  : stemtex_renderer_render(renderer, snippet, width_pt, &result, &error_code, &error);

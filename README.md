@@ -6,7 +6,7 @@ short STEM snippets.  The current version is recorded in `VERSION`.
 The supported path is:
 
 - a trimmed StemTeX runtime tree;
-- patched `xetexdaemon` and `xdvipdfmxdaemon` binaries;
+- patched `xetexdaemon`, `xdvipdfmxdaemon`, and `dvisvgmdaemon` binaries;
 - a tiny `stemtex-worker-host` process supervisor for XeTeX daemon invocations;
 - a native C ABI renderer DLL in `cpp-daemon/`;
 - a Qt-based **StemTeX Renderer GUI** in `gui/`;
@@ -21,7 +21,13 @@ XDV output, and flushes it after each `\shipout`.  Each snippet is wrapped in
 LaTeX's `preview` environment, so the emitted page box is tightened around the
 typeset content instead of staying at a full paper size.  The renderer then
 synthesizes a valid final XDV postamble and asks the hot
-`dvipdfmxdaemon.dll` converter to convert only the newest page.
+`dvipdfmxdaemon.dll` or `dvisvgmdaemon.dll` converter to convert only the
+newest page. SVG conversion uses dvisvgm's `papersize` bbox mode so the SVG
+viewport follows the same `pdf:pagesize` special as the PDF page box.
+
+The runtime also includes `dvisvgmdaemon.dll`, a hot XDV-to-SVG converter built
+from dvisvgm. It keeps process-level TeX Live and font-map initialization warm,
+then resets document-local converter state for each request.
 
 The renderer does not launch `xetexdaemon` directly.  Warmup compilation,
 profile-cache refresh, and live XeTeX workers all go through
@@ -78,9 +84,11 @@ scripts/
 
 texlive-xetex/
   src/                            Generated-C XeTeX and xdvipdfmx sources.
+  src/dvisvgm/                    Vendored dvisvgm source subset for SVG.
   prebuilt-msvc/                  Static MSVC dependency libs and headers.
   third_party-msvc-src/           Source snapshots for rebuilding those libs.
   build-standalone-msvc.sh        Build xetexdaemon/xdvipdfmxdaemon.
+  build-dvisvgmdaemon-msvc.ps1    Build dvisvgmdaemon.
   install-msvc-standalone-to-side-tree.sh
 
 gui/profiles/
@@ -112,9 +120,9 @@ meaningful:
 
 ## Build
 
-The supported application build is CMake-driven.  Use a Visual Studio x64
-developer environment, or initialize `vcvars64.bat` before using the Ninja
-preset.
+The supported application and installer build is CMake-driven and does not
+require bash.  Use a Visual Studio x64 developer environment, or initialize
+`vcvars64.bat` before using the Ninja preset.
 
 Configure and build the renderer and GUI:
 
@@ -149,6 +157,8 @@ Override them with `STEMTEX_STANDALONE_DIR` and `STEMTEX_RUNTIME_SOURCE` CMake
 cache variables when using a different local layout.  Rebuilding the daemon
 engine itself is a maintainer workflow documented in
 [docs/WINDOWS_XETEX_BUILD_NOTES.md](docs/WINDOWS_XETEX_BUILD_NOTES.md).
+The dvisvgm hot converter can also be rebuilt from CMake with
+`cmake --build build/stemtex-ninja --target dvisvgmdaemon-msvc`.
 
 Run a native renderer smoke test against the staged tree:
 
@@ -209,6 +219,8 @@ StemTeX/
       xetexdaemon.dll
       xdvipdfmxdaemon.exe
       dvipdfmxdaemon.dll
+      dvisvgmdaemon.exe
+      dvisvgmdaemon.dll
     bin/sdk/
       stemtex-renderer.dll
     sdk/include/
@@ -231,9 +243,9 @@ the TeX Live layout: the selected root is expected to contain `texmf-dist/` and
 `texmf-dist/web2c/`, for example `C:\texlive\2026`.
 
 This does not switch the engine to the user's TeX binaries. StemTeX still runs
-its patched `xetexdaemon` and `xdvipdfmxdaemon` from the StemTeX runtime; the
-external TeX Live tree supplies the kpathsea configuration, packages, fonts,
-maps, CMaps, and related data.
+its patched `xetexdaemon`, `xdvipdfmxdaemon`, and, when SVG conversion is used,
+`dvisvgmdaemon` from the StemTeX runtime; the external TeX Live tree supplies
+the kpathsea configuration, packages, fonts, maps, CMaps, and related data.
 
 MiKTeX roots are not supported by this option. MiKTeX uses a different root
 model, FNDB/package-management layer, and configuration layout, and StemTeX does

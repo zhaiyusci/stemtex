@@ -75,16 +75,19 @@ On render, it:
 4. Waits for `WORKER_DONE:N`.
 5. Reads the current cumulative live XDV.
 6. Synthesizes a valid final XDV postamble.
-7. Calls `xdvipdfmx -s N-N` to convert only the newest page.
-8. Returns the PDF path and a JSON timing summary.
+7. Converts only the newest page with the selected backend:
+   `xdvipdfmxdaemon` for PDF or `dvisvgmdaemon` for SVG.
+8. Returns the output path and a JSON timing summary.
 
 The current conversion path is deliberately conservative: cumulative XDV plus
 latest-page conversion. The earlier standalone-delta XDV experiment is not part
 of this API.
 
-The `preview` package owns the tight page box.  The GUI may still crop the
-rendered bitmap for display convenience, but the PDF itself is already cropped
-to the snippet content plus the configured preview border.
+The `preview` package owns the tight page box. PDF output gets that box through
+xdvipdfmx's `pdf:pagesize` handling, and SVG output asks dvisvgm for
+`--bbox=papersize` so it uses the same XDV page-size special. The GUI may still
+crop the rendered bitmap for display convenience, but the emitted PDF and SVG
+page boxes both include the configured preview border.
 
 ## Public API
 
@@ -183,6 +186,52 @@ int stemtex_renderer_render(
 );
 ```
 
+The original `stemtex_renderer_render` API is the PDF convenience path. New
+hosts that need selectable output should use the generic output API:
+
+```cpp
+typedef enum StemTeXOutputFormat {
+  STEMTEX_OUTPUT_PDF = 0,
+  STEMTEX_OUTPUT_SVG = 1
+} StemTeXOutputFormat;
+
+typedef struct StemTeXRenderOutputResult {
+  char *request_id_utf8;
+  char *output_path_utf8;
+  char *output_format_utf8;
+  char *summary_json_utf8;
+  StemTeXRenderOutcomeCode outcome_code;
+  int issue_flags;
+  char *outcome_message_utf8;
+} StemTeXRenderOutputResult;
+
+typedef struct StemTeXOutputBytes {
+  unsigned char *data;
+  size_t size;
+} StemTeXOutputBytes;
+
+int stemtex_renderer_render_output(
+  StemTeXRenderer *renderer,
+  const char *snippet_utf8,
+  double width_pt,
+  StemTeXOutputFormat format,
+  StemTeXRenderOutputResult *result,
+  StemTeXErrorCode *error_code,
+  char **error_utf8
+);
+
+int stemtex_renderer_render_output_bytes(
+  StemTeXRenderer *renderer,
+  const char *snippet_utf8,
+  double width_pt,
+  StemTeXOutputFormat format,
+  StemTeXOutputBytes *bytes,
+  StemTeXRenderOutputResult *result,
+  StemTeXErrorCode *error_code,
+  char **error_utf8
+);
+```
+
 Related APIs:
 
 ```cpp
@@ -249,6 +298,10 @@ candidate instead of reimplementing profile validation.
 The callback receives the same id, so hosts can associate a completion with the
 input version that created it.
 
+The async API currently uses `StemTeXRenderResult` and is therefore PDF-only.
+Hosts that need SVG should call `stemtex_renderer_render_output` from their own
+worker thread and display only the newest UI request.
+
 Async rendering is latest-only for work that has not started yet. If a pending
 async job is superseded by a newer submission, its callback is still invoked
 with `STEMTEX_ERROR_CANCELLED` and the message `Async render superseded by a
@@ -280,7 +333,8 @@ typedef enum StemTeXRenderOutcomeCode {
   STEMTEX_RENDER_OUTCOME_XDVIPDFMX = 107,
   STEMTEX_RENDER_OUTCOME_CANCELLED = 108,
   STEMTEX_RENDER_OUTCOME_FILESYSTEM = 109,
-  STEMTEX_RENDER_OUTCOME_INTERNAL = 110
+  STEMTEX_RENDER_OUTCOME_INTERNAL = 110,
+  STEMTEX_RENDER_OUTCOME_DVISVGM = 111
 } StemTeXRenderOutcomeCode;
 
 typedef struct StemTeXRenderResult {
@@ -313,16 +367,18 @@ The timing summary JSON repeats the same high-level fields as
 also includes `xdvipdfmxReturnCode`, `xdvipdfmxIssueFlags`,
 `xdvipdfmxIssueMessage`, and `xdvipdfmxWarning`.
 
-The bundled Qt GUI is a reference consumer of this contract: when it receives a
-recoverable outcome it still displays the generated PDF preview, but shows a
-warning marker in the preview pane and includes the outcome fields in the
-details text.
+The bundled Qt GUI is a reference consumer of this contract: it lets users
+choose PDF or SVG output, previews both, and when it receives a recoverable
+outcome it still displays the generated preview while showing a warning marker
+and the outcome fields in the details text.
 
 Cleanup:
 
 ```cpp
 void stemtex_renderer_free_result(StemTeXRenderResult *result);
 void stemtex_renderer_free_pdf_bytes(StemTeXPdfBytes *pdf);
+void stemtex_renderer_free_output_result(StemTeXRenderOutputResult *result);
+void stemtex_renderer_free_output_bytes(StemTeXOutputBytes *bytes);
 void stemtex_renderer_free_string(char *value);
 void stemtex_renderer_destroy(StemTeXRenderer *renderer);
 ```
@@ -387,15 +443,25 @@ If `width_pt <= 0`, the renderer uses `360pt`.
 
 ```json
 {
-  "pdfMode": "cpp-dll-live-worker-latest-page",
+  "outputFormat": "pdf",
+  "outputPath": "C:\\...\\snippet-1.pdf",
+  "renderMode": "cpp-dll-live-worker-latest-page",
+  "backend": "xdvipdfmxdaemon",
+  "converterMode": "daemon-dll",
   "widthPt": 360.5,
+  "requestToOutputMs": 203,
   "requestToPdfMs": 203,
+  "requestToSvgMs": 0,
   "finalizeXdvMs": 2,
+  "convertMs": 124,
   "xdvipdfmxMs": 124,
+  "dvisvgmMs": 0,
   "cumulativeXdvBytes": 11519,
   "newXdvBytes": 1153,
   "finalXdvBytes": 12352,
+  "outputBytes": 26111,
   "pdfBytes": 26111,
+  "svgBytes": 0,
   "workerRequest": 2,
   "workerSlot": "primary",
   "spareReady": 1,
@@ -407,7 +473,11 @@ If `width_pt <= 0`, the renderer uses `360pt`.
 The stable high-level timings are:
 
 - `requestToPdfMs`: total hot render time for this request.
+- `requestToSvgMs`: total hot render time for SVG requests.
+- `requestToOutputMs`: total hot render time independent of output format.
+- `convertMs`: selected backend conversion time.
 - `xdvipdfmxMs`: PDF conversion time.
+- `dvisvgmMs`: SVG conversion time.
 - `finalizeXdvMs`: time spent writing the synthesized final XDV.
 
 ## Error Handling

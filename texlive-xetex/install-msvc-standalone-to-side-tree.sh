@@ -32,7 +32,7 @@ elif [[ ! -d "$tree/texmf-dist" ]]; then
 fi
 mkdir -p "$bin"
 
-for name in xetexdaemon.dll xetexdaemon.exe dvipdfmxdaemon.dll xdvipdfmxdaemon.exe; do
+for name in xetexdaemon.dll xetexdaemon.exe dvipdfmxdaemon.dll xdvipdfmxdaemon.exe dvisvgmdaemon.dll dvisvgmdaemon.exe; do
   need_file "$standalone/$name"
   cp -p "$standalone/$name" "$bin/$name"
 done
