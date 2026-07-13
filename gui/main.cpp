@@ -26,6 +26,7 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QComboBox>
+#include <QSignalBlocker>
 #include <QSlider>
 #include <QSpinBox>
 #include <QSplitter>
@@ -45,6 +46,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -59,7 +61,17 @@
 
 namespace {
 
+constexpr double kWidthSliderScale = 10.0;
+
 std::mutex gRendererLifecycleMutex;
+
+int widthToSliderValue(double widthPt) {
+  return qRound(widthPt * kWidthSliderScale);
+}
+
+double sliderValueToWidth(int value) {
+  return value / kWidthSliderScale;
+}
 
 QString appResourceRoot() {
   return QDir::cleanPath(QCoreApplication::applicationDirPath());
@@ -204,14 +216,15 @@ struct CroppedPreview {
   QSize displaySize;
 };
 
-CroppedPreview renderCroppedPdfPreview(const QString &pdfPath, int minWidthPt, int dpi, double paddingPt) {
+CroppedPreview renderCroppedPdfPreview(const QString &pdfPath, double minWidthPt, int dpi, double paddingPt) {
   QPdfDocument source;
   QPdfDocument::Error error = source.load(pdfPath);
   if (error != QPdfDocument::Error::None || source.pageCount() <= 0) return {};
 
-  double pixelsPerPoint = qBound(1.0, dpi / 72.0, 16.0);
+  double pixelsPerPoint = qMax(1.0, static_cast<double>(dpi) / 72.0);
   QSizeF points = source.pagePointSize(0);
-  QSize imageSize(qMax(1, int(points.width() * pixelsPerPoint)), qMax(1, int(points.height() * pixelsPerPoint)));
+  QSize imageSize(qMax(1, static_cast<int>(std::ceil(points.width() * pixelsPerPoint))),
+                  qMax(1, static_cast<int>(std::ceil(points.height() * pixelsPerPoint))));
   QImage page = source.render(0, imageSize);
   if (page.isNull()) return {};
 
@@ -231,7 +244,7 @@ CroppedPreview renderCroppedPdfPreview(const QString &pdfPath, int minWidthPt, i
   if (bounds.isNull()) return {rgba, rgba.size()};
 
   int pad = qMax(0, qRound(paddingPt * pixelsPerPoint));
-  bounds = expandRectRightToWidth(bounds, qMax(1, int(minWidthPt * pixelsPerPoint)), rgba.rect());
+  bounds = expandRectRightToWidth(bounds, qMax(1, static_cast<int>(std::ceil(minWidthPt * pixelsPerPoint))), rgba.rect());
   QImage cropped = rgba.copy(bounds);
   QImage white(cropped.width() + pad * 2, cropped.height() + pad * 2, QImage::Format_RGB32);
   white.fill(Qt::white);
@@ -239,15 +252,15 @@ CroppedPreview renderCroppedPdfPreview(const QString &pdfPath, int minWidthPt, i
   painter.drawImage(pad, pad, cropped);
   painter.end();
   constexpr double screenPixelsPerPoint = 96.0 / 72.0;
-  QSize displaySize(qMax(1, int(white.width() / pixelsPerPoint * screenPixelsPerPoint)),
-                    qMax(1, int(white.height() / pixelsPerPoint * screenPixelsPerPoint)));
+  QSize displaySize(qMax(1, static_cast<int>(std::ceil(white.width() / pixelsPerPoint * screenPixelsPerPoint))),
+                    qMax(1, static_cast<int>(std::ceil(white.height() / pixelsPerPoint * screenPixelsPerPoint))));
   return {white, displaySize};
 }
 
 int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString &profileRoot, const QString &texmfRoot) {
   QDir(QDir(repoRoot).filePath("build")).mkpath(".");
   QFile smokeLog(QDir(repoRoot).filePath("build/gui-smoke.log"));
-  smokeLog.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append);
+  (void)smokeLog.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append);
   QTextStream log(&smokeLog);
   auto logLine = [&](const QString &text) {
     if (!smokeLog.isOpen()) return;
@@ -291,7 +304,7 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
 
   StemTeXRenderResult result{};
   QByteArray snippet = defaultSnippet().toUtf8();
-  int ok = stemtex_renderer_render(renderer, snippet.constData(), 360, &result, &code, &error);
+  int ok = stemtex_renderer_render(renderer, snippet.constData(), 360.5, &result, &code, &error);
   if (!ok) {
     fprintf(stderr, "render failed code=%d: %s\n", (int)code, error ? error : "");
     logLine(QString("render failed code=%1: %2").arg((int)code).arg(error ? QString::fromUtf8(error) : QString()));
@@ -306,7 +319,7 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
   QPdfDocument::Error pdfError = pdf.load(pdfPath);
   int pages = pdf.pageCount();
   QSizeF pageSize = pages > 0 ? pdf.pagePointSize(0) : QSizeF();
-  CroppedPreview cropped = renderCroppedPdfPreview(pdfPath, 360, 300, 8.0);
+  CroppedPreview cropped = renderCroppedPdfPreview(pdfPath, 360.5, 300, 8.0);
   printf("pdf=%s\nsummary=%s\nqtPdfError=%d pages=%d pagePoints=%.2fx%.2f croppedPixels=%dx%d\n",
          pdfPath.toUtf8().constData(), summary.toUtf8().constData(),
          (int)pdfError, pages, pageSize.width(), pageSize.height(), cropped.image.width(), cropped.image.height());
@@ -357,17 +370,18 @@ class MainWindow : public QMainWindow {
     runtimeRow->setSpacing(8);
     auto *widthLabel = new QLabel("版心宽度", central);
     widthSlider_ = new QSlider(Qt::Horizontal, central);
-    widthSlider_->setRange(30, 450);
-    widthSlider_->setSingleStep(10);
-    widthSlider_->setPageStep(20);
-    widthSlider_->setValue(360);
-    widthSpin_ = new QSpinBox(central);
-    widthSpin_->setRange(30, 450);
-    widthSpin_->setSingleStep(10);
+    widthSlider_->setRange(widthToSliderValue(30.0), widthToSliderValue(450.0));
+    widthSlider_->setSingleStep(widthToSliderValue(0.5));
+    widthSlider_->setPageStep(widthToSliderValue(10.0));
+    widthSlider_->setValue(widthToSliderValue(360.0));
+    widthSpin_ = new QDoubleSpinBox(central);
+    widthSpin_->setRange(30.0, 450.0);
+    widthSpin_->setSingleStep(0.5);
+    widthSpin_->setDecimals(1);
     widthSpin_->setSuffix(" pt");
-    widthSpin_->setValue(360);
+    widthSpin_->setValue(360.0);
     dpiSpin_ = new QSpinBox(central);
-    dpiSpin_->setRange(72, 9600);
+    dpiSpin_->setRange(72, 1152);
     dpiSpin_->setSingleStep(24);
     dpiSpin_->setSuffix(" dpi");
     dpiSpin_->setValue(300);
@@ -491,9 +505,15 @@ class MainWindow : public QMainWindow {
     autoRenderTimer_->setInterval(250);
     connect(autoRenderTimer_, &QTimer::timeout, this, [this]() { renderSnippet(); });
 
-    connect(widthSlider_, &QSlider::valueChanged, widthSpin_, &QSpinBox::setValue);
-    connect(widthSpin_, &QSpinBox::valueChanged, widthSlider_, &QSlider::setValue);
-    connect(widthSpin_, &QSpinBox::valueChanged, this, [this](int value) {
+    connect(widthSlider_, &QSlider::valueChanged, this, [this](int value) {
+      QSignalBlocker blocker(widthSpin_);
+      widthSpin_->setValue(sliderValueToWidth(value));
+      updatePreviewMinimumWidth(widthSpin_->value());
+      scheduleAutoRender();
+    });
+    connect(widthSpin_, &QDoubleSpinBox::valueChanged, this, [this](double value) {
+      QSignalBlocker blocker(widthSlider_);
+      widthSlider_->setValue(widthToSliderValue(value));
       updatePreviewMinimumWidth(value);
       scheduleAutoRender();
     });
@@ -848,7 +868,7 @@ class MainWindow : public QMainWindow {
     }
     QString snippet = editor_->text();
     QString encoding = encodingCombo_->currentText();
-    int width = widthSpin_->value();
+    double width = widthSpin_->value();
     refreshEngineStatus("render request submitted; waiting for renderer scheduler");
     setPreviewImageReady(false);
     details_->clear();
@@ -907,8 +927,8 @@ class MainWindow : public QMainWindow {
       if (!shuttingDown_.load() && generation == rendererGeneration_.load()) {
         std::lock_guard<std::mutex> lock(rendererMutex_);
         if (renderer == renderer_) {
-          submitted = stemtex_renderer_render_async(renderer, text.constData(), width, &rendererJobId, callback, context,
-                                                    &code, &error);
+          submitted = stemtex_renderer_render_async(renderer, text.constData(), width, &rendererJobId, callback,
+                                                    context, &code, &error);
         }
       }
       QString errorText = error ? QString::fromUtf8(error) : QString();
@@ -927,7 +947,7 @@ class MainWindow : public QMainWindow {
     }
   }
 
-  void showCroppedPreview(const QString &pdfPath, int widthPt) {
+  void showCroppedPreview(const QString &pdfPath, double widthPt) {
     CroppedPreview cropped = renderCroppedPdfPreview(pdfPath, widthPt, dpiSpin_->value(), paddingSpin_->value());
     if (cropped.image.isNull()) {
       croppedPreview_->setText("PDF preview failed");
@@ -1016,9 +1036,9 @@ class MainWindow : public QMainWindow {
                            outcomeText + lastSummaryText_);
   }
 
-  void updatePreviewMinimumWidth(int widthPt) {
+  void updatePreviewMinimumWidth(double widthPt) {
     constexpr double screenPixelsPerPoint = 96.0 / 72.0;
-    croppedPreview_->setMinimumWidth(qMax(240, int(widthPt * screenPixelsPerPoint) + 48));
+    croppedPreview_->setMinimumWidth(qMax(240, static_cast<int>(std::ceil(widthPt * screenPixelsPerPoint)) + 48));
   }
 
   void resizeEvent(QResizeEvent *event) override {
@@ -1037,7 +1057,7 @@ class MainWindow : public QMainWindow {
   QString lastPdf_;
   QsciScintilla *editor_ = nullptr;
   QSlider *widthSlider_ = nullptr;
-  QSpinBox *widthSpin_ = nullptr;
+  QDoubleSpinBox *widthSpin_ = nullptr;
   QSpinBox *dpiSpin_ = nullptr;
   QDoubleSpinBox *paddingSpin_ = nullptr;
   QLabel *texmfLabel_ = nullptr;

@@ -35,6 +35,7 @@ struct SmokeOptions {
   int runs = 1;
   std::string case_name;
   int spare_workers = 0;
+  double width_pt = 360.0;
   std::string worker_template;
   bool allow_exe = false;
 };
@@ -42,7 +43,7 @@ struct SmokeOptions {
 static void print_usage(const char *argv0) {
   std::fprintf(stderr,
                "Usage:\n"
-               "  %s [--repo PATH] [--runtime PATH] [--texmf PATH] --profile PATH [--runs N] [--case NAME] [--spares N]\n"
+               "  %s [--repo PATH] [--runtime PATH] [--texmf PATH] --profile PATH [--runs N] [--case NAME] [--spares N] [--width PT]\n"
                "  %s --profile PATH --case async --runs 5 --spares 2\n"
                "\n"
                "Cases: default, validate, refresh, physics, fonts, chem-text, bad,\n"
@@ -87,6 +88,8 @@ static SmokeOptions parse_options(int argc, char **argv) {
       opts.case_name = canonical_case(need_value("--case"));
     } else if (arg == "--spares") {
       opts.spare_workers = std::atoi(need_value("--spares"));
+    } else if (arg == "--width") {
+      opts.width_pt = std::atof(need_value("--width"));
     } else if (arg == "--worker-template") {
       opts.worker_template = need_value("--worker-template");
     } else if (arg == "--allow-exe") {
@@ -169,6 +172,7 @@ int main(int argc, char **argv) {
   cfg.renders_root_utf8 = renders_root_utf8.c_str();
   int runs = opts.runs;
   std::string case_name = opts.case_name;
+  double width_pt = opts.width_pt;
   cfg.spare_worker_count = opts.spare_workers;
   cfg.worker_template_utf8 = opts.worker_template.empty() ? nullptr : opts.worker_template.c_str();
   cfg.request_timeout_ms = 90000;
@@ -180,6 +184,7 @@ int main(int argc, char **argv) {
   std::printf("runtimeRoot=%s\n", runtime_root_utf8.c_str());
   std::printf("texmfRoot=%s\n", texmf_root_utf8.c_str());
   std::printf("profileRoot=%s\n", profile_root_utf8.c_str());
+  std::printf("widthPt=%.6g\n", width_pt);
   std::printf("runtimeHasWorkerHost=%d runtimeHasXetexdaemon=%d runtimeHasDvipdfmxDaemonDll=%d profileHasWarmup=%d profileHasWarmupXdv=%d\n",
               fs::exists(runtime_root / "bin" / "windows" / "stemtex-worker-host.exe") ? 1 : 0,
               fs::exists(runtime_root / "bin" / "windows" / "xetexdaemon.exe") ? 1 : 0,
@@ -235,7 +240,7 @@ int main(int argc, char **argv) {
       }
       StemTeXRenderResult result{};
       long long render_start = now_ms();
-      int ok = stemtex_renderer_render(loop_renderer, probe, 360, &result, &error_code, &error);
+      int ok = stemtex_renderer_render(loop_renderer, probe, width_pt, &result, &error_code, &error);
       long long render_end = now_ms();
       std::printf("lifecycle run=%d createOk=1 createMs=%lld renderOk=%d code=%d renderMs=%lld\n", i + 1,
                   loop_create_end - loop_create_start, ok, (int)error_code, render_end - render_start);
@@ -283,7 +288,7 @@ int main(int argc, char **argv) {
       }
       StemTeXRenderResult result{};
       long long render_start = now_ms();
-      int ok = stemtex_renderer_render(loop_renderer, probe, 360, &result, &error_code, &error);
+      int ok = stemtex_renderer_render(loop_renderer, probe, width_pt, &result, &error_code, &error);
       long long render_end = now_ms();
       std::printf("profileSwitch run=%d profile=%s createOk=1 createMs=%lld renderOk=%d code=%d renderMs=%lld\n", i + 1,
                   profile_path.filename().generic_string().c_str(), loop_create_end - loop_create_start, ok,
@@ -330,7 +335,7 @@ int main(int argc, char **argv) {
       print_snapshot(renderer, ("beforeBadStress" + std::to_string(i + 1)).c_str());
       StemTeXRenderResult result{};
       long long render_start = now_ms();
-      int ok = stemtex_renderer_render(renderer, bad, 360, &result, &error_code, &error);
+      int ok = stemtex_renderer_render(renderer, bad, width_pt, &result, &error_code, &error);
       long long render_end = now_ms();
       if (ok) {
         std::printf("badStress run=%d unexpected success renderMs=%lld pdf=%s\n", i + 1, render_end - render_start,
@@ -400,7 +405,7 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < selected_cases.size(); ++i) {
       StemTeXRenderResult bad_result{};
       long long bad_start = now_ms();
-      int bad_ok = stemtex_renderer_render(renderer, selected_cases[i].snippet, 360, &bad_result, &error_code, &error);
+      int bad_ok = stemtex_renderer_render(renderer, selected_cases[i].snippet, width_pt, &bad_result, &error_code, &error);
       long long bad_end = now_ms();
       bool bad_expected = !bad_ok && error_code == STEMTEX_ERROR_TEX_SNIPPET;
       std::printf("badCorpus case=%zu name=%s badOk=%d code=%d ms=%lld\n", i + 1, selected_cases[i].name, bad_ok,
@@ -427,7 +432,7 @@ int main(int argc, char **argv) {
 
       StemTeXRenderResult good_result{};
       long long good_start = now_ms();
-      int good_ok = stemtex_renderer_render(renderer, good, 360, &good_result, &error_code, &error);
+      int good_ok = stemtex_renderer_render(renderer, good, width_pt, &good_result, &error_code, &error);
       long long good_end = now_ms();
       if (good_ok) {
         std::printf("badCorpus case=%s recoveryOk=1 ms=%lld pdf=%s\n", selected_cases[i].name, good_end - good_start,
@@ -505,7 +510,7 @@ int main(int argc, char **argv) {
     };
     for (int i = 0; i < runs; ++i) {
       uint64_t job_id = 0;
-      if (!stemtex_renderer_render_async(renderer, snippet, 360, &job_id, callback, &state, &error_code, &error)) {
+      if (!stemtex_renderer_render_async(renderer, snippet, width_pt, &job_id, callback, &state, &error_code, &error)) {
         std::fprintf(stderr, "async submit failed code=%d: %s\n", (int)error_code, error ? error : "");
         stemtex_renderer_free_string(error);
         stemtex_renderer_destroy(renderer);
@@ -543,7 +548,7 @@ int main(int argc, char **argv) {
     };
     const char *hang = "\\loop\\iftrue\\repeat";
     uint64_t job_id = 0;
-    if (!stemtex_renderer_render_async(renderer, hang, 360, &job_id, callback, &state, &error_code, &error)) {
+    if (!stemtex_renderer_render_async(renderer, hang, width_pt, &job_id, callback, &state, &error_code, &error)) {
       std::fprintf(stderr, "cancel submit failed code=%d: %s\n", (int)error_code, error ? error : "");
       stemtex_renderer_free_string(error);
       stemtex_renderer_destroy(renderer);
@@ -568,7 +573,7 @@ int main(int argc, char **argv) {
     error = nullptr;
     StemTeXRenderResult result{};
     long long render_start = now_ms();
-    int ok = stemtex_renderer_render(renderer, snippet, 360, &result, &error_code, &error);
+    int ok = stemtex_renderer_render(renderer, snippet, width_pt, &result, &error_code, &error);
     long long render_end = now_ms();
     if (!ok) {
       std::fprintf(stderr, "recover render failed code=%d: %s\n", (int)error_code, error ? error : "");
@@ -589,8 +594,8 @@ int main(int argc, char **argv) {
     StemTeXPdfBytes pdf{};
     long long render_start = now_ms();
     int ok = case_name == "--bytes"
-                 ? stemtex_renderer_render_pdf_bytes(renderer, snippet, 360, &pdf, &result, &error_code, &error)
-                 : stemtex_renderer_render(renderer, snippet, 360, &result, &error_code, &error);
+                 ? stemtex_renderer_render_pdf_bytes(renderer, snippet, width_pt, &pdf, &result, &error_code, &error)
+                 : stemtex_renderer_render(renderer, snippet, width_pt, &result, &error_code, &error);
     if (!ok) {
       long long render_end = now_ms();
       std::fprintf(stderr, "run=%d renderMs=%lld\n", i + 1, render_end - render_start);

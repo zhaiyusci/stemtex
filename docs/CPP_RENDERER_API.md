@@ -98,9 +98,9 @@ typedef struct StemTeXConfig {
   const char *renders_root_utf8;
   int request_timeout_ms;
   int xdvipdfmx_timeout_ms;
-  int min_width_pt;
-  int max_width_pt;
-  int default_width_pt;
+  double min_width_pt;
+  double max_width_pt;
+  double default_width_pt;
   int spare_worker_count;
   int auto_restart;
   int delete_intermediates;
@@ -136,7 +136,7 @@ Fields:
   indefinitely for the next render request.
 - `xdvipdfmx_timeout_ms`: PDF conversion timeout. `0` uses `90000`.
 - `default_width_pt`: width used when a render call passes `width_pt <= 0`.
-  `0` uses `360`.
+  `0` uses `360`. Fractional point values are accepted.
 - `min_width_pt`, `max_width_pt`: retained in the ABI for host-side policy, but
   the renderer no longer clamps `width_pt`.
 - `spare_worker_count`: number of hot spare workers to maintain. `0` means no
@@ -176,7 +176,7 @@ Render one snippet:
 int stemtex_renderer_render(
   StemTeXRenderer *renderer,
   const char *snippet_utf8,
-  int width_pt,
+  double width_pt,
   StemTeXRenderResult *result,
   StemTeXErrorCode *error_code,
   char **error_utf8
@@ -189,7 +189,7 @@ Related APIs:
 int stemtex_renderer_render_pdf_bytes(
   StemTeXRenderer *renderer,
   const char *snippet_utf8,
-  int width_pt,
+  double width_pt,
   StemTeXPdfBytes *pdf,
   StemTeXRenderResult *result,
   StemTeXErrorCode *error_code,
@@ -199,7 +199,7 @@ int stemtex_renderer_render_pdf_bytes(
 int stemtex_renderer_render_async(
   StemTeXRenderer *renderer,
   const char *snippet_utf8,
-  int width_pt,
+  double width_pt,
   uint64_t *job_id,
   StemTeXRenderCallback callback,
   void *user_data,
@@ -351,7 +351,7 @@ int main() {
   }
 
   StemTeXRenderResult result{};
-  if (!stemtex_renderer_render(renderer, u8"中文 $E=mc^2$", 360, &result, &error_code, &error)) {
+  if (!stemtex_renderer_render(renderer, u8"中文 $E=mc^2$", 360.0, &result, &error_code, &error)) {
     std::fprintf(stderr, "render failed code=%d: %s\n", (int)error_code, error ? error : "");
     stemtex_renderer_free_string(error);
     stemtex_renderer_destroy(renderer);
@@ -374,8 +374,9 @@ int main() {
 The renderer does not clamp positive width values:
 
 ```text
-The C API sends positive `width_pt` values to TeX unchanged. GUI frontends may
-still impose their own control ranges.
+The C API sends positive `width_pt` values to TeX unchanged, including
+fractional point values such as `360.5pt`. GUI frontends may still impose their
+own control ranges.
 ```
 
 If `width_pt <= 0`, the renderer uses `360pt`.
@@ -387,7 +388,7 @@ If `width_pt <= 0`, the renderer uses `360pt`.
 ```json
 {
   "pdfMode": "cpp-dll-live-worker-latest-page",
-  "widthPt": 360,
+  "widthPt": 360.5,
   "requestToPdfMs": 203,
   "finalizeXdvMs": 2,
   "xdvipdfmxMs": 124,

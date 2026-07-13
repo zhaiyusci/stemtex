@@ -22,9 +22,9 @@ typedef struct StemTeXConfig {
   const char *renders_root_utf8;
   int request_timeout_ms;
   int xdvipdfmx_timeout_ms;
-  int min_width_pt;
-  int max_width_pt;
-  int default_width_pt;
+  double min_width_pt;
+  double max_width_pt;
+  double default_width_pt;
   /* 0 means no hot spare workers. Positive values are clamped internally. */
   int spare_worker_count;
   int auto_restart;
@@ -115,15 +115,16 @@ typedef void (*StemTeXRenderCallback)(uint64_t job_id, int ok, const StemTeXRend
 
 STEMTEX_API StemTeXRenderer *stemtex_renderer_create(const StemTeXConfig *config, StemTeXErrorCode *error_code,
                                                      char **error_utf8);
-STEMTEX_API int stemtex_renderer_render(StemTeXRenderer *renderer, const char *snippet_utf8, int width_pt,
-                                        StemTeXRenderResult *result, StemTeXErrorCode *error_code,
-                                        char **error_utf8);
-STEMTEX_API int stemtex_renderer_render_pdf_bytes(StemTeXRenderer *renderer, const char *snippet_utf8, int width_pt,
-                                                  StemTeXPdfBytes *pdf, StemTeXRenderResult *result,
+STEMTEX_API int stemtex_renderer_render(StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt,
+                                            StemTeXRenderResult *result, StemTeXErrorCode *error_code,
+                                            char **error_utf8);
+STEMTEX_API int stemtex_renderer_render_pdf_bytes(StemTeXRenderer *renderer, const char *snippet_utf8,
+                                                      double width_pt, StemTeXPdfBytes *pdf,
+                                                      StemTeXRenderResult *result, StemTeXErrorCode *error_code,
+                                                      char **error_utf8);
+STEMTEX_API int stemtex_renderer_render_async(StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt,
+                                                  uint64_t *job_id, StemTeXRenderCallback callback, void *user_data,
                                                   StemTeXErrorCode *error_code, char **error_utf8);
-STEMTEX_API int stemtex_renderer_render_async(StemTeXRenderer *renderer, const char *snippet_utf8, int width_pt,
-                                              uint64_t *job_id, StemTeXRenderCallback callback, void *user_data,
-                                              StemTeXErrorCode *error_code, char **error_utf8);
 STEMTEX_API int stemtex_renderer_restart(StemTeXRenderer *renderer, StemTeXErrorCode *error_code, char **error_utf8);
 STEMTEX_API int stemtex_renderer_cancel_current(StemTeXRenderer *renderer, StemTeXErrorCode *error_code,
                                                 char **error_utf8);
