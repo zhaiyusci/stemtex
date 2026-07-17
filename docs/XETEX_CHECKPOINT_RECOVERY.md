@@ -71,7 +71,13 @@ The checkpoint currently saves and restores:
 - current input/scanner state, grouping state, conditionals, paragraph tokens,
   interaction mode, and error counters;
 - allocator/hash/string scalar state such as `lomemmax`, `himemmin`,
-  `hashused`, `poolptr`, and `strptr`.
+  `hashused`, `poolptr`, and `strptr`;
+- paragraph building, math-list conversion, line breaking, hyphenation, page
+  builder, and e-TeX direction/last-line-fit scratch state;
+- TeX memory-backed caches outside `mem`, currently including `fontglue`. This
+  matters because successful snippets can populate per-font glue specs that
+  point into `mem`; after a later error restores `mem` to the warmup baseline,
+  those cached pointers must also be restored or invalidated.
 
 The largest checkpoint regions (`mem`, `eqtb`, and `hash`) are stored as
 block-based fill/raw snapshots. Each region is split into fixed-size element
@@ -97,6 +103,12 @@ On a restored snippet error, the C++ renderer:
    successful page;
 4. returns `STEMTEX_ERROR_TEX_SNIPPET`;
 5. keeps the primary worker ready for the next render.
+
+The TeX loop request number is not used as the cumulative XDV page number after
+an error restore, because the loop returns to the checkpoint and can emit the
+same `WORKER_WAIT:N` again. The renderer keeps its own cumulative XDV page
+counter and uses that counter for final XDV postambles and PDF/SVG page
+selection.
 
 Because the worker can recover in place, `spare_worker_count = 0` is now a valid
 configuration and means no hot spare workers. Spare workers remain supported as
@@ -131,7 +143,11 @@ relevant cases are:
 
 - `bad-corpus` with `SPARES=0`: malformed snippets, each immediately followed
   by a good recovery probe;
-- `errors` with `SPARES=0`: repeated bad snippets plus cancellation;
+- `checkpoint-critical` with `SPARES=0`: the smaller set of errors most likely
+  to poison checkpoint restore, including math alphabet commands used outside
+  math mode;
+- `bad-output-corpus` with `SPARES=0`: PDF and SVG output recovery after bad
+  snippets;
 - `lifecycle-stress` with `SPARES=1`: repeated create/render/destroy cycles;
 - `profile-switch-stress` with `SPARES=1`: alternating `unicodemath_cjk` and
   `unicodemath`;
@@ -140,20 +156,24 @@ relevant cases are:
 The most important regression test is:
 
 ```powershell
-cmake --build --preset renderer-release
+cmake --build --preset ninja-release --target stemtex-renderer-smoke
 
 $repo = (Get-Location).Path
-$smoke = ".\build\stemtex-renderer\cpp-daemon\Release\stemtex-renderer-smoke.exe"
-$runtime = ".\dist\stemtex-texlive-daemon-static"
+$smoke = ".\build\stemtex-ninja\cpp-daemon\stemtex-renderer-smoke.exe"
+$runtime = ".\dist\stemtex-installer\StemTeX\runtime"
 $profile = ".\gui\profiles\unicodemath_cjk"
 
 & $smoke --repo $repo --runtime $runtime --profile $profile --case bad-corpus --spares 0 --runs 1
+& $smoke --repo $repo --runtime $runtime --profile $profile --case checkpoint-critical --spares 0 --runs 1
+& $smoke --repo $repo --runtime $runtime --profile $profile --case bad-output-corpus --spares 0 --runs 1
 ```
 
 Expected result:
 
 ```text
-badCorpus passed=22 failed=0 total=22
+badCorpus passed=29 failed=0 total=29
+badCorpus passed=8 failed=0 total=8
+badOutput passed=16 failed=0 total=16
 ```
 
 ## Known Boundaries

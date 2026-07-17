@@ -42,6 +42,10 @@ tracked here as TODO:
 - `spare_worker_count = 0` now means no hot spares. Ordinary snippet errors do
   not require spare workers because the live worker can restore to its request
   loop in place.
+- Output conversion uses a renderer-maintained cumulative XDV page counter
+  rather than the TeX loop request number. After checkpoint restore the loop
+  marker can return to `WORKER_WAIT:2`, while the XDV stream may already contain
+  later successful pages.
 - Cancellation kills the active worker and makes that active render fail with
   `STEMTEX_ERROR_CANCELLED`; queued work continues after failover/rebuild.
 - Default request and `xdvipdfmx` timeouts are both 90000 ms. SVG conversion is

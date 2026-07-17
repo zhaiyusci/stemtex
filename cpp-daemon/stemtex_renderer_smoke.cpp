@@ -48,8 +48,9 @@ static void print_usage(const char *argv0) {
                "\n"
                "Cases: default, validate, refresh, physics, fonts, chem-text, bad,\n"
                "       bad-then-good, bad-then-good-wait, bad-then-good-wait-long,\n"
-               "       bad-stress, latin-math, latin-text, restart, async, cancel,\n"
-               "       recover-no-worker, bad-corpus, lifecycle-stress,\n"
+               "       bad-stress, latin-math, latin-text, restart, async,\n"
+               "       async-callback-throw, cancel,\n"
+               "       recover-no-worker, bad-corpus, bad-output-corpus, lifecycle-stress,\n"
                "       profile-switch-stress, bytes, output-pdf, output-pdf-bytes,\n"
                "       svg, svg-bytes\n",
                argv0, argv0);
@@ -362,6 +363,97 @@ int main(int argc, char **argv) {
     }
     stemtex_renderer_destroy(renderer);
     return failures == runs ? 0 : 1;
+  } else if (case_name == "--bad-output-corpus") {
+    struct BadCase {
+      const char *name;
+      const char *snippet;
+    };
+    struct FormatCase {
+      StemTeXOutputFormat format;
+      const char *name;
+    };
+    const std::vector<BadCase> cases = {
+        {"missing-brace-exp", "$e^{L_p$"},
+        {"undefined-command", "$\\notacommand{x}$"},
+        {"mathbf-text-mode", "\\mathbf{Circulant matrix}"},
+        {"mathrm-text-mode", "\\mathrm{Roman text}"},
+        {"mathbb-text-mode", "\\mathbb{R}"},
+        {"operatorname-text-mode", "\\operatorname{rank}"},
+        {"open-textcolor", u8"\u8fd9\u662f\u4e00\u6bb5\uff1a\\textcolor{blue}{\u84dd\u8272\u6587\u5b57"},
+        {"input-missing-file", "\\input{definitely-not-existing-file}"},
+    };
+    const std::vector<FormatCase> formats = {
+        {STEMTEX_OUTPUT_PDF, "pdf"},
+        {STEMTEX_OUTPUT_SVG, "svg"},
+    };
+    const char *good =
+        u8"\u4fee\u6b63\u540e\u7684\u7247\u6bb5\uff1a\\textbf{Circulant matrix}"
+        u8"\uff08\u5faa\u73af\u77e9\u9635\uff09\u53ef\u4ee5\u6b63\u5e38\u6392\u7248\u3002"
+        u8"$E=mc^2$\uff0c\\textcolor{blue}{ok}\u3002";
+    int passed = 0;
+    int failed = 0;
+    wait_for_spares(renderer, 30);
+    print_snapshot(renderer, "beforeBadOutputCorpus");
+    for (const auto &fmt : formats) {
+      for (const auto &bad_case : cases) {
+        StemTeXRenderOutputResult bad_result{};
+        long long bad_start = now_ms();
+        int bad_ok = stemtex_renderer_render_output(renderer, bad_case.snippet, width_pt, fmt.format, &bad_result,
+                                                    &error_code, &error);
+        long long bad_end = now_ms();
+        bool bad_expected = !bad_ok && error_code == STEMTEX_ERROR_TEX_SNIPPET;
+        std::printf("badOutput format=%s case=%s badOk=%d code=%d ms=%lld\n", fmt.name, bad_case.name, bad_ok,
+                    (int)error_code, bad_end - bad_start);
+        if (bad_ok) {
+          std::printf("badOutput format=%s case=%s unexpectedOutput=%s\n", fmt.name, bad_case.name,
+                      bad_result.output_path_utf8 ? bad_result.output_path_utf8 : "");
+          stemtex_renderer_free_output_result(&bad_result);
+        } else {
+          if (error) {
+            std::string err(error);
+            size_t nl = err.find('\n');
+            if (nl != std::string::npos) err.resize(nl);
+            std::printf("badOutput format=%s case=%s error=%s\n", fmt.name, bad_case.name, err.c_str());
+          }
+          stemtex_renderer_free_string(error);
+          error = nullptr;
+        }
+
+        StemTeXEngineSnapshot after_bad = get_snapshot(renderer);
+        bool worker_kept = after_bad.status == STEMTEX_STATUS_READY && after_bad.primary_ready &&
+                           after_bad.spare_ready == after_bad.spare_target && !after_bad.spare_rebuilding;
+
+        StemTeXRenderOutputResult good_result{};
+        long long good_start = now_ms();
+        int good_ok = stemtex_renderer_render_output(renderer, good, width_pt, fmt.format, &good_result, &error_code,
+                                                     &error);
+        long long good_end = now_ms();
+        if (good_ok) {
+          std::printf("badOutput format=%s case=%s recoveryOk=1 ms=%lld output=%s\n", fmt.name, bad_case.name,
+                      good_end - good_start, good_result.output_path_utf8 ? good_result.output_path_utf8 : "");
+          stemtex_renderer_free_output_result(&good_result);
+        } else {
+          std::printf("badOutput format=%s case=%s recoveryOk=0 code=%d ms=%lld err=%s\n", fmt.name, bad_case.name,
+                      (int)error_code, good_end - good_start, error ? error : "");
+          stemtex_renderer_free_string(error);
+          error = nullptr;
+        }
+
+        StemTeXEngineSnapshot after_good = get_snapshot(renderer);
+        bool recovery_ready = after_good.status == STEMTEX_STATUS_READY && after_good.primary_ready;
+        if (bad_expected && worker_kept && good_ok && recovery_ready) {
+          passed += 1;
+        } else {
+          failed += 1;
+        }
+      }
+    }
+    char *tail = stemtex_renderer_get_log_tail(renderer, 4096);
+    std::printf("badOutput passed=%d failed=%d total=%zu\n", passed, failed, cases.size() * formats.size());
+    std::printf("badOutput logTail:\n%s\n", tail ? tail : "");
+    stemtex_renderer_free_string(tail);
+    stemtex_renderer_destroy(renderer);
+    return failed == 0 ? 0 : 1;
   } else if (case_name == "--bad-corpus" || case_name == "--checkpoint-critical") {
     struct BadCase {
       const char *name;
@@ -376,6 +468,13 @@ int main(int argc, char **argv) {
         {"unterminated-aligned", "$\\begin{aligned} a &= b \\\\ c &= d$"},
         {"undefined-command", "$\\notacommand{x}$"},
         {"undefined-text-command", "\\unknownmacro"},
+        {"mathbf-text-mode", "\\mathbf{Circulant matrix}"},
+        {"mathrm-text-mode", "\\mathrm{Roman text}"},
+        {"mathit-text-mode", "\\mathit{Italic text}"},
+        {"mathsf-text-mode", "\\mathsf{Sans text}"},
+        {"mathbb-text-mode", "\\mathbb{R}"},
+        {"boldsymbol-text-mode", "\\boldsymbol{x}"},
+        {"operatorname-text-mode", "\\operatorname{rank}"},
         {"orphan-end", "\\end{equation}"},
         {"wrong-env-end", "\\begin{array}{cc} a & b \\end{matrix}"},
         {"missing-frac-arg", "$\\frac{1}$"},
@@ -393,6 +492,8 @@ int main(int argc, char **argv) {
     };
     const std::vector<BadCase> critical_cases = {
         {"undefined-command", "$\\notacommand{x}$"},
+        {"mathbf-text-mode", "\\mathbf{Circulant matrix}"},
+        {"mathrm-text-mode", "\\mathrm{Roman text}"},
         {"bad-matrix-row", "$\\begin{matrix} a & b \\\\ c \\end{pmatrix}$"},
         {"orphan-end", "\\end{equation}"},
         {"open-textcolor", u8"\u8fd9\u662f\u4e00\u6bb5\uff1a\\textcolor{blue}{\u84dd\u8272\u6587\u5b57"},
@@ -537,6 +638,50 @@ int main(int argc, char **argv) {
     int ok = state.callbacks == runs && state.latest_success == state.latest_job;
     stemtex_renderer_destroy(renderer);
     return ok ? 0 : 1;
+  } else if (case_name == "--async-callback-throw") {
+    struct ThrowState {
+      std::mutex mu;
+      std::condition_variable cv;
+      int callbacks = 0;
+    } state;
+    auto callback = [](uint64_t job_id, int ok, const StemTeXRenderResult *, StemTeXErrorCode code, const char *err,
+                       void *data) {
+      auto *state = static_cast<ThrowState *>(data);
+      std::printf("throwing callback job=%llu ok=%d code=%d err=%s\n", (unsigned long long)job_id, ok, (int)code,
+                  err ? err : "");
+      {
+        std::lock_guard<std::mutex> lock(state->mu);
+        state->callbacks += 1;
+      }
+      state->cv.notify_all();
+      throw std::runtime_error("intentional async callback exception");
+    };
+    uint64_t job_id = 0;
+    if (!stemtex_renderer_render_async(renderer, snippet, width_pt, &job_id, callback, &state, &error_code, &error)) {
+      std::fprintf(stderr, "async submit failed code=%d: %s\n", (int)error_code, error ? error : "");
+      stemtex_renderer_free_string(error);
+      stemtex_renderer_destroy(renderer);
+      return 1;
+    }
+    {
+      std::unique_lock<std::mutex> lock(state.mu);
+      state.cv.wait_for(lock, std::chrono::seconds(90), [&]() { return state.callbacks > 0; });
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    StemTeXRenderResult result{};
+    int ok = stemtex_renderer_render(renderer, snippet, width_pt, &result, &error_code, &error);
+    if (!ok) {
+      std::fprintf(stderr, "render after throwing callback failed code=%d: %s\n", (int)error_code, error ? error : "");
+      stemtex_renderer_free_string(error);
+    } else {
+      stemtex_renderer_free_result(&result);
+    }
+    char *tail = stemtex_renderer_get_log_tail(renderer, 4096);
+    bool logged = tail && std::string(tail).find("async callback threw") != std::string::npos;
+    std::printf("asyncCallbackThrow callbacks=%d survived=%d logged=%d\n", state.callbacks, ok, logged ? 1 : 0);
+    stemtex_renderer_free_string(tail);
+    stemtex_renderer_destroy(renderer);
+    return state.callbacks == 1 && ok && logged ? 0 : 1;
   } else if (case_name == "--cancel") {
     struct CancelState {
       std::mutex mu;

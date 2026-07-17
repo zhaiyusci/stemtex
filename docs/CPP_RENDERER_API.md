@@ -463,6 +463,7 @@ If `width_pt <= 0`, the renderer uses `360pt`.
   "pdfBytes": 26111,
   "svgBytes": 0,
   "workerRequest": 2,
+  "workerPage": 2,
   "workerSlot": "primary",
   "spareReady": 1,
   "spareTarget": 1,
@@ -488,14 +489,17 @@ The live worker is started with:
 -interaction=errorstopmode -halt-on-error -no-pdf -flush-output-on-shipout
 ```
 
-If a snippet contains a TeX error, XeTeX exits. The renderer detects that it did
-not receive `WORKER_DONE:N`, returns failure from `stemtex_renderer_render`, and
-includes the recent TeX output tail in `error_utf8`.
+If a body-level snippet contains a TeX error, XeTeX normally restores the
+post-warmup checkpoint inside the same live worker. The renderer waits until the
+worker emits the next `WORKER_WAIT:N`, returns failure from
+`stemtex_renderer_render` or `stemtex_renderer_render_output` with
+`STEMTEX_ERROR_TEX_SNIPPET`, and includes the recent TeX output tail in
+`error_utf8`. The same worker remains ready for the next request.
 
-After a primary worker failure or request timeout, the renderer immediately
-promotes a hot spare to primary and schedules replacement spares in the
-background. The failing request still fails, but the next request can use the
-promoted worker without paying cold-start cost.
+If the worker process is actually lost, cancelled, or stuck before it returns to
+the request loop, the renderer promotes a hot spare when one is available and
+schedules replacement spares in the background. The failing request still fails,
+but the next request can use the promoted worker without paying cold-start cost.
 
 Concurrent render calls on one renderer are serialized. The spare pool is only
 for failover/recovery; it is not used as a parallel rendering pool.
@@ -514,6 +518,21 @@ may still be healthy.
 
 Memory returned through `error_utf8` belongs to the DLL and must be freed with
 `stemtex_renderer_free_string`.
+
+The exported C ABI is designed not to propagate C++ exceptions into the host
+application. Public entry points catch both `std::exception` and unknown C++
+exceptions, convert them to `StemTeXErrorCode` values where possible, and keep
+diagnostic fields best-effort. Renderer-owned background threads also catch
+their own exceptions instead of relying on the host process to handle them.
+
+Async callbacks are invoked behind a catch boundary. If the host callback
+throws, StemTeX records the callback failure in the renderer log and keeps the
+renderer thread alive.
+
+This boundary cannot make invalid host pointers safe, and it cannot recover
+from process-level faults such as access violations, `abort`/`exit`, or hard
+crashes inside native dependencies. Hosts that need isolation from those failure
+modes should run the renderer out of process.
 
 ## Environment Isolation
 
@@ -548,17 +567,18 @@ explicitly.  The smoke executable accepts named options only; test cases are
 selected with `--case NAME`.
 
 ```powershell
-cmake --build --preset renderer-release
+cmake --build --preset ninja-release --target stemtex-renderer-smoke
 
 $repo = (Get-Location).Path
-$smoke = ".\build\stemtex-renderer\cpp-daemon\Release\stemtex-renderer-smoke.exe"
-$runtime = ".\dist\stemtex-texlive-daemon-static"
+$smoke = ".\build\stemtex-ninja\cpp-daemon\stemtex-renderer-smoke.exe"
+$runtime = ".\dist\stemtex-installer\StemTeX\runtime"
 $profile = ".\gui\profiles\unicodemath_cjk"
 
 & $smoke --repo $repo --runtime $runtime --profile $profile --case validate
 & $smoke --repo $repo --runtime $runtime --profile $profile --runs 2
 & $smoke --repo $repo --runtime $runtime --profile $profile --case physics
 & $smoke --repo $repo --runtime $runtime --profile $profile --case bad-corpus --spares 0
+& $smoke --repo $repo --runtime $runtime --profile $profile --case bad-output-corpus --spares 0
 ```
 
 Useful options:

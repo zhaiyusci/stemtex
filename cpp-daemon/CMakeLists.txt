@@ -29,3 +29,9 @@ target_compile_definitions(stemtex-worker-host PRIVATE
 add_executable(stemtex-renderer-smoke stemtex_renderer_smoke.cpp)
 target_compile_features(stemtex-renderer-smoke PRIVATE cxx_std_17)
 target_link_libraries(stemtex-renderer-smoke PRIVATE stemtex-renderer)
+
+if(MSVC)
+  target_compile_options(stemtex-renderer PRIVATE /EHsc)
+  target_compile_options(stemtex-worker-host PRIVATE /EHsc)
+  target_compile_options(stemtex-renderer-smoke PRIVATE /EHsc)
+endif()
