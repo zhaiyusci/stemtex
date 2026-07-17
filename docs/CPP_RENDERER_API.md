@@ -184,10 +184,21 @@ int stemtex_renderer_render(
   StemTeXErrorCode *error_code,
   char **error_utf8
 );
+
+int stemtex_renderer_render_with_font_size(
+  StemTeXRenderer *renderer,
+  const char *snippet_utf8,
+  double width_pt,
+  double font_size_pt,
+  StemTeXRenderResult *result,
+  StemTeXErrorCode *error_code,
+  char **error_utf8
+);
 ```
 
-The original `stemtex_renderer_render` API is the PDF convenience path. New
-hosts that need selectable output should use the generic output API:
+The original `stemtex_renderer_render` API is the PDF convenience path and uses
+the default 10pt runtime font size. New hosts that need selectable output should
+use the generic output API:
 
 ```cpp
 typedef enum StemTeXOutputFormat {
@@ -220,10 +231,33 @@ int stemtex_renderer_render_output(
   char **error_utf8
 );
 
+int stemtex_renderer_render_output_with_font_size(
+  StemTeXRenderer *renderer,
+  const char *snippet_utf8,
+  double width_pt,
+  double font_size_pt,
+  StemTeXOutputFormat format,
+  StemTeXRenderOutputResult *result,
+  StemTeXErrorCode *error_code,
+  char **error_utf8
+);
+
 int stemtex_renderer_render_output_bytes(
   StemTeXRenderer *renderer,
   const char *snippet_utf8,
   double width_pt,
+  StemTeXOutputFormat format,
+  StemTeXOutputBytes *bytes,
+  StemTeXRenderOutputResult *result,
+  StemTeXErrorCode *error_code,
+  char **error_utf8
+);
+
+int stemtex_renderer_render_output_bytes_with_font_size(
+  StemTeXRenderer *renderer,
+  const char *snippet_utf8,
+  double width_pt,
+  double font_size_pt,
   StemTeXOutputFormat format,
   StemTeXOutputBytes *bytes,
   StemTeXRenderOutputResult *result,
@@ -245,10 +279,33 @@ int stemtex_renderer_render_pdf_bytes(
   char **error_utf8
 );
 
+int stemtex_renderer_render_pdf_bytes_with_font_size(
+  StemTeXRenderer *renderer,
+  const char *snippet_utf8,
+  double width_pt,
+  double font_size_pt,
+  StemTeXPdfBytes *pdf,
+  StemTeXRenderResult *result,
+  StemTeXErrorCode *error_code,
+  char **error_utf8
+);
+
 int stemtex_renderer_render_async(
   StemTeXRenderer *renderer,
   const char *snippet_utf8,
   double width_pt,
+  uint64_t *job_id,
+  StemTeXRenderCallback callback,
+  void *user_data,
+  StemTeXErrorCode *error_code,
+  char **error_utf8
+);
+
+int stemtex_renderer_render_async_with_font_size(
+  StemTeXRenderer *renderer,
+  const char *snippet_utf8,
+  double width_pt,
+  double font_size_pt,
   uint64_t *job_id,
   StemTeXRenderCallback callback,
   void *user_data,
@@ -437,6 +494,21 @@ own control ranges.
 
 If `width_pt <= 0`, the renderer uses `360pt`.
 
+## Runtime Font Size
+
+Profile preambles should choose font families. Per-request font size belongs to
+the render call. Use the `_with_font_size` variants when the host needs runtime
+control:
+
+```text
+font_size_pt > 0  -> sent to TeX unchanged within the supported 1pt..200pt range
+font_size_pt <= 0 -> default 10pt
+```
+
+The default width-only functions keep their previous behavior and render at
+10pt. The live worker request protocol is now `width`, `font size`, then request
+file path.
+
 ## Summary JSON
 
 `summary_json_utf8` currently contains fields like:
@@ -449,6 +521,7 @@ If `width_pt <= 0`, the renderer uses `360pt`.
   "backend": "xdvipdfmxdaemon",
   "converterMode": "daemon-dll",
   "widthPt": 360.5,
+  "fontSizePt": 10,
   "requestToOutputMs": 203,
   "requestToPdfMs": 203,
   "requestToSvgMs": 0,

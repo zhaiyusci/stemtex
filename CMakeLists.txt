@@ -225,8 +225,14 @@ dumylang dumyhyph.tex
   ]=])
 endif()
 
+set(STEMTEX_STAGE_DEPENDS stemtex-renderer stemtex-worker-host)
+if(TARGET stemtex-renderer-gui)
+  list(APPEND STEMTEX_STAGE_DEPENDS stemtex-renderer-gui)
+endif()
+
 add_custom_target(stage
   COMMAND "${CMAKE_COMMAND}" --install "${CMAKE_BINARY_DIR}" --config "$<CONFIG>" --prefix "${CMAKE_CURRENT_SOURCE_DIR}/staging"
+  DEPENDS ${STEMTEX_STAGE_DEPENDS}
   COMMENT "Installing StemTeX staging tree"
 )
 

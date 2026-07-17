@@ -140,20 +140,38 @@ STEMTEX_API StemTeXRenderer *stemtex_renderer_create(const StemTeXConfig *config
 STEMTEX_API int stemtex_renderer_render(StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt,
                                             StemTeXRenderResult *result, StemTeXErrorCode *error_code,
                                             char **error_utf8);
+STEMTEX_API int stemtex_renderer_render_with_font_size(StemTeXRenderer *renderer, const char *snippet_utf8,
+                                                       double width_pt, double font_size_pt,
+                                                       StemTeXRenderResult *result,
+                                                       StemTeXErrorCode *error_code, char **error_utf8);
 STEMTEX_API int stemtex_renderer_render_pdf_bytes(StemTeXRenderer *renderer, const char *snippet_utf8,
                                                       double width_pt, StemTeXPdfBytes *pdf,
                                                       StemTeXRenderResult *result, StemTeXErrorCode *error_code,
                                                       char **error_utf8);
+STEMTEX_API int stemtex_renderer_render_pdf_bytes_with_font_size(
+    StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt, double font_size_pt, StemTeXPdfBytes *pdf,
+    StemTeXRenderResult *result, StemTeXErrorCode *error_code, char **error_utf8);
 STEMTEX_API int stemtex_renderer_render_output(StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt,
                                                StemTeXOutputFormat format, StemTeXRenderOutputResult *result,
                                                StemTeXErrorCode *error_code, char **error_utf8);
+STEMTEX_API int stemtex_renderer_render_output_with_font_size(
+    StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt, double font_size_pt,
+    StemTeXOutputFormat format, StemTeXRenderOutputResult *result, StemTeXErrorCode *error_code, char **error_utf8);
 STEMTEX_API int stemtex_renderer_render_output_bytes(StemTeXRenderer *renderer, const char *snippet_utf8,
                                                      double width_pt, StemTeXOutputFormat format,
                                                      StemTeXOutputBytes *bytes, StemTeXRenderOutputResult *result,
                                                      StemTeXErrorCode *error_code, char **error_utf8);
+STEMTEX_API int stemtex_renderer_render_output_bytes_with_font_size(
+    StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt, double font_size_pt,
+    StemTeXOutputFormat format, StemTeXOutputBytes *bytes, StemTeXRenderOutputResult *result,
+    StemTeXErrorCode *error_code, char **error_utf8);
 STEMTEX_API int stemtex_renderer_render_async(StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt,
                                                   uint64_t *job_id, StemTeXRenderCallback callback, void *user_data,
                                                   StemTeXErrorCode *error_code, char **error_utf8);
+STEMTEX_API int stemtex_renderer_render_async_with_font_size(StemTeXRenderer *renderer, const char *snippet_utf8,
+                                                             double width_pt, double font_size_pt, uint64_t *job_id,
+                                                             StemTeXRenderCallback callback, void *user_data,
+                                                             StemTeXErrorCode *error_code, char **error_utf8);
 STEMTEX_API int stemtex_renderer_restart(StemTeXRenderer *renderer, StemTeXErrorCode *error_code, char **error_utf8);
 STEMTEX_API int stemtex_renderer_cancel_current(StemTeXRenderer *renderer, StemTeXErrorCode *error_code,
                                                 char **error_utf8);

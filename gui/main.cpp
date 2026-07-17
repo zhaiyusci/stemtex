@@ -63,6 +63,7 @@
 namespace {
 
 constexpr double kWidthSliderScale = 10.0;
+constexpr double kDefaultFontSizePt = 10.0;
 
 std::mutex gRendererLifecycleMutex;
 
@@ -179,16 +180,21 @@ QString oneLineJsonMetric(const QString &summaryJson) {
   int outputBytes = obj.value("outputBytes").toInt(format == "SVG" ? obj.value("svgBytes").toInt()
                                                                     : obj.value("pdfBytes").toInt());
   int xetexNoPdfMs = qMax(0, totalMs - finalizeXdvMs - convertMs);
+  double widthPt = obj.value("widthPt").toDouble();
+  double fontSizePt = obj.value("fontSizePt").toDouble(kDefaultFontSizePt);
   return QString("Output: %1 via %2\n"
                  "XeTeX --no-pdf time: %3 ms\n"
                  "conversion time: %4 ms\n"
                  "Total time until %1 complete: %5 ms\n"
-                 "%1: %6 bytes, spare: %7/%8")
+                 "Layout: %6 pt width, %7 pt font\n"
+                 "%1: %8 bytes, spare: %9/%10")
       .arg(format)
       .arg(backend)
       .arg(xetexNoPdfMs)
       .arg(convertMs)
       .arg(totalMs)
+      .arg(widthPt, 0, 'f', 1)
+      .arg(fontSizePt, 0, 'f', 1)
       .arg(outputBytes)
       .arg(obj.value("spareReady").toInt())
       .arg(obj.value("spareTarget").toInt());
@@ -524,6 +530,12 @@ class MainWindow : public QMainWindow {
     widthSpin_->setDecimals(1);
     widthSpin_->setSuffix(" pt");
     widthSpin_->setValue(360.0);
+    fontSizeSpin_ = new QDoubleSpinBox(central);
+    fontSizeSpin_->setRange(1.0, 200.0);
+    fontSizeSpin_->setSingleStep(0.5);
+    fontSizeSpin_->setDecimals(1);
+    fontSizeSpin_->setSuffix(" pt");
+    fontSizeSpin_->setValue(kDefaultFontSizePt);
     dpiSpin_ = new QSpinBox(central);
     dpiSpin_->setRange(72, 1152);
     dpiSpin_->setSingleStep(24);
@@ -557,6 +569,8 @@ class MainWindow : public QMainWindow {
     layoutRow->addWidget(widthLabel);
     layoutRow->addWidget(widthSlider_, 1);
     layoutRow->addWidget(widthSpin_);
+    layoutRow->addWidget(new QLabel("字号", central));
+    layoutRow->addWidget(fontSizeSpin_);
     layoutRow->addWidget(new QLabel("DPI", central));
     layoutRow->addWidget(dpiSpin_);
     layoutRow->addWidget(new QLabel("裁切余量", central));
@@ -667,6 +681,7 @@ class MainWindow : public QMainWindow {
       updatePreviewMinimumWidth(value);
       scheduleAutoRender();
     });
+    connect(fontSizeSpin_, &QDoubleSpinBox::valueChanged, this, [this](double) { scheduleAutoRender(); });
     connect(dpiSpin_, &QSpinBox::valueChanged, this, [this](int) { rerenderLastPreview(); });
     connect(paddingSpin_, &QDoubleSpinBox::valueChanged, this, [this](double) { rerenderLastPreview(); });
     connect(encodingCombo_, &QComboBox::currentTextChanged, this, [this](const QString &) { scheduleAutoRender(); });
@@ -1040,6 +1055,7 @@ class MainWindow : public QMainWindow {
     QString snippet = editor_->text();
     QString encoding = encodingCombo_->currentText();
     double width = widthSpin_->value();
+    double fontSize = fontSizeSpin_->value();
     StemTeXOutputFormat outputFormat = selectedOutputFormat();
     QString outputLabel = outputFormat == STEMTEX_OUTPUT_SVG ? "SVG" : "PDF";
     refreshEngineStatus(QString("render %1 request submitted").arg(outputLabel));
@@ -1047,7 +1063,7 @@ class MainWindow : public QMainWindow {
     details_->clear();
     QByteArray text = encodeSnippetForTeX(snippet, encoding);
     uint64_t uiRequestId = ++latestUiRequestId_;
-    if (!postBackground([this, text, width, outputFormat, outputLabel, uiRequestId, generation]() {
+    if (!postBackground([this, text, width, fontSize, outputFormat, outputLabel, uiRequestId, generation]() {
       StemTeXErrorCode code = STEMTEX_OK;
       char *error = nullptr;
       StemTeXRenderOutputResult result{};
@@ -1062,7 +1078,8 @@ class MainWindow : public QMainWindow {
         }
         if (renderer && !shuttingDown_.load() && generation == rendererGeneration_.load() &&
             uiRequestId == latestUiRequestId_.load()) {
-          ok = stemtex_renderer_render_output(renderer, text.constData(), width, outputFormat, &result, &code, &error);
+          ok = stemtex_renderer_render_output_with_font_size(renderer, text.constData(), width, fontSize, outputFormat,
+                                                             &result, &code, &error);
         } else {
           code = STEMTEX_ERROR_CANCELLED;
         }
@@ -1253,6 +1270,7 @@ class MainWindow : public QMainWindow {
   QsciScintilla *editor_ = nullptr;
   QSlider *widthSlider_ = nullptr;
   QDoubleSpinBox *widthSpin_ = nullptr;
+  QDoubleSpinBox *fontSizeSpin_ = nullptr;
   QSpinBox *dpiSpin_ = nullptr;
   QDoubleSpinBox *paddingSpin_ = nullptr;
   QLabel *texmfLabel_ = nullptr;

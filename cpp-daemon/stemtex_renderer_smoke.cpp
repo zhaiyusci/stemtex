@@ -36,6 +36,7 @@ struct SmokeOptions {
   std::string case_name;
   int spare_workers = 0;
   double width_pt = 360.0;
+  double font_size_pt = 10.0;
   std::string worker_template;
   bool allow_exe = false;
 };
@@ -43,7 +44,7 @@ struct SmokeOptions {
 static void print_usage(const char *argv0) {
   std::fprintf(stderr,
                "Usage:\n"
-               "  %s [--repo PATH] [--runtime PATH] [--texmf PATH] --profile PATH [--runs N] [--case NAME] [--spares N] [--width PT]\n"
+               "  %s [--repo PATH] [--runtime PATH] [--texmf PATH] --profile PATH [--runs N] [--case NAME] [--spares N] [--width PT] [--font-size PT]\n"
                "  %s --profile PATH --case async --runs 5 --spares 2\n"
                "\n"
                "Cases: default, validate, refresh, physics, fonts, chem-text, bad,\n"
@@ -92,6 +93,8 @@ static SmokeOptions parse_options(int argc, char **argv) {
       opts.spare_workers = std::atoi(need_value("--spares"));
     } else if (arg == "--width") {
       opts.width_pt = std::atof(need_value("--width"));
+    } else if (arg == "--font-size") {
+      opts.font_size_pt = std::atof(need_value("--font-size"));
     } else if (arg == "--worker-template") {
       opts.worker_template = need_value("--worker-template");
     } else if (arg == "--allow-exe") {
@@ -183,6 +186,7 @@ int main(int argc, char **argv) {
   int runs = opts.runs;
   std::string case_name = opts.case_name;
   double width_pt = opts.width_pt;
+  double font_size_pt = opts.font_size_pt;
   cfg.spare_worker_count = opts.spare_workers;
   cfg.worker_template_utf8 = opts.worker_template.empty() ? nullptr : opts.worker_template.c_str();
   cfg.request_timeout_ms = 90000;
@@ -195,6 +199,7 @@ int main(int argc, char **argv) {
   std::printf("texmfRoot=%s\n", texmf_root_utf8.c_str());
   std::printf("profileRoot=%s\n", profile_root_utf8.c_str());
   std::printf("widthPt=%.6g\n", width_pt);
+  std::printf("fontSizePt=%.6g\n", font_size_pt);
   std::printf("runtimeHasWorkerHost=%d runtimeHasXetexdaemon=%d runtimeHasDvipdfmxDaemonDll=%d profileHasWarmup=%d profileHasWarmupXdv=%d\n",
               fs::exists(runtime_root / "bin" / "windows" / "stemtex-worker-host.exe") ? 1 : 0,
               fs::exists(runtime_root / "bin" / "windows" / "xetexdaemon.exe") ? 1 : 0,
@@ -754,9 +759,10 @@ int main(int argc, char **argv) {
       StemTeXRenderOutputResult result{};
       StemTeXOutputBytes output{};
       int ok = bytes_case
-                   ? stemtex_renderer_render_output_bytes(renderer, snippet, width_pt, format, &output, &result,
-                                                          &error_code, &error)
-                   : stemtex_renderer_render_output(renderer, snippet, width_pt, format, &result, &error_code, &error);
+                   ? stemtex_renderer_render_output_bytes_with_font_size(renderer, snippet, width_pt, font_size_pt,
+                                                                         format, &output, &result, &error_code, &error)
+                   : stemtex_renderer_render_output_with_font_size(renderer, snippet, width_pt, font_size_pt, format,
+                                                                   &result, &error_code, &error);
       if (!ok) {
         long long render_end = now_ms();
         std::fprintf(stderr, "run=%d renderMs=%lld\n", i + 1, render_end - render_start);
@@ -798,8 +804,10 @@ int main(int argc, char **argv) {
     StemTeXRenderResult result{};
     StemTeXPdfBytes pdf{};
     int ok = case_name == "--bytes"
-                 ? stemtex_renderer_render_pdf_bytes(renderer, snippet, width_pt, &pdf, &result, &error_code, &error)
-                 : stemtex_renderer_render(renderer, snippet, width_pt, &result, &error_code, &error);
+                 ? stemtex_renderer_render_pdf_bytes_with_font_size(renderer, snippet, width_pt, font_size_pt, &pdf,
+                                                                    &result, &error_code, &error)
+                 : stemtex_renderer_render_with_font_size(renderer, snippet, width_pt, font_size_pt, &result,
+                                                          &error_code, &error);
     if (!ok) {
       long long render_end = now_ms();
       std::fprintf(stderr, "run=%d renderMs=%lld\n", i + 1, render_end - render_start);

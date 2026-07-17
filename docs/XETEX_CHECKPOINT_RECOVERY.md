@@ -37,6 +37,8 @@ After that, the request loop continues normally:
   \advance\snippetcount by 1
   \typeout{WORKER_WAIT:\the\snippetcount}%
   \read16 to\snippetHsize
+  \read16 to\stemtexfontsizeline
+  \read16 to\requestfile
   ...
 }
 ```
@@ -58,7 +60,7 @@ Then it restores the checkpoint and long-jumps back to the long-lived
 `WORKER_WAIT:N` before reporting the snippet failure to the caller. This is the
 important synchronization point: `STEMTEX_RESTORED` alone is only a restore
 signal; the next `WORKER_WAIT` proves that XeTeX is back at the request loop and
-ready for the next stdin pair. The numeric suffix is diagnostic only; the C++
+ready for the next stdin request triple. The numeric suffix is diagnostic only; the C++
 renderer does not require it to be monotonic after a checkpoint restore.
 
 ## Captured State

@@ -756,9 +756,14 @@ struct RenderOutput {
 
 constexpr int kWorkerMaxRenderableRequests = 60000;
 constexpr uint64_t kWorkerMaxCumulativeXdvBytes = 1536ull * 1024ull * 1024ull;
+constexpr double kDefaultFontSizePt = 10.0;
+constexpr double kMinFontSizePt = 1.0;
+constexpr double kMaxFontSizePt = 200.0;
 
 constexpr const char *kDefaultWorkerTemplate = R"STEMTEX_WORKER(\input{@@STEMTEX_PREAMBLE@@}
 \newcount\snippetcount
+\newdimen\stemtexfontsize
+\newdimen\stemtexbaselineskip
 \newif\ifstemtexcheckpointed
 \def\workerstopline{\workerstop}
 \def\stemtexemptyline{}
@@ -775,6 +780,7 @@ constexpr const char *kDefaultWorkerTemplate = R"STEMTEX_WORKER(\input{@@STEMTEX
   \ifx\snippetHsize\workerstopline
     \typeout{WORKER_STOPPED}%
   \else
+    \read16 to\stemtexfontsizeline
     \read16 to\requestfile
     \scrollmode
     \begin{preview}%
@@ -785,7 +791,9 @@ constexpr const char *kDefaultWorkerTemplate = R"STEMTEX_WORKER(\input{@@STEMTEX
         \setcounter{page}{1}%
         \setcounter{equation}{0}%
         \setcounter{footnote}{0}%
-        \normalfont\normalsize\normalcolor
+        \stemtexfontsize=\stemtexfontsizeline
+        \stemtexbaselineskip=1.2\stemtexfontsize
+        \normalfont\fontsize{\the\stemtexfontsize}{\the\stemtexbaselineskip}\selectfont\normalcolor
         \input\requestfile
         \par
         \endgroup
@@ -1447,6 +1455,13 @@ double effective_width(const RendererConfig &cfg, double width) {
   return normalize_default_width(cfg.default_width_pt);
 }
 
+double effective_font_size(double font_size_pt) {
+  if (!std::isfinite(font_size_pt) || font_size_pt <= 0.0) return kDefaultFontSizePt;
+  if (font_size_pt < kMinFontSizePt) return kMinFontSizePt;
+  if (font_size_pt > kMaxFontSizePt) return kMaxFontSizePt;
+  return font_size_pt;
+}
+
 std::string format_decimal(double value) {
   if (!std::isfinite(value)) return "0";
   std::ostringstream s;
@@ -1757,6 +1772,7 @@ struct StemTeXRenderer {
     }
     try {
       slot.child.write_stdin("360pt\n");
+      slot.child.write_stdin(format_decimal(kDefaultFontSizePt) + "pt\n");
       slot.child.write_stdin(slash_path(req_path) + "\n");
     } catch (...) {
       std::string tail;
@@ -1796,9 +1812,10 @@ struct StemTeXRenderer {
     slot.xdv_page_count = 1;
   }
 
-  void write_render_request_or_recover(WorkerSlot &slot, double width_pt, const fs::path &req_path) {
+  void write_render_request_or_recover(WorkerSlot &slot, double width_pt, double font_size_pt, const fs::path &req_path) {
     try {
       slot.child.write_stdin(format_decimal(width_pt) + "pt\n");
+      slot.child.write_stdin(format_decimal(font_size_pt) + "pt\n");
       slot.child.write_stdin(slash_path(req_path) + "\n");
     } catch (...) {
       std::string tail;
@@ -2070,18 +2087,20 @@ struct StemTeXRenderer {
     uint64_t id = 0;
     std::string snippet;
     double width_pt = 0.0;
+    double font_size_pt = kDefaultFontSizePt;
     StemTeXRenderCallback callback = nullptr;
     void *user_data = nullptr;
   };
 
-  uint64_t submit_async(std::string snippet, double width_pt, uint64_t *job_id, StemTeXRenderCallback callback, void *user_data) {
+  uint64_t submit_async(std::string snippet, double width_pt, double font_size_pt, uint64_t *job_id,
+                        StemTeXRenderCallback callback, void *user_data) {
     std::lock_guard<std::mutex> lock(async_mu);
     uint64_t id = ++next_async_job_id;
     if (job_id) *job_id = id;
     if (async_pending) {
       async_cancelled.push_back(std::move(*async_pending));
     }
-    async_pending = AsyncJob{id, std::move(snippet), width_pt, callback, user_data};
+    async_pending = AsyncJob{id, std::move(snippet), width_pt, effective_font_size(font_size_pt), callback, user_data};
     snapshot_async_pending.store(1);
     snapshot_pending_job_id.store(id);
     if (status.load() == STEMTEX_STATUS_READY && !snapshot_async_running.load()) {
@@ -2190,7 +2209,7 @@ struct StemTeXRenderer {
       std::string error;
       int ok = 0;
       try {
-        result = render(job->snippet, job->width_pt);
+        result = render(job->snippet, job->width_pt, job->font_size_pt);
         ok = 1;
       } catch (const std::exception &e) {
         code = exception_code(e);
@@ -2224,7 +2243,7 @@ struct StemTeXRenderer {
     }
   }
 
-  RenderOutput render_output(const std::string &snippet, double width_pt, RenderFormat format) {
+  RenderOutput render_output(const std::string &snippet, double width_pt, double font_size_pt, RenderFormat format) {
     std::lock_guard<std::mutex> render_lock(render_mu);
     publish_status_and_counts_locked(STEMTEX_STATUS_RENDERING, STEMTEX_STAGE_TYPESETTING);
     ensure_primary_ready_locked();
@@ -2253,7 +2272,8 @@ struct StemTeXRenderer {
       cancel_requested = false;
     }
     double resolved_width_pt = effective_width(cfg, width_pt);
-    write_render_request_or_recover(slot, resolved_width_pt, req_path);
+    double resolved_font_size_pt = effective_font_size(font_size_pt);
+    write_render_request_or_recover(slot, resolved_width_pt, resolved_font_size_pt, req_path);
 
     {
       std::unique_lock<std::mutex> lock(slot.mu);
@@ -2418,6 +2438,7 @@ struct StemTeXRenderer {
             << "\"issueFlags\":" << xdvipdfmx_issue_flags << ","
             << "\"outcomeMessage\":\"" << json_escape(xdvipdfmx_issue_message) << "\","
             << "\"widthPt\":" << format_decimal(resolved_width_pt) << ","
+            << "\"fontSizePt\":" << format_decimal(resolved_font_size_pt) << ","
             << "\"requestToOutputMs\":" << (end - start) << ","
             << "\"requestToPdfMs\":" << (format == RenderFormat::Svg ? 0 : (end - start)) << ","
             << "\"requestToSvgMs\":" << (format == RenderFormat::Svg ? (end - start) : 0) << ","
@@ -2460,8 +2481,8 @@ struct StemTeXRenderer {
     return result;
   }
 
-  StemTeXRenderResult render(const std::string &snippet, double width_pt) {
-    RenderOutput output = render_output(snippet, width_pt, RenderFormat::Pdf);
+  StemTeXRenderResult render(const std::string &snippet, double width_pt, double font_size_pt = kDefaultFontSizePt) {
+    RenderOutput output = render_output(snippet, width_pt, font_size_pt, RenderFormat::Pdf);
     StemTeXRenderResult result{};
     result.request_id_utf8 = alloc_c_string(output.request_id);
     result.pdf_path_utf8 = alloc_c_string(output.output_path.string());
@@ -2557,13 +2578,21 @@ STEMTEX_API StemTeXRenderer *stemtex_renderer_create(const StemTeXConfig *config
 STEMTEX_API int stemtex_renderer_render(StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt,
                                         StemTeXRenderResult *result, StemTeXErrorCode *error_code,
                                         char **error_utf8) {
+  return stemtex_renderer_render_with_font_size(renderer, snippet_utf8, width_pt, kDefaultFontSizePt, result,
+                                                error_code, error_utf8);
+}
+
+STEMTEX_API int stemtex_renderer_render_with_font_size(StemTeXRenderer *renderer, const char *snippet_utf8,
+                                                       double width_pt, double font_size_pt,
+                                                       StemTeXRenderResult *result,
+                                                       StemTeXErrorCode *error_code, char **error_utf8) {
   if (!renderer || !snippet_utf8 || !result) {
     if (renderer) renderer->set_last_outcome(STEMTEX_RENDER_OUTCOME_INVALID_ARGUMENT, 0, "Invalid argument");
     set_error_outputs(STEMTEX_ERROR_INVALID_ARGUMENT, "Invalid argument", error_code, error_utf8);
     return 0;
   }
   try {
-    *result = renderer->render(snippet_utf8, width_pt);
+    *result = renderer->render(snippet_utf8, width_pt, font_size_pt);
     if (error_code) *error_code = STEMTEX_OK;
     return 1;
   } catch (const std::exception &e) {
@@ -2586,6 +2615,13 @@ STEMTEX_API int stemtex_renderer_render_pdf_bytes(StemTeXRenderer *renderer, con
                                                   double width_pt, StemTeXPdfBytes *pdf,
                                                   StemTeXRenderResult *result, StemTeXErrorCode *error_code,
                                                   char **error_utf8) {
+  return stemtex_renderer_render_pdf_bytes_with_font_size(renderer, snippet_utf8, width_pt, kDefaultFontSizePt, pdf,
+                                                          result, error_code, error_utf8);
+}
+
+STEMTEX_API int stemtex_renderer_render_pdf_bytes_with_font_size(
+    StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt, double font_size_pt, StemTeXPdfBytes *pdf,
+    StemTeXRenderResult *result, StemTeXErrorCode *error_code, char **error_utf8) {
   if (!pdf) {
     if (renderer) renderer->set_last_outcome(STEMTEX_RENDER_OUTCOME_INVALID_ARGUMENT, 0, "Invalid argument");
     set_error_outputs(STEMTEX_ERROR_INVALID_ARGUMENT, "Invalid argument", error_code, error_utf8);
@@ -2595,7 +2631,8 @@ STEMTEX_API int stemtex_renderer_render_pdf_bytes(StemTeXRenderer *renderer, con
   pdf->size = 0;
   StemTeXRenderResult local_result{};
   StemTeXRenderResult *target = result ? result : &local_result;
-  if (!stemtex_renderer_render(renderer, snippet_utf8, width_pt, target, error_code, error_utf8)) return 0;
+  if (!stemtex_renderer_render_with_font_size(renderer, snippet_utf8, width_pt, font_size_pt, target, error_code,
+                                              error_utf8)) return 0;
   try {
     auto bytes = read_file(target->pdf_path_utf8);
     pdf->data = static_cast<unsigned char *>(CoTaskMemAlloc(bytes.size()));
@@ -2622,13 +2659,20 @@ STEMTEX_API int stemtex_renderer_render_pdf_bytes(StemTeXRenderer *renderer, con
 STEMTEX_API int stemtex_renderer_render_output(StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt,
                                                StemTeXOutputFormat format, StemTeXRenderOutputResult *result,
                                                StemTeXErrorCode *error_code, char **error_utf8) {
+  return stemtex_renderer_render_output_with_font_size(renderer, snippet_utf8, width_pt, kDefaultFontSizePt, format,
+                                                       result, error_code, error_utf8);
+}
+
+STEMTEX_API int stemtex_renderer_render_output_with_font_size(
+    StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt, double font_size_pt,
+    StemTeXOutputFormat format, StemTeXRenderOutputResult *result, StemTeXErrorCode *error_code, char **error_utf8) {
   if (!renderer || !snippet_utf8 || !result) {
     if (renderer) renderer->set_last_outcome(STEMTEX_RENDER_OUTCOME_INVALID_ARGUMENT, 0, "Invalid argument");
     set_error_outputs(STEMTEX_ERROR_INVALID_ARGUMENT, "Invalid argument", error_code, error_utf8);
     return 0;
   }
   try {
-    RenderOutput output = renderer->render_output(snippet_utf8, width_pt, render_format_from_api(format));
+    RenderOutput output = renderer->render_output(snippet_utf8, width_pt, font_size_pt, render_format_from_api(format));
     *result = output_result_to_api(output);
     if (error_code) *error_code = STEMTEX_OK;
     return 1;
@@ -2652,6 +2696,14 @@ STEMTEX_API int stemtex_renderer_render_output_bytes(StemTeXRenderer *renderer, 
                                                      double width_pt, StemTeXOutputFormat format,
                                                      StemTeXOutputBytes *bytes, StemTeXRenderOutputResult *result,
                                                      StemTeXErrorCode *error_code, char **error_utf8) {
+  return stemtex_renderer_render_output_bytes_with_font_size(renderer, snippet_utf8, width_pt, kDefaultFontSizePt,
+                                                             format, bytes, result, error_code, error_utf8);
+}
+
+STEMTEX_API int stemtex_renderer_render_output_bytes_with_font_size(
+    StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt, double font_size_pt,
+    StemTeXOutputFormat format, StemTeXOutputBytes *bytes, StemTeXRenderOutputResult *result,
+    StemTeXErrorCode *error_code, char **error_utf8) {
   if (!bytes) {
     if (renderer) renderer->set_last_outcome(STEMTEX_RENDER_OUTCOME_INVALID_ARGUMENT, 0, "Invalid argument");
     set_error_outputs(STEMTEX_ERROR_INVALID_ARGUMENT, "Invalid argument", error_code, error_utf8);
@@ -2661,7 +2713,8 @@ STEMTEX_API int stemtex_renderer_render_output_bytes(StemTeXRenderer *renderer, 
   bytes->size = 0;
   StemTeXRenderOutputResult local_result{};
   StemTeXRenderOutputResult *target = result ? result : &local_result;
-  if (!stemtex_renderer_render_output(renderer, snippet_utf8, width_pt, format, target, error_code, error_utf8)) return 0;
+  if (!stemtex_renderer_render_output_with_font_size(renderer, snippet_utf8, width_pt, font_size_pt, format, target,
+                                                     error_code, error_utf8)) return 0;
   try {
     auto file_bytes = read_file(target->output_path_utf8);
     bytes->data = static_cast<unsigned char *>(CoTaskMemAlloc(file_bytes.size()));
@@ -2688,13 +2741,21 @@ STEMTEX_API int stemtex_renderer_render_output_bytes(StemTeXRenderer *renderer, 
 STEMTEX_API int stemtex_renderer_render_async(StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt,
                                               uint64_t *job_id, StemTeXRenderCallback callback, void *user_data,
                                               StemTeXErrorCode *error_code, char **error_utf8) {
+  return stemtex_renderer_render_async_with_font_size(renderer, snippet_utf8, width_pt, kDefaultFontSizePt, job_id,
+                                                      callback, user_data, error_code, error_utf8);
+}
+
+STEMTEX_API int stemtex_renderer_render_async_with_font_size(StemTeXRenderer *renderer, const char *snippet_utf8,
+                                                             double width_pt, double font_size_pt, uint64_t *job_id,
+                                                             StemTeXRenderCallback callback, void *user_data,
+                                                             StemTeXErrorCode *error_code, char **error_utf8) {
   if (!renderer || !snippet_utf8 || !callback) {
     if (renderer) renderer->set_last_outcome(STEMTEX_RENDER_OUTCOME_INVALID_ARGUMENT, 0, "Invalid argument");
     set_error_outputs(STEMTEX_ERROR_INVALID_ARGUMENT, "Invalid argument", error_code, error_utf8);
     return 0;
   }
   try {
-    renderer->submit_async(snippet_utf8, width_pt, job_id, callback, user_data);
+    renderer->submit_async(snippet_utf8, width_pt, font_size_pt, job_id, callback, user_data);
     if (error_code) *error_code = STEMTEX_OK;
     return 1;
   } catch (const std::exception &e) {
