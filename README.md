@@ -117,6 +117,7 @@ meaningful:
 | --- | --- |
 | `unicodemath` | Broad Latin STEM profile with math, chemistry, physics, color, and cancel. |
 | `unicodemath_cjk` | Broad CJK STEM profile with the same package set; this is the default maintained warmup target. |
+| `xits_cjk` | Times-compatible XITS text and math for Word-oriented academic documents, with Windows CJK fonts. |
 
 ## Build
 

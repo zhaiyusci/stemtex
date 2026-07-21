@@ -113,6 +113,7 @@ if(STEMTEX_INSTALL_TEXMF)
     fonts/map/dvips/lm
     fonts/opentype/public/lm
     fonts/opentype/public/lm-math
+    fonts/opentype/public/xits
     fonts/source/public/amsfonts
     fonts/source/public/cm
     fonts/source/public/latex-fonts
@@ -155,6 +156,7 @@ if(STEMTEX_INSTALL_TEXMF)
     tex/xelatex/xecjk
     tex/latex/lm
     tex/plain/amsfonts
+    doc/fonts/xits
   )
   foreach(rel IN LISTS STEMTEX_TEXMF_DIRS)
     get_filename_component(rel_parent "${rel}" DIRECTORY)
