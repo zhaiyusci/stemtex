@@ -51,7 +51,7 @@ static void print_usage(const char *argv0) {
                "       bad-then-good, bad-then-good-wait, bad-then-good-wait-long,\n"
                "       bad-stress, latin-math, latin-text, restart, async,\n"
                "       async-callback-throw, cancel,\n"
-               "       recover-no-worker, bad-corpus, bad-output-corpus, lifecycle-stress,\n"
+               "       recover-no-worker, bad-corpus, bad-output-corpus, list-state, lifecycle-stress,\n"
                "       profile-switch-stress, bytes, output-pdf, output-pdf-bytes,\n"
                "       svg, svg-bytes\n",
                argv0, argv0);
@@ -384,6 +384,9 @@ int main(int argc, char **argv) {
         {"mathrm-text-mode", "\\mathrm{Roman text}"},
         {"mathbb-text-mode", "\\mathbb{R}"},
         {"operatorname-text-mode", "\\operatorname{rank}"},
+        {"unclosed-enumerate", "\\begin{enumerate}\\item leaked"},
+        {"unclosed-itemize", "\\begin{itemize}\\item leaked"},
+        {"mismatched-list-end", "\\begin{enumerate}\\item one\\end{itemize}"},
         {"open-textcolor", u8"\u8fd9\u662f\u4e00\u6bb5\uff1a\\textcolor{blue}{\u84dd\u8272\u6587\u5b57"},
         {"input-missing-file", "\\input{definitely-not-existing-file}"},
     };
@@ -487,6 +490,9 @@ int main(int argc, char **argv) {
         {"subscript-text-mode", "_abc"},
         {"superscript-text-mode", "^abc"},
         {"item-outside-list", "\\item hello"},
+        {"unclosed-enumerate", "\\begin{enumerate}\\item leaked"},
+        {"unclosed-itemize", "\\begin{itemize}\\item leaked"},
+        {"mismatched-list-end", "\\begin{enumerate}\\item one\\end{itemize}"},
         {"cr-outside-alignment", "\\cr"},
         {"extra-close-brace", "hello }"},
         {"open-textcolor", u8"\u8fd9\u662f\u4e00\u6bb5\uff1a\\textcolor{blue}{\u84dd\u8272\u6587\u5b57"},
@@ -501,6 +507,7 @@ int main(int argc, char **argv) {
         {"mathrm-text-mode", "\\mathrm{Roman text}"},
         {"bad-matrix-row", "$\\begin{matrix} a & b \\\\ c \\end{pmatrix}$"},
         {"orphan-end", "\\end{equation}"},
+        {"unclosed-enumerate", "\\begin{enumerate}\\item leaked"},
         {"open-textcolor", u8"\u8fd9\u662f\u4e00\u6bb5\uff1a\\textcolor{blue}{\u84dd\u8272\u6587\u5b57"},
         {"open-group", "\\begingroup unfinished"},
         {"input-missing-file", "\\input{definitely-not-existing-file}"},
@@ -572,6 +579,94 @@ int main(int argc, char **argv) {
     std::printf("badCorpus passed=%d failed=%d total=%zu\n", passed, failed, selected_cases.size());
     std::printf("badCorpus logTail:\n%s\n", tail ? tail : "");
     stemtex_renderer_free_string(tail);
+    stemtex_renderer_destroy(renderer);
+    return failed == 0 ? 0 : 1;
+  } else if (case_name == "--list-state") {
+    auto list_state_probe = [](const char *label) {
+      return std::string("\\ifnum\\csname @listdepth\\endcsname=0 \\else\\errmessage{STEMTEX listdepth leaked at ") +
+             label +
+             "}\\fi"
+             "\\ifnum\\csname @itemdepth\\endcsname=0 \\else\\errmessage{STEMTEX itemdepth leaked at " +
+             label +
+             "}\\fi"
+             "\\ifnum\\csname @enumdepth\\endcsname=0 \\else\\errmessage{STEMTEX enumdepth leaked at " +
+             label +
+             "}\\fi"
+             "\\ifnum\\csname c@enumi\\endcsname=0 \\else\\errmessage{STEMTEX enumi leaked at " +
+             label +
+             "}\\fi"
+             "\\ifnum\\csname c@enumii\\endcsname=0 \\else\\errmessage{STEMTEX enumii leaked at " +
+             label + "}\\fi"
+             "\\typeout{STEMTEX_LIST_STATE_OK:" +
+             label + "} state probe";
+    };
+    auto render_success = [&](const char *name, const std::string &body) {
+      StemTeXRenderResult result{};
+      long long render_start = now_ms();
+      int ok = stemtex_renderer_render_with_font_size(renderer, body.c_str(), width_pt, font_size_pt, &result,
+                                                      &error_code, &error);
+      long long render_end = now_ms();
+      if (ok) {
+        std::printf("listState case=%s ok=1 code=%d ms=%lld pdf=%s\n", name, (int)error_code, render_end - render_start,
+                    result.pdf_path_utf8 ? result.pdf_path_utf8 : "");
+        stemtex_renderer_free_result(&result);
+        return true;
+      }
+      std::printf("listState case=%s ok=0 code=%d ms=%lld err=%s\n", name, (int)error_code, render_end - render_start,
+                  error ? error : "");
+      stemtex_renderer_free_string(error);
+      error = nullptr;
+      return false;
+    };
+    auto render_tex_error = [&](const char *name, const std::string &body) {
+      StemTeXRenderResult result{};
+      long long render_start = now_ms();
+      int ok = stemtex_renderer_render_with_font_size(renderer, body.c_str(), width_pt, font_size_pt, &result,
+                                                      &error_code, &error);
+      long long render_end = now_ms();
+      bool expected = !ok && error_code == STEMTEX_ERROR_TEX_SNIPPET;
+      std::printf("listState case=%s ok=%d code=%d expectedTexError=%d ms=%lld\n", name, ok, (int)error_code,
+                  expected ? 1 : 0, render_end - render_start);
+      if (ok) {
+        stemtex_renderer_free_result(&result);
+      } else {
+        if (error) {
+          std::string err(error);
+          size_t nl = err.find('\n');
+          if (nl != std::string::npos) err.resize(nl);
+          std::printf("listState case=%s error=%s\n", name, err.c_str());
+        }
+        stemtex_renderer_free_string(error);
+        error = nullptr;
+      }
+      return expected;
+    };
+
+    int failed = 0;
+    failed += render_success("closed-nested-lists",
+                             "\\begin{enumerate}\\item outer\\begin{enumerate}\\item inner\\end{enumerate}"
+                             "\\item second\\end{enumerate}\\begin{itemize}\\item bullet\\end{itemize}")
+                  ? 0
+                  : 1;
+    failed += render_success("probe-after-good", list_state_probe("after-good")) ? 0 : 1;
+    failed += render_tex_error("unclosed-enumerate", "\\begin{enumerate}\\item leaked\\begin{itemize}\\item nested")
+                  ? 0
+                  : 1;
+    StemTeXEngineSnapshot after_bad = get_snapshot(renderer);
+    bool worker_ready = after_bad.status == STEMTEX_STATUS_READY && after_bad.primary_ready;
+    std::printf("listState afterBad status=%d stage=%d primary=%d spare=%d/%d rebuilding=%d\n",
+                (int)after_bad.status, (int)after_bad.stage, after_bad.primary_ready, after_bad.spare_ready,
+                after_bad.spare_target, after_bad.spare_rebuilding);
+    if (!worker_ready) ++failed;
+    failed += render_success("probe-after-bad", list_state_probe("after-bad")) ? 0 : 1;
+    failed += render_success("fresh-lists",
+                             "\\begin{itemize}\\item fresh bullet\\end{itemize}"
+                             "\\begin{enumerate}\\item fresh one\\item fresh two\\end{enumerate}")
+                  ? 0
+                  : 1;
+    failed += render_success("probe-after-fresh", list_state_probe("after-fresh")) ? 0 : 1;
+
+    std::printf("listState failed=%d\n", failed);
     stemtex_renderer_destroy(renderer);
     return failed == 0 ? 0 : 1;
   } else if (case_name == "--chem-text") {

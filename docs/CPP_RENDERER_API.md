@@ -652,6 +652,7 @@ $profile = ".\gui\profiles\unicodemath_cjk"
 & $smoke --repo $repo --runtime $runtime --profile $profile --case physics
 & $smoke --repo $repo --runtime $runtime --profile $profile --case bad-corpus --spares 0
 & $smoke --repo $repo --runtime $runtime --profile $profile --case bad-output-corpus --spares 0
+& $smoke --repo $repo --runtime $runtime --profile $profile --case list-state --spares 0
 ```
 
 Useful options:
@@ -681,4 +682,5 @@ console output from the smoke executable. Useful cases are:
 - cold create/warmup/live-worker startup;
 - physics, font, and chemistry representative snippets;
 - the expected bad-snippet error path;
+- fragment-local list state after `itemize`/`enumerate`;
 - the hot-spare failover path.

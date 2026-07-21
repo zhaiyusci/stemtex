@@ -768,6 +768,27 @@ constexpr const char *kDefaultWorkerTemplate = R"STEMTEX_WORKER(\input{@@STEMTEX
 \def\workerstopline{\workerstop}
 \def\stemtexemptyline{}
 \pagestyle{empty}
+\makeatletter
+\def\stemtexresetfragmentstate{%
+  \setcounter{page}{1}%
+  \setcounter{equation}{0}%
+  \setcounter{footnote}{0}%
+  \setcounter{enumi}{0}%
+  \setcounter{enumii}{0}%
+  \setcounter{enumiii}{0}%
+  \setcounter{enumiv}{0}%
+  \global\@listdepth=\z@
+  \@itemdepth=\z@
+  \@enumdepth=\z@
+  \global\@inlabelfalse
+  \global\@newlistfalse
+  \global\@noparitemfalse
+  \global\@noparlistfalse
+  \@noitemargfalse
+  \@nmbrlistfalse
+  \global\setbox\@labels=\box\voidb@x
+}%
+\makeatother
 \begin{document}
 \typeout{WORKER_READY}
 \def\workerloop{%
@@ -788,9 +809,7 @@ constexpr const char *kDefaultWorkerTemplate = R"STEMTEX_WORKER(\input{@@STEMTEX
         \hsize=\snippetHsize
         \parindent=0pt
         \begingroup
-        \setcounter{page}{1}%
-        \setcounter{equation}{0}%
-        \setcounter{footnote}{0}%
+        \stemtexresetfragmentstate
         \stemtexfontsize=\stemtexfontsizeline
         \stemtexbaselineskip=1.2\stemtexfontsize
         \normalfont\fontsize{\the\stemtexfontsize}{\the\stemtexbaselineskip}\selectfont\normalcolor

@@ -150,6 +150,8 @@ relevant cases are:
   math mode;
 - `bad-output-corpus` with `SPARES=0`: PDF and SVG output recovery after bad
   snippets;
+- `list-state` with `SPARES=0`: repeated `itemize`/`enumerate` snippets and a
+  malformed open list, verifying fragment-local list state returns to zero;
 - `lifecycle-stress` with `SPARES=1`: repeated create/render/destroy cycles;
 - `profile-switch-stress` with `SPARES=1`: alternating `unicodemath_cjk` and
   `unicodemath`;
@@ -168,14 +170,16 @@ $profile = ".\gui\profiles\unicodemath_cjk"
 & $smoke --repo $repo --runtime $runtime --profile $profile --case bad-corpus --spares 0 --runs 1
 & $smoke --repo $repo --runtime $runtime --profile $profile --case checkpoint-critical --spares 0 --runs 1
 & $smoke --repo $repo --runtime $runtime --profile $profile --case bad-output-corpus --spares 0 --runs 1
+& $smoke --repo $repo --runtime $runtime --profile $profile --case list-state --spares 0 --runs 1
 ```
 
 Expected result:
 
 ```text
-badCorpus passed=29 failed=0 total=29
-badCorpus passed=8 failed=0 total=8
-badOutput passed=16 failed=0 total=16
+badCorpus passed=32 failed=0 total=32
+badCorpus passed=9 failed=0 total=9
+badOutput passed=22 failed=0 total=22
+listState failed=0
 ```
 
 ## Known Boundaries
