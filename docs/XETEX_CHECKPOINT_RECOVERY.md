@@ -63,30 +63,44 @@ signal; the next `WORKER_WAIT` proves that XeTeX is back at the request loop and
 ready for the next stdin request triple. The numeric suffix is diagnostic only; the C++
 renderer does not require it to be monotonic after a checkpoint restore.
 
-## Captured State
+## Captured State Model
 
-The checkpoint currently saves and restores:
+The checkpoint has two layers.
 
-- main memory, eqtb, hash table, save stack, nest stack, input stack, parameter
-  stack, if/group stacks;
+The first layer is the TeX user-state layer. It follows the inventory used by
+XeTeX's `storefmtfile()`/`loadfmtfile()` path, but keeps the snapshot in memory
+instead of writing a real `.fmt` file. This layer saves and restores:
+
+- main memory, eqtb, and hash table;
 - string pool and string-start table;
-- current input/scanner state, grouping state, conditionals, paragraph tokens,
-  interaction mode, and error counters;
 - allocator/hash/string scalar state such as `lomemmax`, `himemmin`,
   `hashused`, `poolptr`, and `strptr`;
-- paragraph building, math-list conversion, line breaking, hyphenation, page
-  builder, and e-TeX direction/last-line-fit scratch state;
-- TeX memory-backed caches outside `mem`, currently including `fontglue`. This
-  matters because successful snippets can populate per-font glue specs that
-  point into `mem`; after a later error restores `mem` to the warmup baseline,
-  those cached pointers must also be restored or invalidated.
+- font state from the format-dump model: `fontinfo`, `fontptr`, `fmemptr`, font
+  metric/base arrays, font names/areas, font flags, font mappings/layout-engine
+  pointers, `fontused`, and `fontglue`;
+- hyphenation and trie state, including hyphen exceptions, trie arrays,
+  trie-op arrays, `hyphcount`, `hyphnext`, `triemax`, and `trieopptr`.
 
-The largest checkpoint regions (`mem`, `eqtb`, and `hash`) are stored as
-block-based fill/raw snapshots. Each region is split into fixed-size element
-blocks. A block whose elements are all byte-identical is stored as one fill
-element; other blocks fall back to raw bytes. This keeps exact full-state
+This is intentionally not the same as calling `\dump`. Normal XeTeX format
+dumping refuses native fonts and font mappings because a `.fmt` file must be
+portable across process starts. StemTeX's checkpoint is process-local, so native
+font/layout-engine pointers loaded during warmup can remain live and are shallow
+copied as part of the in-process font table.
+
+The second layer is the worker continuation layer. It saves and restores:
+
+- save stack, nest stack, input stack, parameter stack, if/group stacks;
+- current input/scanner state, grouping state, conditionals, paragraph tokens,
+  interaction mode, and error counters;
+- paragraph building, math-list conversion, line breaking, hyphenation, page
+  builder, and e-TeX direction/last-line-fit scratch state.
+
+The largest checkpoint regions (`mem`, `eqtb`, `hash`, and `fontinfo`) are
+stored as block-based fill/raw snapshots. Each region is split into fixed-size
+element blocks. A block whose elements are all byte-identical is stored as one
+fill element; other blocks fall back to raw bytes. This keeps exact full-state
 restore semantics without storing every large region byte-for-byte. Smaller
-stacks and scalar state are still copied directly.
+tables, stacks, and scalar state are copied directly.
 
 Fill-block restore is optimized for the hot error-recovery path: all-zero fill
 blocks use `memset`, and non-zero fill blocks are expanded by repeated doubling
@@ -147,7 +161,7 @@ relevant cases are:
   by a good recovery probe;
 - `checkpoint-critical` with `SPARES=0`: the smaller set of errors most likely
   to poison checkpoint restore, including math alphabet commands used outside
-  math mode;
+  math mode, font-dimension mutation, and hyphenation mutation;
 - `bad-output-corpus` with `SPARES=0`: PDF and SVG output recovery after bad
   snippets;
 - `list-state` with `SPARES=0`: repeated `itemize`/`enumerate` snippets and a
@@ -176,9 +190,9 @@ $profile = ".\gui\profiles\unicodemath_cjk"
 Expected result:
 
 ```text
-badCorpus passed=32 failed=0 total=32
-badCorpus passed=9 failed=0 total=9
-badOutput passed=22 failed=0 total=22
+badCorpus passed=34 failed=0 total=34
+badCorpus passed=11 failed=0 total=11
+badOutput passed=26 failed=0 total=26
 listState failed=0
 ```
 

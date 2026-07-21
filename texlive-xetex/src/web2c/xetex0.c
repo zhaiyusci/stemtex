@@ -25,6 +25,7 @@ typedef struct {
   stemtexsnapshot yzmem_copy;
   stemtexsnapshot zeqtb_copy;
   stemtexsnapshot yhash_copy;
+  stemtexsnapshot fontinfo_copy;
   memoryword *savestack_copy;
   liststaterecord *nest_copy;
   instaterecord *inputstack_copy;
@@ -37,13 +38,50 @@ typedef struct {
   packedUTF16code *strpool_copy;
   poolpointer *strstart_copy;
   halfword *fontglue_copy;
+  fourquarters *fontcheck_copy;
+  scaled *fontsize_copy;
+  scaled *fontdsize_copy;
+  fontindex *fontparams_copy;
+  strnumber *fontname_copy;
+  strnumber *fontarea_copy;
+  UTF16code *fontbc_copy;
+  UTF16code *fontec_copy;
+  boolean *fontused_copy;
+  integer *hyphenchar_copy;
+  integer *skewchar_copy;
+  fontindex *bcharlabel_copy;
+  ninebits *fontbchar_copy;
+  ninebits *fontfalsebchar_copy;
+  voidpointer *fontlayoutengine_copy;
+  voidpointer *fontmapping_copy;
+  char *fontflags_copy;
+  scaled *fontletterspace_copy;
+  integer *charbase_copy;
+  integer *widthbase_copy;
+  integer *heightbase_copy;
+  integer *depthbase_copy;
+  integer *italicbase_copy;
+  integer *ligkernbase_copy;
+  integer *kernbase_copy;
+  integer *extenbase_copy;
+  integer *parambase_copy;
+  strnumber *hyphword_copy;
+  halfword *hyphlist_copy;
+  hyphpointer *hyphlink_copy;
+  triepointer *trietrl_copy;
+  triepointer *trietro_copy;
+  quarterword *trietrc_copy;
   integer yzmem_count;
   integer zeqtb_count;
   integer yhash_count;
   integer strpool_count;
   integer strstart_count;
   integer fontglue_count;
+  integer font_array_count;
+  integer hyphen_array_count;
+  integer trie_array_count;
   internalfontnumber fontptr_copy;
+  fontindex fmemptr_copy;
   halfword lomemmax_copy;
   halfword himemmin_copy;
   integer varused_copy, dynused_copy;
@@ -205,6 +243,16 @@ typedef struct {
   scaled bestplglue_copy[4];
   triepointer hyphstart_copy;
   triepointer hyphindex_copy;
+  integer hyphcount_copy;
+  integer hyphnext_copy;
+  triepointer triemax_copy;
+  integer trieopptr_copy;
+  boolean trienotready_copy;
+  smallnumber hyfdistance_copy[trieopsize + 1];
+  smallnumber hyfnum_copy[trieopsize + 1];
+  trieopcode hyfnext_copy[trieopsize + 1];
+  integer opstart_copy[256];
+  trieopcode trieused_copy[256];
   halfword discptr_copy[4];
   boolean cancelboundary_copy;
   boolean insdisc_copy;
@@ -245,6 +293,26 @@ jmp_buf stemtex_main_jmp;
 boolean stemtex_main_jmp_ready = false;
 
 #define STEMTEX_SNAPSHOT_BLOCK_ELEMS 4096
+#define STEMTEX_CHECKPOINT_ALLOC(field, type, count_field, needed_count) \
+  do { \
+    integer stemtex_needed_count = (needed_count); \
+    if (stemtex_needed_count < 1) stemtex_needed_count = 1; \
+    if ((stemtex_checkpoint.field == NULL) || (stemtex_checkpoint.count_field < stemtex_needed_count)) { \
+      if (stemtex_checkpoint.count_field > stemtex_needed_count) stemtex_needed_count = stemtex_checkpoint.count_field; \
+      libcfree(stemtex_checkpoint.field); \
+      stemtex_checkpoint.field = xmallocarray(type, stemtex_needed_count); \
+      stemtex_checkpoint.count_field = stemtex_needed_count; \
+    } \
+  } while (0)
+#define STEMTEX_SAVE_ARRAY(field, type, count) \
+  memcpy(stemtex_checkpoint.field##_copy, field, sizeof(type) * (size_t)(count))
+#define STEMTEX_RESTORE_ARRAY(field, type, count) \
+  memcpy(field, stemtex_checkpoint.field##_copy, sizeof(type) * (size_t)(count))
+#define STEMTEX_FREE_FIELD(field) \
+  do { \
+    libcfree(stemtex_checkpoint.field); \
+    stemtex_checkpoint.field = NULL; \
+  } while (0)
 
 static void stemtex_snapshot_free(stemtexsnapshot *snapshot)
 {
@@ -381,6 +449,9 @@ static void stemtex_checkpoint_alloc(void)
   integer yhash_count = 1 + hashtop - hashoffset;
   integer strpool_count = poolptr > 1 ? poolptr : 1;
   integer strstart_count = strptr >= 65536L ? strptr - 65536L + 1 : 1;
+  integer font_array_count = fontptr + 1;
+  integer hyphen_array_count = hyphsize + 1;
+  integer trie_array_count = triemax + 1;
   stemtex_checkpoint.yzmem_count = yzmem_count;
   stemtex_checkpoint.zeqtb_count = zeqtb_count;
   stemtex_checkpoint.yhash_count = yhash_count;
@@ -403,19 +474,228 @@ static void stemtex_checkpoint_alloc(void)
     stemtex_checkpoint.strstart_copy = xmallocarray(poolpointer, strstart_count);
     stemtex_checkpoint.strstart_count = strstart_count;
   }
-  if (stemtex_checkpoint.fontglue_count < fontmax + 1) {
-    libcfree(stemtex_checkpoint.fontglue_copy);
-    stemtex_checkpoint.fontglue_copy = xmallocarray(halfword, fontmax + 1);
-    stemtex_checkpoint.fontglue_count = fontmax + 1;
+  if (stemtex_checkpoint.font_array_count < font_array_count) {
+    STEMTEX_FREE_FIELD(fontcheck_copy);
+    STEMTEX_FREE_FIELD(fontsize_copy);
+    STEMTEX_FREE_FIELD(fontdsize_copy);
+    STEMTEX_FREE_FIELD(fontparams_copy);
+    STEMTEX_FREE_FIELD(fontname_copy);
+    STEMTEX_FREE_FIELD(fontarea_copy);
+    STEMTEX_FREE_FIELD(fontbc_copy);
+    STEMTEX_FREE_FIELD(fontec_copy);
+    STEMTEX_FREE_FIELD(fontused_copy);
+    STEMTEX_FREE_FIELD(hyphenchar_copy);
+    STEMTEX_FREE_FIELD(skewchar_copy);
+    STEMTEX_FREE_FIELD(bcharlabel_copy);
+    STEMTEX_FREE_FIELD(fontbchar_copy);
+    STEMTEX_FREE_FIELD(fontfalsebchar_copy);
+    STEMTEX_FREE_FIELD(fontlayoutengine_copy);
+    STEMTEX_FREE_FIELD(fontmapping_copy);
+    STEMTEX_FREE_FIELD(fontflags_copy);
+    STEMTEX_FREE_FIELD(fontletterspace_copy);
+    STEMTEX_FREE_FIELD(charbase_copy);
+    STEMTEX_FREE_FIELD(widthbase_copy);
+    STEMTEX_FREE_FIELD(heightbase_copy);
+    STEMTEX_FREE_FIELD(depthbase_copy);
+    STEMTEX_FREE_FIELD(italicbase_copy);
+    STEMTEX_FREE_FIELD(ligkernbase_copy);
+    STEMTEX_FREE_FIELD(kernbase_copy);
+    STEMTEX_FREE_FIELD(extenbase_copy);
+    STEMTEX_FREE_FIELD(parambase_copy);
+    stemtex_checkpoint.font_array_count = 0;
   }
+  if (stemtex_checkpoint.hyphen_array_count < hyphen_array_count) {
+    STEMTEX_FREE_FIELD(hyphword_copy);
+    STEMTEX_FREE_FIELD(hyphlist_copy);
+    STEMTEX_FREE_FIELD(hyphlink_copy);
+    stemtex_checkpoint.hyphen_array_count = 0;
+  }
+  if (stemtex_checkpoint.trie_array_count < trie_array_count) {
+    STEMTEX_FREE_FIELD(trietrl_copy);
+    STEMTEX_FREE_FIELD(trietro_copy);
+    STEMTEX_FREE_FIELD(trietrc_copy);
+    stemtex_checkpoint.trie_array_count = 0;
+  }
+  STEMTEX_CHECKPOINT_ALLOC(fontglue_copy, halfword, fontglue_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(fontcheck_copy, fourquarters, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(fontsize_copy, scaled, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(fontdsize_copy, scaled, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(fontparams_copy, fontindex, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(fontname_copy, strnumber, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(fontarea_copy, strnumber, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(fontbc_copy, UTF16code, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(fontec_copy, UTF16code, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(fontused_copy, boolean, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(hyphenchar_copy, integer, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(skewchar_copy, integer, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(bcharlabel_copy, fontindex, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(fontbchar_copy, ninebits, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(fontfalsebchar_copy, ninebits, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(fontlayoutengine_copy, voidpointer, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(fontmapping_copy, voidpointer, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(fontflags_copy, char, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(fontletterspace_copy, scaled, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(charbase_copy, integer, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(widthbase_copy, integer, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(heightbase_copy, integer, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(depthbase_copy, integer, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(italicbase_copy, integer, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(ligkernbase_copy, integer, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(kernbase_copy, integer, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(extenbase_copy, integer, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(parambase_copy, integer, font_array_count, font_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(hyphword_copy, strnumber, hyphen_array_count, hyphen_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(hyphlist_copy, halfword, hyphen_array_count, hyphen_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(hyphlink_copy, hyphpointer, hyphen_array_count, hyphen_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(trietrl_copy, triepointer, trie_array_count, trie_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(trietro_copy, triepointer, trie_array_count, trie_array_count);
+  STEMTEX_CHECKPOINT_ALLOC(trietrc_copy, quarterword, trie_array_count, trie_array_count);
+}
+
+/*
+ * In-process analogue of storefmtfile()/loadfmtfile(): copy the TeX state that
+ * user input can mutate, while keeping native XeTeX font resources as live
+ * process-local pointers instead of serializing them like a real .fmt file.
+ */
+static void stemtex_save_tex_user_state(void)
+{
+  integer font_array_count = fontptr + 1;
+  integer hyphen_array_count = hyphsize + 1;
+  integer trie_array_count = triemax + 1;
+  stemtex_snapshot_save(&stemtex_checkpoint.yzmem_copy, yzmem,
+                        sizeof(memoryword) * (size_t)stemtex_checkpoint.yzmem_count, sizeof(memoryword));
+  stemtex_snapshot_save(&stemtex_checkpoint.zeqtb_copy, zeqtb,
+                        sizeof(memoryword) * (size_t)stemtex_checkpoint.zeqtb_count, sizeof(memoryword));
+  stemtex_snapshot_save(&stemtex_checkpoint.yhash_copy, yhash,
+                        sizeof(twohalves) * (size_t)stemtex_checkpoint.yhash_count, sizeof(twohalves));
+  stemtex_snapshot_save(&stemtex_checkpoint.fontinfo_copy, fontinfo, sizeof(fmemoryword) * (size_t)fmemptr,
+                        sizeof(fmemoryword));
+  memcpy(stemtex_checkpoint.strpool_copy, strpool, sizeof(packedUTF16code) * poolptr);
+  memcpy(stemtex_checkpoint.strstart_copy, strstart, sizeof(poolpointer) * (strptr - 65536L + 1));
+
+  stemtex_checkpoint.poolptr_copy = poolptr;
+  stemtex_checkpoint.strptr_copy = strptr;
+  stemtex_checkpoint.fontptr_copy = fontptr;
+  stemtex_checkpoint.fmemptr_copy = fmemptr;
+  STEMTEX_SAVE_ARRAY(fontglue, halfword, font_array_count);
+  STEMTEX_SAVE_ARRAY(fontcheck, fourquarters, font_array_count);
+  STEMTEX_SAVE_ARRAY(fontsize, scaled, font_array_count);
+  STEMTEX_SAVE_ARRAY(fontdsize, scaled, font_array_count);
+  STEMTEX_SAVE_ARRAY(fontparams, fontindex, font_array_count);
+  STEMTEX_SAVE_ARRAY(fontname, strnumber, font_array_count);
+  STEMTEX_SAVE_ARRAY(fontarea, strnumber, font_array_count);
+  STEMTEX_SAVE_ARRAY(fontbc, UTF16code, font_array_count);
+  STEMTEX_SAVE_ARRAY(fontec, UTF16code, font_array_count);
+  STEMTEX_SAVE_ARRAY(fontused, boolean, font_array_count);
+  STEMTEX_SAVE_ARRAY(hyphenchar, integer, font_array_count);
+  STEMTEX_SAVE_ARRAY(skewchar, integer, font_array_count);
+  STEMTEX_SAVE_ARRAY(bcharlabel, fontindex, font_array_count);
+  STEMTEX_SAVE_ARRAY(fontbchar, ninebits, font_array_count);
+  STEMTEX_SAVE_ARRAY(fontfalsebchar, ninebits, font_array_count);
+  STEMTEX_SAVE_ARRAY(fontlayoutengine, voidpointer, font_array_count);
+  STEMTEX_SAVE_ARRAY(fontmapping, voidpointer, font_array_count);
+  STEMTEX_SAVE_ARRAY(fontflags, char, font_array_count);
+  STEMTEX_SAVE_ARRAY(fontletterspace, scaled, font_array_count);
+  STEMTEX_SAVE_ARRAY(charbase, integer, font_array_count);
+  STEMTEX_SAVE_ARRAY(widthbase, integer, font_array_count);
+  STEMTEX_SAVE_ARRAY(heightbase, integer, font_array_count);
+  STEMTEX_SAVE_ARRAY(depthbase, integer, font_array_count);
+  STEMTEX_SAVE_ARRAY(italicbase, integer, font_array_count);
+  STEMTEX_SAVE_ARRAY(ligkernbase, integer, font_array_count);
+  STEMTEX_SAVE_ARRAY(kernbase, integer, font_array_count);
+  STEMTEX_SAVE_ARRAY(extenbase, integer, font_array_count);
+  STEMTEX_SAVE_ARRAY(parambase, integer, font_array_count);
+
+  stemtex_checkpoint.hyphcount_copy = hyphcount;
+  stemtex_checkpoint.hyphnext_copy = hyphnext;
+  STEMTEX_SAVE_ARRAY(hyphword, strnumber, hyphen_array_count);
+  STEMTEX_SAVE_ARRAY(hyphlist, halfword, hyphen_array_count);
+  STEMTEX_SAVE_ARRAY(hyphlink, hyphpointer, hyphen_array_count);
+  stemtex_checkpoint.triemax_copy = triemax;
+  stemtex_checkpoint.trieopptr_copy = trieopptr;
+  stemtex_checkpoint.trienotready_copy = trienotready;
+  STEMTEX_SAVE_ARRAY(trietrl, triepointer, trie_array_count);
+  STEMTEX_SAVE_ARRAY(trietro, triepointer, trie_array_count);
+  STEMTEX_SAVE_ARRAY(trietrc, quarterword, trie_array_count);
+  memcpy(stemtex_checkpoint.hyfdistance_copy, hyfdistance, sizeof(smallnumber) * (trieopsize + 1));
+  memcpy(stemtex_checkpoint.hyfnum_copy, hyfnum, sizeof(smallnumber) * (trieopsize + 1));
+  memcpy(stemtex_checkpoint.hyfnext_copy, hyfnext, sizeof(trieopcode) * (trieopsize + 1));
+  memcpy(stemtex_checkpoint.opstart_copy, opstart, sizeof(integer) * 256);
+  memcpy(stemtex_checkpoint.trieused_copy, trieused, sizeof(trieopcode) * 256);
+}
+
+static void stemtex_restore_tex_user_state(void)
+{
+  integer font_array_count = stemtex_checkpoint.fontptr_copy + 1;
+  integer hyphen_array_count = hyphsize + 1;
+  integer trie_array_count = stemtex_checkpoint.triemax_copy + 1;
+  stemtex_snapshot_restore(&stemtex_checkpoint.yzmem_copy, yzmem,
+                           sizeof(memoryword) * (size_t)stemtex_checkpoint.yzmem_count, sizeof(memoryword));
+  stemtex_snapshot_restore(&stemtex_checkpoint.zeqtb_copy, zeqtb,
+                           sizeof(memoryword) * (size_t)stemtex_checkpoint.zeqtb_count, sizeof(memoryword));
+  stemtex_snapshot_restore(&stemtex_checkpoint.yhash_copy, yhash,
+                           sizeof(twohalves) * (size_t)stemtex_checkpoint.yhash_count, sizeof(twohalves));
+  stemtex_snapshot_restore(&stemtex_checkpoint.fontinfo_copy, fontinfo,
+                           sizeof(fmemoryword) * (size_t)stemtex_checkpoint.fmemptr_copy, sizeof(fmemoryword));
+  memcpy(strpool, stemtex_checkpoint.strpool_copy, sizeof(packedUTF16code) * stemtex_checkpoint.poolptr_copy);
+  memcpy(strstart, stemtex_checkpoint.strstart_copy,
+         sizeof(poolpointer) * (stemtex_checkpoint.strptr_copy - 65536L + 1));
+
+  poolptr = stemtex_checkpoint.poolptr_copy;
+  strptr = stemtex_checkpoint.strptr_copy;
+  fontptr = stemtex_checkpoint.fontptr_copy;
+  fmemptr = stemtex_checkpoint.fmemptr_copy;
+  STEMTEX_RESTORE_ARRAY(fontglue, halfword, font_array_count);
+  STEMTEX_RESTORE_ARRAY(fontcheck, fourquarters, font_array_count);
+  STEMTEX_RESTORE_ARRAY(fontsize, scaled, font_array_count);
+  STEMTEX_RESTORE_ARRAY(fontdsize, scaled, font_array_count);
+  STEMTEX_RESTORE_ARRAY(fontparams, fontindex, font_array_count);
+  STEMTEX_RESTORE_ARRAY(fontname, strnumber, font_array_count);
+  STEMTEX_RESTORE_ARRAY(fontarea, strnumber, font_array_count);
+  STEMTEX_RESTORE_ARRAY(fontbc, UTF16code, font_array_count);
+  STEMTEX_RESTORE_ARRAY(fontec, UTF16code, font_array_count);
+  STEMTEX_RESTORE_ARRAY(fontused, boolean, font_array_count);
+  STEMTEX_RESTORE_ARRAY(hyphenchar, integer, font_array_count);
+  STEMTEX_RESTORE_ARRAY(skewchar, integer, font_array_count);
+  STEMTEX_RESTORE_ARRAY(bcharlabel, fontindex, font_array_count);
+  STEMTEX_RESTORE_ARRAY(fontbchar, ninebits, font_array_count);
+  STEMTEX_RESTORE_ARRAY(fontfalsebchar, ninebits, font_array_count);
+  STEMTEX_RESTORE_ARRAY(fontlayoutengine, voidpointer, font_array_count);
+  STEMTEX_RESTORE_ARRAY(fontmapping, voidpointer, font_array_count);
+  STEMTEX_RESTORE_ARRAY(fontflags, char, font_array_count);
+  STEMTEX_RESTORE_ARRAY(fontletterspace, scaled, font_array_count);
+  STEMTEX_RESTORE_ARRAY(charbase, integer, font_array_count);
+  STEMTEX_RESTORE_ARRAY(widthbase, integer, font_array_count);
+  STEMTEX_RESTORE_ARRAY(heightbase, integer, font_array_count);
+  STEMTEX_RESTORE_ARRAY(depthbase, integer, font_array_count);
+  STEMTEX_RESTORE_ARRAY(italicbase, integer, font_array_count);
+  STEMTEX_RESTORE_ARRAY(ligkernbase, integer, font_array_count);
+  STEMTEX_RESTORE_ARRAY(kernbase, integer, font_array_count);
+  STEMTEX_RESTORE_ARRAY(extenbase, integer, font_array_count);
+  STEMTEX_RESTORE_ARRAY(parambase, integer, font_array_count);
+
+  hyphcount = stemtex_checkpoint.hyphcount_copy;
+  hyphnext = stemtex_checkpoint.hyphnext_copy;
+  STEMTEX_RESTORE_ARRAY(hyphword, strnumber, hyphen_array_count);
+  STEMTEX_RESTORE_ARRAY(hyphlist, halfword, hyphen_array_count);
+  STEMTEX_RESTORE_ARRAY(hyphlink, hyphpointer, hyphen_array_count);
+  triemax = stemtex_checkpoint.triemax_copy;
+  trieopptr = stemtex_checkpoint.trieopptr_copy;
+  trienotready = stemtex_checkpoint.trienotready_copy;
+  STEMTEX_RESTORE_ARRAY(trietrl, triepointer, trie_array_count);
+  STEMTEX_RESTORE_ARRAY(trietro, triepointer, trie_array_count);
+  STEMTEX_RESTORE_ARRAY(trietrc, quarterword, trie_array_count);
+  memcpy(hyfdistance, stemtex_checkpoint.hyfdistance_copy, sizeof(smallnumber) * (trieopsize + 1));
+  memcpy(hyfnum, stemtex_checkpoint.hyfnum_copy, sizeof(smallnumber) * (trieopsize + 1));
+  memcpy(hyfnext, stemtex_checkpoint.hyfnext_copy, sizeof(trieopcode) * (trieopsize + 1));
+  memcpy(opstart, stemtex_checkpoint.opstart_copy, sizeof(integer) * 256);
+  memcpy(trieused, stemtex_checkpoint.trieused_copy, sizeof(trieopcode) * 256);
 }
 
 static void stemtex_save_checkpoint(void)
 {
   stemtex_checkpoint_alloc();
-  stemtex_snapshot_save(&stemtex_checkpoint.yzmem_copy, yzmem, sizeof(memoryword) * (size_t)stemtex_checkpoint.yzmem_count, sizeof(memoryword));
-  stemtex_snapshot_save(&stemtex_checkpoint.zeqtb_copy, zeqtb, sizeof(memoryword) * (size_t)stemtex_checkpoint.zeqtb_count, sizeof(memoryword));
-  stemtex_snapshot_save(&stemtex_checkpoint.yhash_copy, yhash, sizeof(twohalves) * (size_t)stemtex_checkpoint.yhash_count, sizeof(twohalves));
+  stemtex_save_tex_user_state();
   memcpy(stemtex_checkpoint.savestack_copy, savestack, sizeof(memoryword) * savesize);
   memcpy(stemtex_checkpoint.nest_copy, nest, sizeof(liststaterecord) * nestsize);
   memcpy(stemtex_checkpoint.inputstack_copy, inputstack, sizeof(instaterecord) * stacksize);
@@ -425,10 +705,6 @@ static void stemtex_save_checkpoint(void)
   memcpy(stemtex_checkpoint.paramstack_copy, paramstack, sizeof(halfword) * paramsize);
   memcpy(stemtex_checkpoint.ifstack_copy, ifstack, sizeof(halfword) * maxinopen);
   memcpy(stemtex_checkpoint.grpstack_copy, grpstack, sizeof(savepointer) * maxinopen);
-  memcpy(stemtex_checkpoint.strpool_copy, strpool, sizeof(packedUTF16code) * poolptr);
-  memcpy(stemtex_checkpoint.strstart_copy, strstart, sizeof(poolpointer) * (strptr - 65536L + 1));
-  stemtex_checkpoint.fontptr_copy = fontptr;
-  memcpy(stemtex_checkpoint.fontglue_copy, fontglue, sizeof(halfword) * (fontptr + 1));
   stemtex_checkpoint.lomemmax_copy = lomemmax;
   stemtex_checkpoint.himemmin_copy = himemmin;
   stemtex_checkpoint.varused_copy = varused;
@@ -483,8 +759,6 @@ static void stemtex_save_checkpoint(void)
   stemtex_checkpoint.curif_copy = curif;
   stemtex_checkpoint.ifline_copy = ifline;
   stemtex_checkpoint.skipline_copy = skipline;
-  stemtex_checkpoint.poolptr_copy = poolptr;
-  stemtex_checkpoint.strptr_copy = strptr;
   stemtex_checkpoint.first_copy = first;
   stemtex_checkpoint.last_copy = last;
   stemtex_checkpoint.maxbufstack_copy = maxbufstack;
@@ -637,9 +911,7 @@ static void stemtex_save_checkpoint(void)
 static void stemtex_restore_checkpoint(void)
 {
   if (!stemtex_checkpoint.valid) return;
-  stemtex_snapshot_restore(&stemtex_checkpoint.yzmem_copy, yzmem, sizeof(memoryword) * (size_t)stemtex_checkpoint.yzmem_count, sizeof(memoryword));
-  stemtex_snapshot_restore(&stemtex_checkpoint.zeqtb_copy, zeqtb, sizeof(memoryword) * (size_t)stemtex_checkpoint.zeqtb_count, sizeof(memoryword));
-  stemtex_snapshot_restore(&stemtex_checkpoint.yhash_copy, yhash, sizeof(twohalves) * (size_t)stemtex_checkpoint.yhash_count, sizeof(twohalves));
+  stemtex_restore_tex_user_state();
   memcpy(savestack, stemtex_checkpoint.savestack_copy, sizeof(memoryword) * savesize);
   memcpy(nest, stemtex_checkpoint.nest_copy, sizeof(liststaterecord) * nestsize);
   memcpy(inputstack, stemtex_checkpoint.inputstack_copy, sizeof(instaterecord) * stacksize);
@@ -649,13 +921,6 @@ static void stemtex_restore_checkpoint(void)
   memcpy(paramstack, stemtex_checkpoint.paramstack_copy, sizeof(halfword) * paramsize);
   memcpy(ifstack, stemtex_checkpoint.ifstack_copy, sizeof(halfword) * maxinopen);
   memcpy(grpstack, stemtex_checkpoint.grpstack_copy, sizeof(savepointer) * maxinopen);
-  memcpy(strpool, stemtex_checkpoint.strpool_copy, sizeof(packedUTF16code) * stemtex_checkpoint.poolptr_copy);
-  memcpy(strstart, stemtex_checkpoint.strstart_copy, sizeof(poolpointer) * (stemtex_checkpoint.strptr_copy - 65536L + 1));
-  memcpy(fontglue, stemtex_checkpoint.fontglue_copy, sizeof(halfword) * (stemtex_checkpoint.fontptr_copy + 1));
-  if (fontptr > stemtex_checkpoint.fontptr_copy) {
-    internalfontnumber f;
-    for (f = stemtex_checkpoint.fontptr_copy + 1; f <= fontptr; ++f) fontglue[f] = -268435455L;
-  }
   lomemmax = stemtex_checkpoint.lomemmax_copy;
   himemmin = stemtex_checkpoint.himemmin_copy;
   varused = stemtex_checkpoint.varused_copy;
@@ -710,8 +975,6 @@ static void stemtex_restore_checkpoint(void)
   curif = stemtex_checkpoint.curif_copy;
   ifline = stemtex_checkpoint.ifline_copy;
   skipline = stemtex_checkpoint.skipline_copy;
-  poolptr = stemtex_checkpoint.poolptr_copy;
-  strptr = stemtex_checkpoint.strptr_copy;
   first = stemtex_checkpoint.first_copy;
   last = stemtex_checkpoint.last_copy;
   maxbufstack = stemtex_checkpoint.maxbufstack_copy;
