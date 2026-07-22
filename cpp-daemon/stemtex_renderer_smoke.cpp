@@ -471,6 +471,7 @@ int main(int argc, char **argv) {
     struct BadCase {
       const char *name;
       const char *snippet;
+      const char *recovery_probe;
     };
     const std::vector<BadCase> cases = {
         {"missing-brace-exp", "$e^{L_p$"},
@@ -490,11 +491,15 @@ int main(int argc, char **argv) {
         {"operatorname-text-mode", "\\operatorname{rank}"},
         {"orphan-end", "\\end{equation}"},
         {"wrong-env-end", "\\begin{array}{cc} a & b \\end{matrix}"},
-        {"fontdimen-then-error", "\\fontdimen2\\font=123pt \\errmessage{STEMTEX forced after fontdimen}"},
+        {"fontdimen-then-error", "\\fontdimen2\\font=123pt \\errmessage{STEMTEX forced after fontdimen}",
+         "\\ifdim\\fontdimen2\\font=123pt \\errmessage{STEMTEX fontdimen leaked}\\fi fontdimen ok"},
         {"native-font-then-error",
          "\\font\\stemtexrollbackfont=\"[lmmonoltcond10-oblique.otf]\" at 9pt "
          "\\stemtexrollbackfont polluted\\errmessage{STEMTEX forced after native font load}"},
         {"hyphenation-then-error", "\\hyphenation{stem-tex-hot-state}\\errmessage{STEMTEX forced after hyphenation}"},
+        {"sparse-register-then-error",
+         "\\count32767=12345 \\toks32767={polluted}\\errmessage{STEMTEX forced after sparse register}",
+         "\\ifnum\\count32767=12345 \\errmessage{STEMTEX sparse register leaked}\\fi sparse ok"},
         {"missing-frac-arg", "$\\frac{1}$"},
         {"missing-overset-arg", "$\\overset{a}$"},
         {"subscript-text-mode", "_abc"},
@@ -518,11 +523,15 @@ int main(int argc, char **argv) {
         {"bad-matrix-row", "$\\begin{matrix} a & b \\\\ c \\end{pmatrix}$"},
         {"orphan-end", "\\end{equation}"},
         {"unclosed-enumerate", "\\begin{enumerate}\\item leaked"},
-        {"fontdimen-then-error", "\\fontdimen2\\font=123pt \\errmessage{STEMTEX forced after fontdimen}"},
+        {"fontdimen-then-error", "\\fontdimen2\\font=123pt \\errmessage{STEMTEX forced after fontdimen}",
+         "\\ifdim\\fontdimen2\\font=123pt \\errmessage{STEMTEX fontdimen leaked}\\fi fontdimen ok"},
         {"native-font-then-error",
          "\\font\\stemtexrollbackfont=\"[lmmonoltcond10-oblique.otf]\" at 9pt "
          "\\stemtexrollbackfont polluted\\errmessage{STEMTEX forced after native font load}"},
         {"hyphenation-then-error", "\\hyphenation{stem-tex-hot-state}\\errmessage{STEMTEX forced after hyphenation}"},
+        {"sparse-register-then-error",
+         "\\count32767=12345 \\toks32767={polluted}\\errmessage{STEMTEX forced after sparse register}",
+         "\\ifnum\\count32767=12345 \\errmessage{STEMTEX sparse register leaked}\\fi sparse ok"},
         {"open-textcolor", u8"\u8fd9\u662f\u4e00\u6bb5\uff1a\\textcolor{blue}{\u84dd\u8272\u6587\u5b57"},
         {"open-group", "\\begingroup unfinished"},
         {"input-missing-file", "\\input{definitely-not-existing-file}"},
@@ -569,7 +578,8 @@ int main(int argc, char **argv) {
 
       StemTeXRenderResult good_result{};
       long long good_start = now_ms();
-      int good_ok = stemtex_renderer_render(renderer, good, width_pt, &good_result, &error_code, &error);
+      const char *recovery = selected_cases[i].recovery_probe ? selected_cases[i].recovery_probe : good;
+      int good_ok = stemtex_renderer_render(renderer, recovery, width_pt, &good_result, &error_code, &error);
       long long good_end = now_ms();
       if (good_ok) {
         std::printf("badCorpus case=%s recoveryOk=1 ms=%lld pdf=%s\n", selected_cases[i].name, good_end - good_start,

@@ -75,6 +75,8 @@ instead of writing a real `.fmt` file. This layer saves and restores:
 - string pool and string-start table;
 - allocator/hash/string scalar state such as `lomemmax`, `himemmin`,
   `hashused`, `poolptr`, and `strptr`;
+- e-TeX sparse register roots used by format dumps, with the page/mark
+  scratch root kept in the worker continuation layer;
 - font state from the format-dump model: `fontinfo`, `fontptr`, `fmemptr`, font
   metric/base arrays, font names/areas, font flags, font mappings/layout-engine
   pointers, `fontused`, and `fontglue`; restored checkpoints also release
@@ -163,8 +165,8 @@ relevant cases are:
   by a good recovery probe;
 - `checkpoint-critical` with `SPARES=0`: the smaller set of errors most likely
   to poison checkpoint restore, including math alphabet commands used outside
-  math mode, font-dimension mutation, native font loading, and hyphenation
-  mutation;
+  math mode, font-dimension mutation, native font loading, e-TeX sparse
+  register mutation, and hyphenation mutation;
 - `bad-output-corpus` with `SPARES=0`: PDF and SVG output recovery after bad
   snippets;
 - `list-state` with `SPARES=0`: repeated `itemize`/`enumerate` snippets and a
@@ -193,8 +195,8 @@ $profile = ".\gui\profiles\unicodemath_cjk"
 Expected result:
 
 ```text
-badCorpus passed=35 failed=0 total=35
-badCorpus passed=12 failed=0 total=12
+badCorpus passed=36 failed=0 total=36
+badCorpus passed=13 failed=0 total=13
 badOutput passed=28 failed=0 total=28
 listState failed=0
 ```
