@@ -682,6 +682,6 @@ console output from the smoke executable. Useful cases are:
 - cold create/warmup/live-worker startup;
 - physics, font, and chemistry representative snippets;
 - the expected bad-snippet error path;
-- font and hyphenation state rollback after bad snippets;
+- font, native font resource, and hyphenation state rollback after bad snippets;
 - fragment-local list state after `itemize`/`enumerate`;
 - the hot-spare failover path.

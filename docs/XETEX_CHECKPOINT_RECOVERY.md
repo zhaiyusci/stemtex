@@ -77,7 +77,9 @@ instead of writing a real `.fmt` file. This layer saves and restores:
   `hashused`, `poolptr`, and `strptr`;
 - font state from the format-dump model: `fontinfo`, `fontptr`, `fmemptr`, font
   metric/base arrays, font names/areas, font flags, font mappings/layout-engine
-  pointers, `fontused`, and `fontglue`;
+  pointers, `fontused`, and `fontglue`; restored checkpoints also release
+  native font engines and TECkit mappings from font slots that were created
+  after the checkpoint and are being rolled back;
 - hyphenation and trie state, including hyphen exceptions, trie arrays,
   trie-op arrays, `hyphcount`, `hyphnext`, `triemax`, and `trieopptr`.
 
@@ -161,7 +163,8 @@ relevant cases are:
   by a good recovery probe;
 - `checkpoint-critical` with `SPARES=0`: the smaller set of errors most likely
   to poison checkpoint restore, including math alphabet commands used outside
-  math mode, font-dimension mutation, and hyphenation mutation;
+  math mode, font-dimension mutation, native font loading, and hyphenation
+  mutation;
 - `bad-output-corpus` with `SPARES=0`: PDF and SVG output recovery after bad
   snippets;
 - `list-state` with `SPARES=0`: repeated `itemize`/`enumerate` snippets and a
@@ -190,9 +193,9 @@ $profile = ".\gui\profiles\unicodemath_cjk"
 Expected result:
 
 ```text
-badCorpus passed=34 failed=0 total=34
-badCorpus passed=11 failed=0 total=11
-badOutput passed=26 failed=0 total=26
+badCorpus passed=35 failed=0 total=35
+badCorpus passed=12 failed=0 total=12
+badOutput passed=28 failed=0 total=28
 listState failed=0
 ```
 

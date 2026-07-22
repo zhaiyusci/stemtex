@@ -385,6 +385,9 @@ int main(int argc, char **argv) {
         {"mathbb-text-mode", "\\mathbb{R}"},
         {"operatorname-text-mode", "\\operatorname{rank}"},
         {"fontdimen-then-error", "\\fontdimen2\\font=123pt \\errmessage{STEMTEX forced after fontdimen}"},
+        {"native-font-then-error",
+         "\\font\\stemtexrollbackfont=\"[lmmonoltcond10-oblique.otf]\" at 9pt "
+         "\\stemtexrollbackfont polluted\\errmessage{STEMTEX forced after native font load}"},
         {"hyphenation-then-error", "\\hyphenation{stem-tex-hot-state}\\errmessage{STEMTEX forced after hyphenation}"},
         {"unclosed-enumerate", "\\begin{enumerate}\\item leaked"},
         {"unclosed-itemize", "\\begin{itemize}\\item leaked"},
@@ -488,6 +491,9 @@ int main(int argc, char **argv) {
         {"orphan-end", "\\end{equation}"},
         {"wrong-env-end", "\\begin{array}{cc} a & b \\end{matrix}"},
         {"fontdimen-then-error", "\\fontdimen2\\font=123pt \\errmessage{STEMTEX forced after fontdimen}"},
+        {"native-font-then-error",
+         "\\font\\stemtexrollbackfont=\"[lmmonoltcond10-oblique.otf]\" at 9pt "
+         "\\stemtexrollbackfont polluted\\errmessage{STEMTEX forced after native font load}"},
         {"hyphenation-then-error", "\\hyphenation{stem-tex-hot-state}\\errmessage{STEMTEX forced after hyphenation}"},
         {"missing-frac-arg", "$\\frac{1}$"},
         {"missing-overset-arg", "$\\overset{a}$"},
@@ -513,6 +519,9 @@ int main(int argc, char **argv) {
         {"orphan-end", "\\end{equation}"},
         {"unclosed-enumerate", "\\begin{enumerate}\\item leaked"},
         {"fontdimen-then-error", "\\fontdimen2\\font=123pt \\errmessage{STEMTEX forced after fontdimen}"},
+        {"native-font-then-error",
+         "\\font\\stemtexrollbackfont=\"[lmmonoltcond10-oblique.otf]\" at 9pt "
+         "\\stemtexrollbackfont polluted\\errmessage{STEMTEX forced after native font load}"},
         {"hyphenation-then-error", "\\hyphenation{stem-tex-hot-state}\\errmessage{STEMTEX forced after hyphenation}"},
         {"open-textcolor", u8"\u8fd9\u662f\u4e00\u6bb5\uff1a\\textcolor{blue}{\u84dd\u8272\u6587\u5b57"},
         {"open-group", "\\begingroup unfinished"},

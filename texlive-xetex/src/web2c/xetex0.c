@@ -1,5 +1,6 @@
 #define EXTERN extern
 #include "xetexd.h"
+#include <teckit/TECkit_Engine.h>
 #include <setjmp.h>
 #include <string.h>
 
@@ -624,11 +625,31 @@ static void stemtex_save_tex_user_state(void)
   memcpy(stemtex_checkpoint.trieused_copy, trieused, sizeof(trieopcode) * 256);
 }
 
+static void stemtex_release_rolled_back_font_resources(void)
+{
+  internalfontnumber f;
+
+  if (fontptr <= stemtex_checkpoint.fontptr_copy)
+    return;
+
+  for (f = stemtex_checkpoint.fontptr_copy + 1; f <= fontptr; ++f) {
+    if (((fontarea[f] == 65535L) || (fontarea[f] == 65534L)) && (fontlayoutengine[f] != 0)) {
+      releasefontengine(fontlayoutengine[f], fontarea[f]);
+      fontlayoutengine[f] = 0;
+    }
+    if (fontmapping[f] != 0) {
+      TECkit_DisposeConverter((TECkit_Converter)fontmapping[f]);
+      fontmapping[f] = 0;
+    }
+  }
+}
+
 static void stemtex_restore_tex_user_state(void)
 {
   integer font_array_count = stemtex_checkpoint.fontptr_copy + 1;
   integer hyphen_array_count = hyphsize + 1;
   integer trie_array_count = stemtex_checkpoint.triemax_copy + 1;
+  stemtex_release_rolled_back_font_resources();
   stemtex_snapshot_restore(&stemtex_checkpoint.yzmem_copy, yzmem,
                            sizeof(memoryword) * (size_t)stemtex_checkpoint.yzmem_count, sizeof(memoryword));
   stemtex_snapshot_restore(&stemtex_checkpoint.zeqtb_copy, zeqtb,
