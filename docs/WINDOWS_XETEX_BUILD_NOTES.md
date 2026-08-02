@@ -90,11 +90,12 @@ Install the built binaries into the static StemTeX side tree:
 The maintained CMake install tree copies profile warmup sources and installs
 `runtime/refresh-profile-cache.bat`. The installer runs that batch file for the
 default GUI profile during installation. For a manual staged tree, run the same
-installed helper from the runtime directory and pass the staged profile path:
+installed helper from the runtime directory; it defaults to the staged
+`..\gui\profiles\unicodemath_cjk` profile:
 
 ```bat
 cd /d dist\stemtex-installer\StemTeX\runtime
-refresh-profile-cache.bat ..\gui\profiles\unicodemath_cjk
+refresh-profile-cache.bat
 ```
 
 ## Source Inputs
