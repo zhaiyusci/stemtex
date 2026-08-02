@@ -11,6 +11,8 @@ endif()
 option(STEMTEX_BUILD_GUI "Build the Qt StemTeX Renderer GUI" ON)
 option(STEMTEX_INSTALL_TEXMF "Install the bundled trimmed texmf-dist tree" ON)
 
+find_package(Python3 COMPONENTS Interpreter)
+
 set(STEMTEX_TEXLIVE_ROOT "C:/texlive/2026" CACHE PATH "TeX Live root used as the texmf source")
 set(STEMTEX_STANDALONE_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/texlive-xetex/out/standalone-msvc"
@@ -237,6 +239,15 @@ add_custom_target(stage
   DEPENDS ${STEMTEX_STAGE_DEPENDS}
   COMMENT "Installing StemTeX staging tree"
 )
+
+if(Python3_Interpreter_FOUND)
+  add_custom_target(stemtex-checkpoint-audit
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/audit-stemtex-checkpoint.py"
+            --repo "${CMAKE_CURRENT_SOURCE_DIR}"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Auditing StemTeX XeTeX checkpoint state mapping"
+  )
+endif()
 
 if(WIN32)
   add_custom_target(dvisvgmdaemon-msvc

@@ -180,6 +180,7 @@ The most important regression test is:
 
 ```powershell
 cmake --build --preset ninja-release --target stemtex-renderer-smoke
+cmake --build --preset ninja-release --target stemtex-checkpoint-audit
 
 $repo = (Get-Location).Path
 $smoke = ".\build\stemtex-ninja\cpp-daemon\stemtex-renderer-smoke.exe"
@@ -200,6 +201,13 @@ badCorpus passed=13 failed=0 total=13
 badOutput passed=28 failed=0 total=28
 listState failed=0
 ```
+
+The `stemtex-checkpoint-audit` target runs
+`scripts/audit-stemtex-checkpoint.py`. It statically checks that the
+`storefmtfile()` user-state inventory has an explicit in-process checkpoint
+mapping or a documented exception. The audit is deliberately not a substitute
+for smoke tests: it catches state-model drift, while smoke tests validate the
+actual worker recovery path.
 
 ## Known Boundaries
 
