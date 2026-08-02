@@ -703,7 +703,8 @@ int main(int argc, char **argv) {
   } else if (case_name == "--fonts") {
     snippet = u8"\u5b57\u4f53\u6d4b\u8bd5: \u4e2d\u6587\u5b8b\u4f53, "
               u8"{\\sffamily \u4e2d\u6587\u9ed1\u4f53}, "
-              u8"\\textbf{bold}, \\textit{italic}, \\texttt{mono}.";
+              u8"\\textbf{bold \u4e0e \u7c97\u4f53\u4e2d\u6587}, \\textit{italic \u4e0e \u659c\u4f53\u4e2d\u6587}, \\texttt{mono}; "
+              u8"$E=mc^2,\\;\\symbf{E},\\;\\mathbf{E}$.";
   } else if (case_name == "--latin-math") {
     snippet = u8"Latin math only: $E=mc^2$ "
               u8"\\[\\int_0^1 x^2\\,dx=\\frac13\\quad \\alpha+\\beta=\\gamma\\]";

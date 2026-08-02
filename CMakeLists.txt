@@ -115,6 +115,7 @@ if(STEMTEX_INSTALL_TEXMF)
     fonts/map/dvips/lm
     fonts/opentype/public/lm
     fonts/opentype/public/lm-math
+    fonts/opentype/public/lete-sans-math
     fonts/opentype/public/xits
     fonts/source/public/amsfonts
     fonts/source/public/cm
@@ -157,6 +158,7 @@ if(STEMTEX_INSTALL_TEXMF)
     tex/latex/xcolor
     tex/xelatex/xecjk
     tex/latex/lm
+    tex/latex/lete-sans-math
     tex/plain/amsfonts
     doc/fonts/xits
   )
