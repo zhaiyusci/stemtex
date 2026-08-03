@@ -1,5 +1,9 @@
 # Patches
 
+For the runtime behavior implemented around this generated-C patch, see
+[`docs/WINDOWS_XETEX_BUILD_NOTES.md`](../docs/WINDOWS_XETEX_BUILD_NOTES.md) and
+[`docs/XETEX_CHECKPOINT_RECOVERY.md`](../docs/XETEX_CHECKPOINT_RECOVERY.md).
+
 `texlive-generated-daemon-runtime-switches.patch`
 
 Current StemTeX engine patch record. It applies the daemon runtime switches to

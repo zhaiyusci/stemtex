@@ -1,6 +1,10 @@
-# C++ Renderer API Status
+# Native Renderer API Status
 
-The C++ renderer API now exposes the embeddable surface that was previously
+This file tracks the current behavioral contract and remaining product work. It
+does not define the ABI; use [C renderer API](CPP_RENDERER_API.md) and the public
+[`stemtex_renderer.h`](../cpp-daemon/stemtex_renderer.h) header for integration.
+
+The native renderer API now exposes the embeddable surface that was previously
 tracked here as TODO:
 
 - error codes on create/render/restart/cancel/validate/refresh;
@@ -25,9 +29,9 @@ tracked here as TODO:
   path. SVG callers use the generic synchronous output API from their own worker
   thread.
 - Body-level TeX errors are recovered in the live XeTeX worker through the
-  source-level checkpoint path described in
-  `docs/XETEX_CHECKPOINT_RECOVERY.md`. The renderer waits for the restored worker
-  to emit the next `WORKER_WAIT` marker before returning
+  source-level path described in
+  [XeTeX checkpoint recovery](XETEX_CHECKPOINT_RECOVERY.md). The renderer waits
+  for the restored worker to emit the next `WORKER_WAIT` marker before returning
   `STEMTEX_ERROR_TEX_SNIPPET`.
 - `stemtex_renderer_engine_snapshot` is a synchronous cached-state read. It does
   not take the render lock and should be the single source of truth for GUI

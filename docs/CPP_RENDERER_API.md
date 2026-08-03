@@ -1,19 +1,29 @@
-# C++ Renderer API
+# Native Renderer C API
 
 This document describes the native DLL-style interface in `cpp-daemon/`.
 
 The C++ layer is intentionally exposed as a small C ABI so host applications can
 load it like a normal Windows DLL without using a network protocol.
 
+For build and staging commands, see
+[Building and packaging](BUILDING_AND_PACKAGING.md). For the live-worker state
+model behind ordinary TeX error recovery, see
+[XeTeX checkpoint recovery](XETEX_CHECKPOINT_RECOVERY.md). The declarations in
+[`cpp-daemon/stemtex_renderer.h`](../cpp-daemon/stemtex_renderer.h) are the
+source of truth when this prose and the header differ.
+
 ## Build Outputs
 
-The current CMake build emits:
+The Ninja preset emits:
 
 ```text
-build/cpp-daemon/Release/stemtex-renderer.dll
-build/cpp-daemon/Release/stemtex-renderer.lib
-build/cpp-daemon/Release/stemtex-renderer-smoke.exe
+build/stemtex-ninja/cpp-daemon/stemtex-renderer.dll
+build/stemtex-ninja/cpp-daemon/stemtex-renderer.lib
+build/stemtex-ninja/cpp-daemon/stemtex-renderer-smoke.exe
 ```
+
+The Visual Studio preset places the same files under
+`build/stemtex/cpp-daemon/Release/`.
 
 The public header is:
 
@@ -644,8 +654,8 @@ cmake --build --preset ninja-release --target stemtex-renderer-smoke
 
 $repo = (Get-Location).Path
 $smoke = ".\build\stemtex-ninja\cpp-daemon\stemtex-renderer-smoke.exe"
-$runtime = ".\dist\stemtex-installer\StemTeX\runtime"
-$profile = ".\gui\profiles\unicodemath_cjk"
+$runtime = ".\staging\runtime"
+$profile = ".\staging\gui\profiles\unicodemath_cjk"
 
 & $smoke --repo $repo --runtime $runtime --profile $profile --case validate
 & $smoke --repo $repo --runtime $runtime --profile $profile --runs 2

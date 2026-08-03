@@ -4,17 +4,22 @@ StemTeX currently builds its daemon engine from the generated-C source bundle in
 `texlive-xetex/`.  The preferred Windows route is MSVC with static third-party
 dependencies.
 
+This is a lower-level maintainer document. For the normal CMake application,
+GUI, staging, and installer flow, use
+[Building and packaging](BUILDING_AND_PACKAGING.md).
+
 ## Current Engine Rebuild Route
 
 The normal application and installer build is driven by the top-level CMake
-project and does not require bash.  This document covers the lower-level
-maintainer path for regenerating the patched daemon binaries that CMake later
-stages into the runtime.
+project and does not require bash. The generated-C XeTeX/xdvipdfmx engine and
+static-dependency rebuild scripts documented below currently do require an
+MSYS2/Cygwin-style bash environment in addition to Visual Studio. They produce
+inputs consumed later by the bash-free CMake application build.
 
 Build the daemon bundle from the generated-C source snapshot, using the
 installed Visual Studio toolchain:
 
-```sh
+```bash
 cd /path/to/stemtex
 ./texlive-xetex/build-standalone-msvc.sh
 ```
@@ -83,18 +88,18 @@ before each conversion.
 
 Install the built binaries into the static StemTeX side tree:
 
-```sh
+```bash
 ./texlive-xetex/install-msvc-standalone-to-side-tree.sh
 ```
 
 The maintained CMake install tree copies profile warmup sources and installs
 `runtime/refresh-profile-cache.bat`. The installer runs that batch file for the
-default GUI profile during installation. For a manual staged tree, run the same
-installed helper from the runtime directory; it defaults to the staged
-`..\gui\profiles\unicodemath_cjk` profile:
+maintained `unicodemath_cjk` profile during installation. For a manual staged
+tree, run the same installed helper from the runtime directory; it defaults to
+the staged `..\gui\profiles\unicodemath_cjk` profile:
 
 ```bat
-cd /d dist\stemtex-installer\StemTeX\runtime
+cd /d C:\path\to\StemTeX\runtime
 refresh-profile-cache.bat
 ```
 
@@ -135,7 +140,7 @@ texlive-xetex/third_party-msvc-src
 
 Rebuild them with:
 
-```sh
+```bash
 ./texlive-xetex/build-thirdparty-msvc.sh
 ./texlive-xetex/build-texlive-libs-msvc.sh
 ```

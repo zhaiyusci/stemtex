@@ -1,270 +1,146 @@
 # StemTeX
 
-StemTeX is a Windows-native XeLaTeX daemon runtime for low-latency rendering of
-short STEM snippets.  The current version is recorded in `VERSION`.
+StemTeX is a low-latency XeLaTeX snippet renderer. The current implementation
+targets Windows and ships a trimmed TeX Live runtime, a native C ABI, and an
+optional Qt GUI. The current version is recorded in [`VERSION`](VERSION).
 
-The supported path is:
+StemTeX is built for short Chinese/English STEM fragments with text, math,
+chemistry, physics, and color. It is not a general document compiler or a TeX
+sandbox.
 
-- a trimmed StemTeX runtime tree;
-- patched `xetexdaemon`, `xdvipdfmxdaemon`, and `dvisvgmdaemon` binaries;
-- a tiny `stemtex-worker-host` process supervisor for XeTeX daemon invocations;
-- a native C ABI renderer DLL in `cpp-daemon/`;
-- a Qt-based **StemTeX Renderer GUI** in `gui/`;
-- an Inno Setup installer that packages the GUI, runtime, and renderer SDK.
+## What It Provides
+
+- one primary hot XeTeX worker per renderer instance;
+- in-process checkpoint recovery after ordinary snippet errors;
+- PDF and SVG output through hot `xdvipdfmx` and `dvisvgm` converters;
+- a small `stemtex-worker-host` process supervisor that prevents normal host
+  shutdown from leaving an orphan `xetexdaemon`;
+- a native renderer DLL and SDK for embedding;
+- a Qt GUI that uses the same native API;
+- a CMake staging flow and an Inno Setup installer.
+
+The default configuration uses one primary worker and no hot spares. Spares are
+optional failover capacity for process loss, cancellation, or explicit restart;
+ordinary body-level TeX errors recover in the primary worker.
 
 ## Runtime Model
 
-The renderer keeps one XeTeX worker hot with the selected profile preamble.
-Render requests send a small snippet body and a text-block width to that worker. XeTeX runs with
-`-no-pdf --flush-output-on-shipout --no-font-cache-refresh`, writes cumulative
-XDV output, and flushes it after each `\shipout`.  Each snippet is wrapped in
-LaTeX's `preview` environment, so the emitted page box is tightened around the
-typeset content instead of staying at a full paper size.  The renderer then
-synthesizes a valid final XDV postamble and asks the hot
-`dvipdfmxdaemon.dll` or `dvisvgmdaemon.dll` converter to convert only the
-newest page. SVG conversion uses dvisvgm's `papersize` bbox mode so the SVG
-viewport follows the same `pdf:pagesize` special as the PDF page box.
+The renderer starts XeTeX with a selected profile preamble and keeps it waiting
+for snippet requests. Each request supplies the snippet body, text width, and
+font size. XeTeX appends one tightly cropped page to a cumulative XDV stream,
+then the selected hot converter emits only that page as PDF or SVG.
 
-The runtime also includes `dvisvgmdaemon.dll`, a hot XDV-to-SVG converter built
-from dvisvgm. It keeps process-level TeX Live and font-map initialization warm,
-then resets document-local converter state for each request.
+After warmup, XeTeX records one process-local checkpoint. A malformed snippet
+restores that baseline and returns a renderer error instead of making the host
+application handle a C++ exception or routinely restart the worker. See
+[XeTeX checkpoint recovery](docs/XETEX_CHECKPOINT_RECOVERY.md) for the state
+model and recovery protocol.
 
-The renderer does not launch `xetexdaemon` directly.  Warmup compilation,
-profile-cache refresh, and live XeTeX workers all go through
-`stemtex-worker-host`, which then starts `xetexdaemon` with the renderer's
-stdio pipes.  A private lifetime pipe stays open for as long as the renderer
-owns that invocation.  Closing that pipe during renderer destroy, restart,
-cancel, timeout, or host-process death makes the helper terminate the child
-`xetexdaemon`.  This is not an idle timeout; a hot worker may wait indefinitely
-for the next snippet.
+`stemtex-worker-host` owns each XeTeX child through a lifetime pipe. A ready
+worker may wait indefinitely for the next snippet; the pipe is a lifetime
+signal, not an idle timeout.
 
-This is deliberately not a general LaTeX sandbox.  The intended input is short
-Chinese/English STEM text with math, chemistry, physics, color, and ordinary
-inline/display formulas under a selected StemTeX profile.
+## Build And Try
 
-## XeTeX Changes
-
-StemTeX adds two explicit daemon switches:
-
-```text
---flush-output-on-shipout
---no-font-cache-refresh
-```
-
-`--flush-output-on-shipout` makes a live `-no-pdf` XeTeX process write pending
-XDV bytes after every `\shipout` without exiting.
-
-`--no-font-cache-refresh` is a runtime policy switch for the daemon path.  The
-installer or developer warmup step owns fontconfig cache generation; normal
-interactive rendering avoids refreshing that cache.
-
-This is not the old Web2C `-ipc`/`-ipc-start` preview protocol.  The patch keeps
-the useful page-boundary buffer-flush idea and discards the TeXView-oriented
-transport.
-
-## Repository Layout
-
-```text
-cpp-daemon/
-  stemtex_renderer.h              Public C ABI.
-  stemtex_renderer.cpp            Renderer DLL implementation.
-  stemtex_worker_host.cpp         Tiny worker-process supervisor.
-  stemtex_renderer_smoke.cpp      Smoke/timing executable.
-
-gui/
-  main.cpp                        StemTeX Renderer GUI.
-  assets/                         GUI icon source and generated ICO/PNG.
-
-installer/
-  stemtex.iss                     Inno Setup definition.
-
-scripts/
-  generate-profile-warmup.py      Generate profile warmup.tex from preamble capabilities.
-  generate-gui-icon.py            Regenerate GUI PNG/ICO from SVG.
-
-texlive-xetex/
-  src/                            Generated-C XeTeX and xdvipdfmx sources.
-  src/dvisvgm/                    Vendored dvisvgm source subset for SVG.
-  prebuilt-msvc/                  Static MSVC dependency libs and headers.
-  third_party-msvc-src/           Source snapshots for rebuilding those libs.
-  build-standalone-msvc.sh        Build xetexdaemon/xdvipdfmxdaemon.
-  build-dvisvgmdaemon-msvc.ps1    Build dvisvgmdaemon.
-  install-msvc-standalone-to-side-tree.sh
-
-gui/profiles/
-  <name>/
-    preamble.tex                  Profile preamble selected by the host/GUI.
-    warmup.tex                    Matching warmup source.
-```
-
-Generated build/package directories such as `build/`, `staging/`, `dist/`,
-and `texlive-xetex/out/` are local artifacts and are not part of the source
-tree.  `build/` is for compiler output, `staging/` is for temporary assembly
-trees, and `dist/` is for distributable runtime/installer artifacts.
-
-## Bundled Profiles
-
-Each profile is a directory with `preamble.tex` and `warmup.tex`.  The GUI scans
-these directories and passes the selected one to the renderer. Warmup files are
-generated from the profile preamble with `scripts/generate-profile-warmup.py`.
-They are minimal readiness probes; correctness comes from the renderer merging
-font definitions found in live XDV output.
-
-Current source profiles are intentionally kept small so warmup coverage can stay
-meaningful:
-
-| Profile | Intended use |
-| --- | --- |
-| `unicodemath` | Broad Latin STEM profile with math, chemistry, physics, color, and cancel. |
-| `unicodemath_cjk` | Broad CJK STEM profile with the same package set; this is the default maintained warmup target. |
-| `xits_cjk` | Times-compatible XITS text and math for Word-oriented academic documents, with Windows CJK fonts. |
-| `arial_lete_simhei` | Arial text, Lete Sans Math, and SimHei CJK with deterministic synthetic bold and slant. |
-
-## Build
-
-The supported application and installer build is CMake-driven and does not
-require bash.  Use a Visual Studio x64 developer environment, or initialize
-`vcvars64.bat` before using the Ninja preset.
-
-Configure and build the renderer and GUI:
+The application, GUI, staging tree, and installer are CMake-driven and do not
+require bash. From an initialized Visual Studio x64 environment:
 
 ```bat
 cmake --preset ninja-msvc
 cmake --build --preset ninja-release
+cmake --build build\stemtex-ninja --target stage
 ```
 
-Install a staged tree:
-
-```bat
-cmake --install build/stemtex-ninja --prefix staging
-```
-
-The Visual Studio generator preset is also available:
-
-```bat
-cmake --preset vs2022
-cmake --build --preset release
-cmake --install build/stemtex --config Release --prefix staging
-```
-
-The CMake install step expects the daemon binaries and runtime side tree to
-exist.  The default inputs are:
-
-```text
-texlive-xetex/out/standalone-msvc
-dist/stemtex-texlive-daemon-static
-```
-
-Override them with `STEMTEX_STANDALONE_DIR` and `STEMTEX_RUNTIME_SOURCE` CMake
-cache variables when using a different local layout.  Rebuilding the daemon
-engine itself is a maintainer workflow documented in
-[docs/WINDOWS_XETEX_BUILD_NOTES.md](docs/WINDOWS_XETEX_BUILD_NOTES.md).
-The dvisvgm hot converter can also be rebuilt from CMake with
-`cmake --build build/stemtex-ninja --target dvisvgmdaemon-msvc`.
-
-Run a native renderer smoke test against the staged tree:
-
-```bat
-build\stemtex-ninja\cpp-daemon\stemtex-renderer-smoke.exe ^
-  --repo "%CD%" ^
-  --runtime "%CD%\staging\runtime" ^
-  --profile "%CD%\staging\gui\profiles\unicodemath_cjk" ^
-  --case validate
-```
-
-Run a native GUI smoke test:
+Run the staged GUI smoke test:
 
 ```bat
 staging\gui\stemtex-renderer-gui.exe --smoke
 ```
 
-Build the installer from a CMake-installed staging tree:
+The CMake install expects previously built daemon binaries and a runtime side
+tree. Rebuilding those lower-level engine inputs is a separate maintainer task.
+The complete prerequisites, staging validation, and installer procedure are in
+[Building and packaging](docs/BUILDING_AND_PACKAGING.md).
 
-```powershell
-$version = (Get-Content .\VERSION).Trim()
-$stage = "$PWD\dist\stemtex-installer\StemTeX"
-$output = "$PWD\dist\installer"
-cmake --install build/stemtex-ninja --prefix $stage
-New-Item -ItemType Directory -Force $output | Out-Null
-& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
-  "/DSourceDir=$stage" `
-  "/DOutputDir=$output" `
-  "/DAppVersion=$version" `
-  .\installer\stemtex.iss
-```
+## Bundled Profiles
 
-The installer is written under:
+A profile directory contains `preamble.tex` and `warmup.tex`. The host or GUI
+selects a profile explicitly; the renderer does not guess one.
+
+| Profile | Intended use |
+| --- | --- |
+| `unicodemath` | Broad Latin STEM profile with math, chemistry, physics, color, and cancel. |
+| `unicodemath_cjk` | Broad CJK STEM profile and the installer warmup target. |
+| `xits_cjk` | Times-compatible XITS text and math for Word-oriented academic documents, with Windows CJK fonts. |
+| `arial_lete_simhei` | Arial text, Lete Sans Math, and SimHei CJK with deterministic synthetic bold and slant. |
+
+`warmup.tex` is source. `warmup.xdv` and Fontconfig caches are generated
+artifacts and are intentionally not committed or copied by CMake install. The
+full installer generates the maintained `unicodemath_cjk` cache after files are
+installed. If a profile cache is absent, the renderer compiles `warmup.tex` in
+its private instance state and does not publish a replacement into the profile.
+
+## External TeX Trees
+
+The bundled tree is the supported default. Advanced hosts can set
+`texmf_root_utf8`, and the GUI exposes the same choice, to read packages and
+fonts from an external TeX Live root containing `texmf-dist` and
+`texmf-dist/web2c`.
+
+StemTeX still uses its own patched engine, format, converters, and Fontconfig
+setup. This option does not run the external installation's XeTeX binaries.
+MiKTeX roots are not supported because their root, FNDB, and package-management
+model does not match this TeX Live contract.
+
+## Documentation
+
+The [documentation index](docs/README.md) assigns one responsibility to each
+document:
+
+- [Building and packaging](docs/BUILDING_AND_PACKAGING.md): normal CMake build,
+  clean staging, smoke tests, and installer creation.
+- [C renderer API](docs/CPP_RENDERER_API.md): public ABI, ownership, errors,
+  output formats, and host examples.
+- [Renderer status](docs/CPP_RENDERER_API_STATUS.md): current contract and
+  remaining product work.
+- [Distribution options](docs/DISTRIBUTION_OPTIONS.md): installed layout,
+  writable data, profiles, and external TeX Live integration.
+- [XeTeX checkpoint recovery](docs/XETEX_CHECKPOINT_RECOVERY.md): live-worker
+  error recovery design and regression coverage.
+- [Windows engine rebuild notes](docs/WINDOWS_XETEX_BUILD_NOTES.md): lower-level
+  generated-C daemon and static dependency maintenance.
+
+## Repository Layout
 
 ```text
-dist/installer/StemTeX-<version>-Setup.exe
+cpp-daemon/       Native renderer, worker supervisor, public header, and smoke tests.
+gui/              Qt GUI, assets, and rendering profiles.
+installer/        Inno Setup definition.
+cmake/            Helpers installed into the runtime.
+scripts/          Profile generation and checkpoint audit tools.
+texlive-xetex/    Generated-C engines, converter sources, and MSVC dependencies.
+patches/          Patch records for the generated TeX Live source bundle.
+docs/             User, integration, build, and design documentation.
 ```
 
-The installer intentionally does not ship generated font cache files.  It
-refreshes the selected profile cache during installation when the GUI and
-bundled TeX tree are selected.  The installer does not pick a default profile.
-A host application or the GUI chooses a profile directory and passes it to the
-renderer.
-
-## Runtime Layout
-
-The staged or installed runtime has this shape:
+Generated `build/`, `staging/`, `dist/`, and `texlive-xetex/out/` directories
+are local artifacts, not source. A staged or installed tree has two top-level
+parts:
 
 ```text
 StemTeX/
   gui/
     stemtex-renderer-gui.exe
-    Qt runtime files
+    profiles/<name>/{preamble.tex,warmup.tex}
   runtime/
-    bin/windows/
-      stemtex-worker-host.exe
-      xetexdaemon.exe
-      xetexdaemon.dll
-      xdvipdfmxdaemon.exe
-      dvipdfmxdaemon.dll
-      dvisvgmdaemon.exe
-      dvisvgmdaemon.dll
-    bin/sdk/
-      stemtex-renderer.dll
-    sdk/include/
-      stemtex_renderer.h
-    sdk/lib/
-      stemtex-renderer.lib
-    gui/profiles/
-      <name>/preamble.tex
-      <name>/warmup.tex
-    texmf-dist/
-    texmf-var/
+    bin/windows/                  Patched engines and worker host.
+    bin/sdk/stemtex-renderer.dll
+    sdk/{include,lib}/            C header and import library.
+    texmf-dist/                   Optional trimmed package/font tree.
+    texmf-var/                    Format and generated runtime data.
 ```
 
-## External TeX Trees
-
-The installed runtime is the supported default. Advanced hosts may set the
-renderer's `texmf_root_utf8` field, or use the GUI's TeX tree selector, to read
-packages and fonts from a full external TeX tree. That external tree must use
-the TeX Live layout: the selected root is expected to contain `texmf-dist/` and
-`texmf-dist/web2c/`, for example `C:\texlive\2026`.
-
-This does not switch the engine to the user's TeX binaries. StemTeX still runs
-its patched `xetexdaemon`, `xdvipdfmxdaemon`, and, when SVG conversion is used,
-`dvisvgmdaemon` from the StemTeX runtime; the external TeX Live tree supplies
-the kpathsea configuration, packages, fonts, maps, CMaps, and related data.
-
-MiKTeX roots are not supported by this option. MiKTeX uses a different root
-model, FNDB/package-management layer, and configuration layout, and StemTeX does
-not query MiKTeX Core or run MiKTeX's `xelatex.exe`.
-
-## Native Renderer API
-
-Host applications should use `stemtex-renderer.dll` through the C ABI in
-`cpp-daemon/stemtex_renderer.h`.  The same DLL powers the GUI.  The renderer
-serializes concurrent render calls for one renderer instance and uses spare
-workers only for failover, not parallel throughput.
-
-See [docs/CPP_RENDERER_API.md](docs/CPP_RENDERER_API.md).
-The current API completion/status notes are in
-[docs/CPP_RENDERER_API_STATUS.md](docs/CPP_RENDERER_API_STATUS.md).
-
-## Notes
-
-- The current source-of-truth engine patch for the generated-C tree is
-  `patches/texlive-generated-daemon-runtime-switches.patch`.
+The source-of-truth public API is
+[`cpp-daemon/stemtex_renderer.h`](cpp-daemon/stemtex_renderer.h). The
+source-of-truth generated-C runtime switch record is
+[`patches/texlive-generated-daemon-runtime-switches.patch`](patches/texlive-generated-daemon-runtime-switches.patch).

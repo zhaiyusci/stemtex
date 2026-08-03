@@ -4,13 +4,19 @@ This directory contains the generated-C XeTeX and ordinary C `xdvipdfmx`
 sources used by StemTeX.  It avoids repeating TeX Live's WEB/CWEB conversion
 step during normal builds.
 
-The top-level StemTeX application and installer build is CMake-driven and
-consumes the binaries produced under `out/standalone-msvc/`.  Maintainers can
-rebuild those binaries with the MSVC static-dependency route:
+The top-level StemTeX application and installer build is CMake-driven, consumes
+the binaries produced under `out/standalone-msvc/`, and does not require bash.
+Maintainers can rebuild those lower-level binaries with the current
+MSVC-plus-bash static-dependency route:
 
-```sh
+```bash
 ./build-standalone-msvc.sh
 ```
+
+See
+[`docs/WINDOWS_XETEX_BUILD_NOTES.md`](../docs/WINDOWS_XETEX_BUILD_NOTES.md) for
+the boundary between the normal CMake build and this maintainer-only engine
+rebuild.
 
 The dvisvgm-based SVG daemon is rebuilt separately with PowerShell:
 
@@ -53,7 +59,7 @@ dvisvgmdaemon_last_error_message
 
 Install those binaries into the StemTeX side tree with:
 
-```sh
+```bash
 ./install-msvc-standalone-to-side-tree.sh
 ```
 
@@ -91,14 +97,14 @@ trees should not be committed.
 Most day-to-day work should not need this.  To rebuild third-party static
 libraries with MSVC:
 
-```sh
+```bash
 ./build-thirdparty-msvc.sh
 ./build-texlive-libs-msvc.sh
 ```
 
 Then rebuild the daemon bundle:
 
-```sh
+```bash
 ./build-standalone-msvc.sh
 ```
 

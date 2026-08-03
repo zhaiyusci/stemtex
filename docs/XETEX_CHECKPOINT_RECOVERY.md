@@ -1,6 +1,8 @@
 # XeTeX Checkpoint Recovery
 
 This note records the current StemTeX live-worker error recovery path.
+It is an implementation design document; the public host-facing behavior is
+defined in [C renderer API](CPP_RENDERER_API.md).
 
 ## Goal
 
@@ -184,8 +186,8 @@ cmake --build --preset ninja-release --target stemtex-checkpoint-audit
 
 $repo = (Get-Location).Path
 $smoke = ".\build\stemtex-ninja\cpp-daemon\stemtex-renderer-smoke.exe"
-$runtime = ".\dist\stemtex-installer\StemTeX\runtime"
-$profile = ".\gui\profiles\unicodemath_cjk"
+$runtime = ".\staging\runtime"
+$profile = ".\staging\gui\profiles\unicodemath_cjk"
 
 & $smoke --repo $repo --runtime $runtime --profile $profile --case bad-corpus --spares 0 --runs 1
 & $smoke --repo $repo --runtime $runtime --profile $profile --case checkpoint-critical --spares 0 --runs 1
