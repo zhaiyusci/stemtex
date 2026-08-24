@@ -11,17 +11,19 @@ namespace fs = std::filesystem;
 int main(int argc, char **argv) {
   std::string texmf_root;
   std::string runtime_root;
+  std::string selected_case;
   for (int index = 1; index < argc; ++index) {
     std::string option = argv[index];
     if (option == "--texmf" && index + 1 < argc) texmf_root = argv[++index];
     else if (option == "--runtime" && index + 1 < argc) runtime_root = argv[++index];
+    else if (option == "--case" && index + 1 < argc) selected_case = argv[++index];
     else {
-      std::cerr << "usage: stemtex-profile-smoke --texmf TEXLIVE_ROOT [--runtime STEMTEX_RUNTIME]\n";
+      std::cerr << "usage: stemtex-profile-smoke --texmf TEXLIVE_ROOT [--runtime STEMTEX_RUNTIME] [--case NAME]\n";
       return 2;
     }
   }
   if (texmf_root.empty()) {
-    std::cerr << "usage: stemtex-profile-smoke --texmf TEXLIVE_ROOT [--runtime STEMTEX_RUNTIME]\n";
+    std::cerr << "usage: stemtex-profile-smoke --texmf TEXLIVE_ROOT [--runtime STEMTEX_RUNTIME] [--case NAME]\n";
     return 2;
   }
 
@@ -49,18 +51,48 @@ int main(int argc, char **argv) {
     const char *cjk;
   };
   const std::vector<SmokeSpec> cases = {
-      {"lm-lm-simsun", "latin-modern", "latin-modern-math", "simsun"},
-      {"xits-xits-none", "xits", "xits-math", "none"},
-      {"arial-lete-simhei", "arial", "lete-sans-math", "simhei"},
-      {"termes-termes-fandol", "tex-gyre-termes", "tex-gyre-termes-math", "fandol-song"},
-      {"libertinus-libertinus-yahei", "libertinus-serif", "libertinus-math", "microsoft-yahei"},
-      {"stix-stix-none", "stix-two-text", "stix-two-math", "none"},
+      {"math-arsenal", "latin-modern", "arsenal-math", "none"},
+      {"math-asana", "latin-modern", "asana-math", "none"},
+      {"math-concrete", "latin-modern", "concrete-math", "none"},
+      {"math-erewhon", "latin-modern", "erewhon-math", "none"},
+      {"math-euler", "latin-modern", "euler-math", "none"},
+      {"math-fira", "latin-modern", "fira-math", "none"},
+      {"math-garamond", "latin-modern", "garamond-math", "none"},
+      {"math-gfs-neohellenic", "latin-modern", "gfs-neohellenic-math", "none"},
+      {"math-ibm-plex", "latin-modern", "ibm-plex-math", "none"},
+      {"math-kp", "latin-modern", "kp-math", "none"},
+      {"math-kp-sans", "latin-modern", "kp-sans-math", "none"},
+      {"math-latin-modern", "latin-modern", "latin-modern-math", "none"},
+      {"math-lete-sans", "latin-modern", "lete-sans-math", "none"},
+      {"math-libertinus", "latin-modern", "libertinus-math", "none"},
+      {"math-luciole", "latin-modern", "luciole-math", "none"},
+      {"math-new-computer-modern", "latin-modern", "new-computer-modern-math", "none"},
+      {"math-new-computer-modern-sans", "latin-modern", "new-computer-modern-sans-math", "none"},
+      {"math-old-standard", "latin-modern", "old-standard-math", "none"},
+      {"math-pennstander", "latin-modern", "pennstander-math", "none"},
+      {"math-pl46", "latin-modern", "pl46-math", "none"},
+      {"math-stix", "latin-modern", "stix-math", "none"},
+      {"math-stix-two", "latin-modern", "stix-two-math", "none"},
+      {"math-tex-gyre-bonum", "latin-modern", "tex-gyre-bonum-math", "none"},
+      {"math-tex-gyre-dejavu", "latin-modern", "tex-gyre-dejavu-math", "none"},
+      {"math-tex-gyre-pagella", "latin-modern", "tex-gyre-pagella-math", "none"},
+      {"math-tex-gyre-schola", "latin-modern", "tex-gyre-schola-math", "none"},
+      {"math-tex-gyre-termes", "latin-modern", "tex-gyre-termes-math", "none"},
+      {"math-xcharter", "latin-modern", "xcharter-math", "none"},
+      {"math-xits", "latin-modern", "xits-math", "none"},
+      {"text-xits-cjk-simsun", "xits", "xits-math", "simsun"},
+      {"text-arial-cjk-simhei", "arial", "lete-sans-math", "simhei"},
+      {"text-libertinus-cjk-fandol", "libertinus-serif", "libertinus-math", "fandol-song"},
+      {"text-stix-cjk-yahei", "stix-two-text", "stix-two-math", "microsoft-yahei"},
   };
 
   int tested = 0;
   int skipped = 0;
+  int selected = 0;
   std::string profiles_root = root.u8string();
   for (const SmokeSpec &item : cases) {
+    if (!selected_case.empty() && selected_case != item.name) continue;
+    ++selected;
     StemTeXProfileSpec spec{item.name, item.text, item.math, item.cjk};
     char *result_json = nullptr;
     error = nullptr;
@@ -140,5 +172,9 @@ int main(int argc, char **argv) {
   }
   std::cout << "tested=" << tested << " skipped=" << skipped << '\n';
   fs::remove_all(root, ignored);
+  if (selected == 0) {
+    std::cerr << "unknown smoke case: " << selected_case << '\n';
+    return 2;
+  }
   return tested > 0 ? 0 : 1;
 }

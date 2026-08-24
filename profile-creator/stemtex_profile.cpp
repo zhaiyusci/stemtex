@@ -168,16 +168,70 @@ const std::vector<FontRecipe> &recipes() {
 \setmonofont{lmmono10-regular.otf}[ItalicFont=lmmono10-italic.otf]
 )TEX"},
 
+      {"arsenal-math", "math", "Arsenal Math", "texlive", "Arsenal-based sans-serif Unicode mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/arsenal-math/ArsenalMath-Sans.otf"},
+        {RequirementRoot::TexmfDist, "fonts/opentype/public/arsenal-math/ArsenalMath-SansBold.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{ArsenalMath-Sans.otf}[BoldFont=ArsenalMath-SansBold.otf]
+)TEX"},
+      {"asana-math", "math", "Asana Math", "texlive", "Palatino-style Unicode mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/asana-math/Asana-Math.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{Asana-Math.otf}
+)TEX"},
+      {"concrete-math", "math", "Concrete Math", "texlive", "Concrete-style Unicode mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/concmath-otf/Concrete-Math.otf"},
+        {RequirementRoot::TexmfDist, "fonts/opentype/public/concmath-otf/Concrete-Math-Bold.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{Concrete-Math.otf}[BoldFont=Concrete-Math-Bold.otf]
+)TEX"},
+      {"erewhon-math", "math", "Erewhon Math", "texlive", "Utopia-style Unicode mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/erewhon-math/Erewhon-Math.otf"},
+        {RequirementRoot::TexmfDist, "fonts/opentype/public/erewhon-math/Erewhon-Math-Bold.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{Erewhon-Math.otf}[BoldFont=Erewhon-Math-Bold.otf]
+)TEX"},
+      {"euler-math", "math", "Euler Math", "texlive", "OpenType version of Hermann Zapf's Euler mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/euler-math/Euler-Math.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{Euler-Math.otf}
+)TEX"},
+      {"fira-math", "math", "Fira Math", "texlive", "Fira sans-serif Unicode mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/firamath/FiraMath-Regular.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{FiraMath-Regular.otf}
+)TEX"},
+      {"garamond-math", "math", "Garamond Math", "texlive", "Unicode mathematics matching EB Garamond",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/garamond-math/Garamond-Math.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{Garamond-Math.otf}
+)TEX"},
+      {"gfs-neohellenic-math", "math", "GFS Neohellenic Math", "texlive", "Neo-Hellenic sans-serif Unicode mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/gfsneohellenicmath/GFSNeohellenicMath.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{GFSNeohellenicMath.otf}
+)TEX"},
+      {"ibm-plex-math", "math", "IBM Plex Math", "texlive", "Unicode mathematics matching IBM Plex",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/ibm/plex/IBMPlexMath-Regular.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{IBMPlexMath-Regular.otf}
+)TEX"},
+      {"kp-math", "math", "KpMath", "texlive", "Serif Unicode mathematics from the Kpfonts family",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/kpfonts-otf/KpMath-Regular.otf"},
+        {RequirementRoot::TexmfDist, "fonts/opentype/public/kpfonts-otf/KpMath-Bold.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{KpMath-Regular.otf}[BoldFont=KpMath-Bold.otf]
+)TEX"},
+      {"kp-sans-math", "math", "KpMath Sans", "texlive", "Sans-serif Unicode mathematics from the Kpfonts family",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/kpfonts-otf/KpMath-Sans.otf"},
+        {RequirementRoot::TexmfDist, "fonts/opentype/public/kpfonts-otf/KpMath-SansBold.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{KpMath-Sans.otf}[BoldFont=KpMath-SansBold.otf]
+)TEX"},
       {"latin-modern-math", "math", "Latin Modern Math", "texlive", "Unicode Computer Modern mathematics",
        {{RequirementRoot::TexmfDist, "fonts/opentype/public/lm-math/latinmodern-math.otf"}},
        R"TEX(\usepackage{unicode-math}
 \setmathfont{latinmodern-math.otf}
-)TEX"},
-      {"xits-math", "math", "XITS Math", "texlive", "Times-compatible Unicode mathematics",
-       {{RequirementRoot::TexmfDist, "fonts/opentype/public/xits/XITSMath-Regular.otf"},
-        {RequirementRoot::TexmfDist, "fonts/opentype/public/xits/XITSMath-Bold.otf"}},
-       R"TEX(\usepackage{unicode-math}
-\setmathfont{XITSMath-Regular.otf}[BoldFont=XITSMath-Bold.otf]
 )TEX"},
       {"lete-sans-math", "math", "Lete Sans Math", "texlive", "Sans-serif Unicode mathematics",
        {{RequirementRoot::TexmfDist, "fonts/opentype/public/lete-sans-math/LeteSansMath.otf"},
@@ -185,25 +239,90 @@ const std::vector<FontRecipe> &recipes() {
         {RequirementRoot::TexmfDist, "tex/latex/lete-sans-math/lete-sans-math.sty"}},
        R"TEX(\usepackage[textrm,textit,textbf,textsf]{lete-sans-math}
 )TEX"},
-      {"tex-gyre-termes-math", "math", "TeX Gyre Termes Math", "texlive", "Times-compatible TeX Gyre mathematics",
-       {{RequirementRoot::TexmfDist, "fonts/opentype/public/tex-gyre-math/texgyretermes-math.otf"}},
-       R"TEX(\usepackage{unicode-math}
-\setmathfont{texgyretermes-math.otf}
-)TEX"},
-      {"tex-gyre-pagella-math", "math", "TeX Gyre Pagella Math", "texlive", "Palatino-compatible Unicode mathematics",
-       {{RequirementRoot::TexmfDist, "fonts/opentype/public/tex-gyre-math/texgyrepagella-math.otf"}},
-       R"TEX(\usepackage{unicode-math}
-\setmathfont{texgyrepagella-math.otf}
-)TEX"},
       {"libertinus-math", "math", "Libertinus Math", "texlive", "Unicode mathematics matching Libertinus text",
        {{RequirementRoot::TexmfDist, "fonts/opentype/public/libertinus-fonts/LibertinusMath-Regular.otf"}},
        R"TEX(\usepackage{unicode-math}
 \setmathfont{LibertinusMath-Regular.otf}
 )TEX"},
+      {"luciole-math", "math", "Luciole Math", "texlive", "Accessibility-focused Unicode mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/luciole/Luciole-Math.otf"},
+        {RequirementRoot::TexmfDist, "fonts/opentype/public/luciole/Luciole-Math-Bold.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{Luciole-Math.otf}[BoldFont=Luciole-Math-Bold.otf]
+)TEX"},
+      {"new-computer-modern-math", "math", "New Computer Modern Math", "texlive", "Expanded Computer Modern Unicode mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/newcomputermodern/NewCMMath-Book.otf"},
+        {RequirementRoot::TexmfDist, "fonts/opentype/public/newcomputermodern/NewCMMath-Bold.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{NewCMMath-Book.otf}[BoldFont=NewCMMath-Bold.otf]
+)TEX"},
+      {"new-computer-modern-sans-math", "math", "New Computer Modern Sans Math", "texlive", "Sans-serif Computer Modern Unicode mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/newcomputermodern/NewCMSansMath-Regular.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{NewCMSansMath-Regular.otf}
+)TEX"},
+      {"old-standard-math", "math", "Old Standard Math", "texlive", "Historic-style Unicode mathematics matching Old Standard",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/oldstandard/OldStandard-Math.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{OldStandard-Math.otf}
+)TEX"},
+      {"pennstander-math", "math", "Pennstander Math", "texlive", "Rounded sans-serif Unicode mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/pennstander-otf/PennstanderMath-Regular.otf"},
+        {RequirementRoot::TexmfDist, "fonts/opentype/public/pennstander-otf/PennstanderMath-Bold.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{PennstanderMath-Regular.otf}[BoldFont=PennstanderMath-Bold.otf]
+)TEX"},
+      {"pl46-math", "math", "PL46 Math", "texlive", "Line-segment OpenType Unicode mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/pl46-fonts/PL46-Math.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{PL46-Math.otf}
+)TEX"},
+      {"stix-math", "math", "STIX Math", "texlive", "Original STIX Unicode mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/stix/STIXMath-Regular.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{STIXMath-Regular.otf}
+)TEX"},
       {"stix-two-math", "math", "STIX Two Math", "texlive", "STIX Unicode mathematics",
        {{RequirementRoot::TexmfDist, "fonts/opentype/public/stix2-otf/STIXTwoMath-Regular.otf"}},
        R"TEX(\usepackage{unicode-math}
 \setmathfont{STIXTwoMath-Regular.otf}
+)TEX"},
+      {"tex-gyre-bonum-math", "math", "TeX Gyre Bonum Math", "texlive", "Bookman-compatible TeX Gyre mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/tex-gyre-math/texgyrebonum-math.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{texgyrebonum-math.otf}
+)TEX"},
+      {"tex-gyre-dejavu-math", "math", "TeX Gyre DejaVu Math", "texlive", "DejaVu-compatible TeX Gyre mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/tex-gyre-math/texgyredejavu-math.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{texgyredejavu-math.otf}
+)TEX"},
+      {"tex-gyre-pagella-math", "math", "TeX Gyre Pagella Math", "texlive", "Palatino-compatible TeX Gyre mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/tex-gyre-math/texgyrepagella-math.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{texgyrepagella-math.otf}
+)TEX"},
+      {"tex-gyre-schola-math", "math", "TeX Gyre Schola Math", "texlive", "Century Schoolbook-compatible TeX Gyre mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/tex-gyre-math/texgyreschola-math.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{texgyreschola-math.otf}
+)TEX"},
+      {"tex-gyre-termes-math", "math", "TeX Gyre Termes Math", "texlive", "Times-compatible TeX Gyre mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/tex-gyre-math/texgyretermes-math.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{texgyretermes-math.otf}
+)TEX"},
+      {"xcharter-math", "math", "XCharter Math", "texlive", "Charter-style Unicode mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/xcharter-math/XCharter-Math.otf"},
+        {RequirementRoot::TexmfDist, "fonts/opentype/public/xcharter-math/XCharter-Math-Bold.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{XCharter-Math.otf}[BoldFont=XCharter-Math-Bold.otf]
+)TEX"},
+      {"xits-math", "math", "XITS Math", "texlive", "Times-compatible Unicode mathematics",
+       {{RequirementRoot::TexmfDist, "fonts/opentype/public/xits/XITSMath-Regular.otf"},
+        {RequirementRoot::TexmfDist, "fonts/opentype/public/xits/XITSMath-Bold.otf"}},
+       R"TEX(\usepackage{unicode-math}
+\setmathfont{XITSMath-Regular.otf}[BoldFont=XITSMath-Bold.otf]
 )TEX"},
 
       {"none", "cjk", "No CJK font", "none", "Do not load xeCJK", {}, ""},
