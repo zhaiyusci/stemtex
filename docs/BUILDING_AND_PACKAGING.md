@@ -89,8 +89,16 @@ $profile = ".\staging\gui\profiles\unicodemath_cjk"
 
 & $smoke --repo $repo --runtime $runtime --profile $profile --case validate --spares 0
 & .\staging\gui\stemtex-renderer-gui.exe --smoke
+& .\staging\gui\stemtex-profile-creator.exe --smoke --runtime $runtime --texmf $runtime
+& .\build\stemtex-ninja\profile-creator\stemtex-profile-smoke.exe --runtime $runtime --texmf $runtime
 cmake --build --preset ninja-release --target stemtex-checkpoint-audit
 ```
+
+The Profile Creator smoke materializes representative font combinations. With
+`--runtime`, it also starts a real worker and renders each combination. Against
+the bundled tree it tests the three available built-in combinations and skips
+full-tree-only recipes. Pass a compatible full TeX Live root to `--texmf` to
+exercise TeX Gyre/Fandol, Libertinus, and STIX Two as well.
 
 Before a release that changes worker recovery, also run the no-spare corpus:
 

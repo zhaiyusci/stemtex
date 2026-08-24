@@ -22,6 +22,7 @@ set(STEMTEX_RUNTIME_SOURCE
     CACHE PATH "Runtime side tree containing xelatexdaemon.fmt")
 
 add_subdirectory(cpp-daemon)
+add_subdirectory(profile-creator)
 if(STEMTEX_BUILD_GUI)
   add_subdirectory(gui)
 endif()
@@ -29,13 +30,17 @@ endif()
 set(STEMTEX_ICU_DATA "${CMAKE_CURRENT_SOURCE_DIR}/texlive-xetex/prebuilt-msvc/share/icu-data/icudt78l.dat")
 set(STEMTEX_FORMAT_FILE "${STEMTEX_RUNTIME_SOURCE}/texmf-var/web2c/xetex/xelatexdaemon.fmt")
 
-install(TARGETS stemtex-renderer
+install(TARGETS stemtex-renderer stemtex-profile
   RUNTIME DESTINATION runtime/bin/sdk
   LIBRARY DESTINATION runtime/bin/sdk
   ARCHIVE DESTINATION runtime/sdk/lib
 )
 install(TARGETS stemtex-worker-host RUNTIME DESTINATION runtime/bin/windows)
-install(FILES cpp-daemon/stemtex_renderer.h DESTINATION runtime/sdk/include)
+install(FILES
+  cpp-daemon/stemtex_renderer.h
+  profile-creator/stemtex_profile.h
+  DESTINATION runtime/sdk/include
+)
 install(FILES VERSION DESTINATION runtime)
 install(FILES gui/assets/stemtex-renderer-gui.ico DESTINATION runtime RENAME StemTeX.ico)
 install(FILES
@@ -56,7 +61,7 @@ install(FILES
 )
 
 if(STEMTEX_BUILD_GUI)
-  install(TARGETS stemtex-renderer-gui RUNTIME DESTINATION gui)
+  install(TARGETS stemtex-renderer-gui stemtex-profile-creator RUNTIME DESTINATION gui)
   install(DIRECTORY "$<TARGET_FILE_DIR:stemtex-renderer-gui>/"
     DESTINATION gui
     FILES_MATCHING
@@ -68,6 +73,9 @@ if(STEMTEX_BUILD_GUI)
       PATTERN "stemtex-renderer.dll" EXCLUDE
       PATTERN "stemtex-renderer.lib" EXCLUDE
       PATTERN "stemtex-renderer.exp" EXCLUDE
+      PATTERN "stemtex-profile.dll" EXCLUDE
+      PATTERN "stemtex-profile.lib" EXCLUDE
+      PATTERN "stemtex-profile.exp" EXCLUDE
   )
   install(CODE [[
     file(REMOVE_RECURSE
@@ -231,9 +239,9 @@ dumylang dumyhyph.tex
   ]=])
 endif()
 
-set(STEMTEX_STAGE_DEPENDS stemtex-renderer stemtex-worker-host)
+set(STEMTEX_STAGE_DEPENDS stemtex-renderer stemtex-profile stemtex-worker-host)
 if(TARGET stemtex-renderer-gui)
-  list(APPEND STEMTEX_STAGE_DEPENDS stemtex-renderer-gui)
+  list(APPEND STEMTEX_STAGE_DEPENDS stemtex-renderer-gui stemtex-profile-creator)
 endif()
 
 add_custom_target(stage

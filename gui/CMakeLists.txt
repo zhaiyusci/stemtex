@@ -52,6 +52,38 @@ add_custom_target(stemtex-renderer-gui-copy-renderer
 )
 add_dependencies(stemtex-renderer-gui stemtex-renderer-gui-copy-renderer)
 
+add_executable(stemtex-profile-creator WIN32
+  ../profile-creator-qt/main.cpp
+  resources.qrc
+  stemtex-renderer-gui.rc
+)
+target_compile_features(stemtex-profile-creator PRIVATE cxx_std_17)
+target_link_libraries(stemtex-profile-creator PRIVATE
+  Qt6::Core Qt6::Gui Qt6::Widgets stemtex-profile
+)
+target_include_directories(stemtex-profile-creator PRIVATE
+  ../profile-creator
+)
+if(MSVC)
+  target_compile_options(stemtex-profile-creator PRIVATE /utf-8)
+  target_link_libraries(stemtex-profile-creator PRIVATE delayimp)
+  target_link_options(stemtex-profile-creator PRIVATE
+    "/DELAYLOAD:stemtex-profile.dll"
+  )
+endif()
+
+add_custom_command(TARGET stemtex-profile-creator POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_CURRENT_SOURCE_DIR}/qt.conf
+          $<TARGET_FILE_DIR:stemtex-profile-creator>/qt.conf
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          $<TARGET_FILE:stemtex-profile>
+          $<TARGET_FILE_DIR:stemtex-profile-creator>
+)
+
+# Both GUI executables share one output directory and one deployed Qt runtime.
+add_dependencies(stemtex-profile-creator stemtex-renderer-gui stemtex-profile)
+
 if(TARGET Qt6::windeployqt)
   add_custom_command(TARGET stemtex-renderer-gui POST_BUILD
     COMMAND $<TARGET_FILE:Qt6::windeployqt>

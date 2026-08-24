@@ -48,9 +48,12 @@
       "configuration": "Release",
       "targets": [
         "stemtex-renderer",
+        "stemtex-profile",
+        "stemtex-profile-smoke",
         "stemtex-worker-host",
         "stemtex-renderer-smoke",
-        "stemtex-renderer-gui"
+        "stemtex-renderer-gui",
+        "stemtex-profile-creator"
       ]
     },
     {
@@ -68,9 +71,12 @@
       "configurePreset": "ninja-msvc",
       "targets": [
         "stemtex-renderer",
+        "stemtex-profile",
+        "stemtex-profile-smoke",
         "stemtex-worker-host",
         "stemtex-renderer-smoke",
-        "stemtex-renderer-gui"
+        "stemtex-renderer-gui",
+        "stemtex-profile-creator"
       ]
     },
     {

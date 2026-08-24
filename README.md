@@ -17,6 +17,8 @@ sandbox.
   shutdown from leaving an orphan `xetexdaemon`;
 - a native renderer DLL and SDK for embedding;
 - a Qt GUI that uses the same native API;
+- a Qt-free Profile Creator C ABI and a Qt reference application for composing
+  independent text, math, and CJK font choices;
 - a CMake staging flow and an Inno Setup installer.
 
 The default configuration uses one primary worker and no hot spares. Spares are
@@ -80,6 +82,24 @@ full installer generates the maintained `unicodemath_cjk` cache after files are
 installed. If a profile cache is absent, the renderer compiles `warmup.tex` in
 its private instance state and does not publish a replacement into the profile.
 
+## Profile Creator
+
+`stemtex-profile-creator.exe` creates normal StemTeX profiles without exposing
+font-loading TeX commands. Text, math, and CJK fonts are selected independently;
+the creator library resolves a maintained recipe for each choice, checks it
+against the selected TeX Live tree, and generates `preamble.tex` and
+`warmup.tex`.
+
+The bundled small tree enables its maintained Latin Modern, XITS, and Lete Sans
+Math recipes. Pointing the creator at a full TeX Live root additionally exposes
+families such as TeX Gyre, Libertinus, STIX Two, and Fandol. Windows font recipes
+cover Arial, SimSun/SimHei, and Microsoft YaHei.
+
+Generated profiles live under `%LOCALAPPDATA%\StemTeX\profiles`. The Renderer
+GUI scans that location and exposes one `字体 Profile...` button that launches
+the separate creator. Other GUI technologies can call `stemtex-profile.dll`
+directly through its C ABI. See [Profile Creator API](docs/PROFILE_CREATOR_API.md).
+
 ## External TeX Trees
 
 The bundled tree is the supported default. Advanced hosts can set
@@ -101,6 +121,8 @@ document:
   clean staging, smoke tests, and installer creation.
 - [C renderer API](docs/CPP_RENDERER_API.md): public ABI, ownership, errors,
   output formats, and host examples.
+- [Profile Creator API](docs/PROFILE_CREATOR_API.md): font catalog, recipes,
+  managed profiles, generation ABI, and reference Qt application.
 - [Renderer status](docs/CPP_RENDERER_API_STATUS.md): current contract and
   remaining product work.
 - [Distribution options](docs/DISTRIBUTION_OPTIONS.md): installed layout,
@@ -115,6 +137,8 @@ document:
 ```text
 cpp-daemon/       Native renderer, worker supervisor, public header, and smoke tests.
 gui/              Qt GUI, assets, and rendering profiles.
+profile-creator/   Qt-free profile catalog/generator C ABI and smoke tests.
+profile-creator-qt/ Qt reference front end for font profile creation.
 installer/        Inno Setup definition.
 cmake/            Helpers installed into the runtime.
 scripts/          Profile generation and checkpoint audit tools.

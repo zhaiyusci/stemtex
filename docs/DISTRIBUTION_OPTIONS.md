@@ -15,6 +15,7 @@ the resulting tree contains and which data may come from outside it.
 StemTeX/
   gui/
     stemtex-renderer-gui.exe
+    stemtex-profile-creator.exe
     Qt runtime files
     profiles/
       <name>/
@@ -32,8 +33,10 @@ StemTeX/
       icu-data/
     bin/sdk/
       stemtex-renderer.dll
+      stemtex-profile.dll
     sdk/include/
       stemtex_renderer.h
+      stemtex_profile.h
     sdk/lib/
       stemtex-renderer.lib
     texmf-dist/
@@ -72,6 +75,18 @@ Profile source consists of:
 gui/profiles/<name>/preamble.tex
 gui/profiles/<name>/warmup.tex
 ```
+
+The separate Profile Creator writes user-managed profiles to:
+
+```text
+%LOCALAPPDATA%/StemTeX/profiles/<name>/
+  profile.json
+  preamble.tex
+  warmup.tex
+```
+
+The Renderer GUI scans both collections. `profile.json` is creator metadata;
+the renderer continues to consume only `preamble.tex` and `warmup.tex`.
 
 `warmup.xdv`, `.aux`, `.log`, PDF output, and Fontconfig cache files are
 generated artifacts. CMake install and the installer payload exclude them. On a

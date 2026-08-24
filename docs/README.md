@@ -10,6 +10,7 @@ contracts, distribution policy, and engine internals.
 | --- | --- | --- |
 | Build, stage, test, or package StemTeX | [Building and packaging](BUILDING_AND_PACKAGING.md) | Supported CMake application flow and Inno Setup package flow. |
 | Embed the native renderer | [C renderer API](CPP_RENDERER_API.md) | Public ABI, configuration, ownership, rendering, and errors. |
+| Build a font-profile UI | [Profile Creator API](PROFILE_CREATOR_API.md) | Qt-free font catalog/generation ABI and Qt reference application. |
 | Check implemented and pending behavior | [Renderer status](CPP_RENDERER_API_STATUS.md) | Current contract and remaining product work. |
 | Understand the installed tree or external TeX Live support | [Distribution options](DISTRIBUTION_OPTIONS.md) | Components, paths, writable data, cache policy, and compatibility boundary. |
 | Understand bad-snippet recovery | [XeTeX checkpoint recovery](XETEX_CHECKPOINT_RECOVERY.md) | In-process snapshot model, protocol, limits, and regression tests. |
@@ -18,6 +19,8 @@ contracts, distribution policy, and engine internals.
 ## Sources Of Truth
 
 - Public ABI declarations: [`cpp-daemon/stemtex_renderer.h`](../cpp-daemon/stemtex_renderer.h)
+- Profile Creator ABI declarations:
+  [`profile-creator/stemtex_profile.h`](../profile-creator/stemtex_profile.h)
 - Version: [`VERSION`](../VERSION)
 - Build and install rules: [`CMakeLists.txt`](../CMakeLists.txt) and
   [`CMakePresets.json`](../CMakePresets.json)
@@ -37,7 +40,8 @@ release source. Do not use their contents to define the API or package layout.
   belong in the checkpoint or engine notes.
 - Keep future work in `CPP_RENDERER_API_STATUS.md`, not mixed into the API
   contract.
-- Describe generated caches as artifacts. Profile source consists of
-  `preamble.tex` and `warmup.tex`; `warmup.xdv` is never a source file.
+- Describe generated caches as artifacts. Every profile has `preamble.tex` and
+  `warmup.tex`; creator-managed profiles additionally have `profile.json`.
+  `warmup.xdv` is never a source file.
 - Update command examples when CMake presets, smoke cases, or installer inputs
   change.

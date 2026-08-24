@@ -21,6 +21,7 @@
 #include <QMainWindow>
 #include <QMetaObject>
 #include <QPdfDocument>
+#include <QProcess>
 #include <QImage>
 #include <QPainter>
 #include <QPixmap>
@@ -31,6 +32,7 @@
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QStandardPaths>
 #include <QSvgRenderer>
 #include <QString>
 #include <QStringList>
@@ -98,6 +100,11 @@ QString defaultTexmfRoot(const QString &runtimeRoot) {
   return normalizeTexmfRoot(runtimeRoot);
 }
 
+QString userProfilesRoot() {
+  QString data = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+  return QDir::cleanPath(QDir(data).filePath("StemTeX/profiles"));
+}
+
 struct ProfileEntry {
   QString name;
   QString path;
@@ -134,15 +141,28 @@ bool rendererProfileInfo(const QString &profileRoot, ProfileEntry *entry, QStrin
 QVector<ProfileEntry> profileRoots(const QString &, QString *errorText) {
   QVector<ProfileEntry> profiles;
   QDir appDir(QCoreApplication::applicationDirPath());
-  QDir dir(appDir.filePath("profiles"));
-  if (!dir.exists()) {
-    if (errorText) *errorText = QString("profile directory not found: %1").arg(dir.absolutePath());
-    return profiles;
+  QStringList roots{appDir.filePath("profiles"), userProfilesRoot()};
+  for (const QString &root : roots) {
+    QDir dir(root);
+    if (!dir.exists()) {
+      continue;
+    }
+    for (const QFileInfo &candidate : dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
+      ProfileEntry profile;
+      QString candidateError;
+      if (!rendererProfileInfo(candidate.absoluteFilePath(), &profile, &candidateError)) continue;
+      bool duplicate = false;
+      for (const ProfileEntry &existing : profiles) {
+        if (QDir::cleanPath(existing.path).compare(QDir::cleanPath(profile.path), Qt::CaseInsensitive) == 0) {
+          duplicate = true;
+          break;
+        }
+      }
+      if (!duplicate) profiles.push_back(profile);
+    }
   }
-  for (const QFileInfo &candidate : dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
-    ProfileEntry profile;
-    if (!rendererProfileInfo(candidate.absoluteFilePath(), &profile, errorText)) continue;
-    profiles.push_back(profile);
+  if (profiles.isEmpty() && errorText) {
+    *errorText = QString("no valid profiles found; searched: %1").arg(roots.join("; "));
   }
   return profiles;
 }
@@ -552,6 +572,7 @@ class MainWindow : public QMainWindow {
     texmfButton_ = new QPushButton("TeXLive...", central);
     profileCombo_ = new QComboBox(central);
     reloadProfiles();
+    profileCreatorButton_ = new QPushButton(QStringLiteral("字体 Profile..."), central);
     encodingCombo_ = new QComboBox(central);
     encodingCombo_->addItems({"UTF-8", "GBK", "Big5"});
     encodingCombo_->setCurrentText("UTF-8");
@@ -582,6 +603,7 @@ class MainWindow : public QMainWindow {
     runtimeRow->addWidget(texmfButton_);
     runtimeRow->addWidget(new QLabel("Profile", central));
     runtimeRow->addWidget(profileCombo_);
+    runtimeRow->addWidget(profileCreatorButton_);
     runtimeRow->addWidget(new QLabel("输入编码", central));
     runtimeRow->addWidget(encodingCombo_);
     runtimeRow->addWidget(new QLabel("Output", central));
@@ -691,6 +713,7 @@ class MainWindow : public QMainWindow {
     });
     connect(texmfButton_, &QPushButton::clicked, this, [this]() { chooseTexmfRoot(); });
     connect(profileCombo_, &QComboBox::currentIndexChanged, this, [this](int) { switchProfile(); });
+    connect(profileCreatorButton_, &QPushButton::clicked, this, [this]() { openProfileCreator(); });
     connect(renderButton_, &QPushButton::clicked, this, [this]() {
       if (autoRenderTimer_) autoRenderTimer_->stop();
       renderSnippet();
@@ -854,18 +877,51 @@ class MainWindow : public QMainWindow {
   }
 
   void reloadProfiles() {
+    QString oldProfile = selectedProfileRoot();
     QString profileError;
     bool oldSignals = profileCombo_->blockSignals(true);
     profileCombo_->clear();
     for (const ProfileEntry &profile : profileRoots(repo_root_, &profileError)) {
       profileCombo_->addItem(profile.name, profile.path);
     }
+    int oldIndex = profileCombo_->findData(oldProfile);
+    if (oldIndex >= 0) profileCombo_->setCurrentIndex(oldIndex);
     profileCombo_->blockSignals(oldSignals);
     profileCombo_->setToolTip(profileCombo_->count() == 0 ? profileError : QString());
     QString shown = QFileInfo(texmf_root_).fileName();
     if (shown.isEmpty()) shown = texmf_root_;
     texmfLabel_->setText(shown);
     texmfLabel_->setToolTip(QString("TeXLive package/font tree: %1\nDaemon runtime: %2").arg(texmf_root_, runtime_root_));
+  }
+
+  void openProfileCreator() {
+    QString executable = QDir(QCoreApplication::applicationDirPath()).filePath("stemtex-profile-creator.exe");
+    if (!QFileInfo(executable).isExecutable()) {
+      updateEngineStatus(hasRenderer(), spareReady_, spareTarget_,
+                         QString("Profile Creator not found: %1").arg(executable));
+      return;
+    }
+    if (profileCreatorProcess_ && profileCreatorProcess_->state() != QProcess::NotRunning) return;
+    if (profileCreatorProcess_) profileCreatorProcess_->deleteLater();
+    profileCreatorProcess_ = new QProcess(this);
+    profileCreatorButton_->setEnabled(false);
+    connect(profileCreatorProcess_, &QProcess::finished, this, [this](int, QProcess::ExitStatus) {
+      profileCreatorButton_->setEnabled(true);
+      reloadProfiles();
+      updateEngineStatus(hasRenderer(), spareReady_, spareTarget_, QString("Profile list refreshed"));
+      profileCreatorProcess_->deleteLater();
+      profileCreatorProcess_ = nullptr;
+    });
+    connect(profileCreatorProcess_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
+      profileCreatorButton_->setEnabled(true);
+      updateEngineStatus(hasRenderer(), spareReady_, spareTarget_,
+                         QString("Cannot start Profile Creator: %1").arg(profileCreatorProcess_->errorString()));
+    });
+    profileCreatorProcess_->setProgram(executable);
+    profileCreatorProcess_->setArguments({"--runtime", runtime_root_, "--texmf", texmf_root_,
+                                          "--profiles", userProfilesRoot()});
+    profileCreatorProcess_->setWorkingDirectory(QCoreApplication::applicationDirPath());
+    profileCreatorProcess_->start();
   }
 
   void destroyRendererLater(StemTeXRenderer *renderer) {
@@ -1276,6 +1332,8 @@ class MainWindow : public QMainWindow {
   QLabel *texmfLabel_ = nullptr;
   QPushButton *texmfButton_ = nullptr;
   QComboBox *profileCombo_ = nullptr;
+  QPushButton *profileCreatorButton_ = nullptr;
+  QProcess *profileCreatorProcess_ = nullptr;
   QComboBox *encodingCombo_ = nullptr;
   QComboBox *outputCombo_ = nullptr;
   QPushButton *renderButton_ = nullptr;
