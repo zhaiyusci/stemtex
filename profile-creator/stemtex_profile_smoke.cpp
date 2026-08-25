@@ -35,6 +35,10 @@ int main(int argc, char **argv) {
     std::cerr << "usage: stemtex-profile-smoke --texmf TEXLIVE_ROOT [--runtime STEMTEX_RUNTIME] [--case NAME]\n";
     return 2;
   }
+  if (std::string(stemtex_profile_abi_version()) != "3") {
+    std::cerr << "unexpected profile ABI version\n";
+    return 1;
+  }
 
   StemTeXProfileContext context{};
   context.texmf_root_utf8 = texmf_root.c_str();
@@ -64,97 +68,133 @@ int main(int argc, char **argv) {
       "tikz-cd", "circuitikz", "forest", "chemfig", "quantikz", "graphicx", "array",
       "booktabs", "tabularx", "multirow", "adjustbox", "enumitem"};
   for (const char *id : known_packages) {
-    if (package_catalog_text.find(std::string("\"id\":\"") + id + "\"") == std::string::npos) {
+    const size_t item = package_catalog_text.find(std::string("\"id\":\"") + id + "\"");
+    if (item == std::string::npos) {
       std::cerr << "package catalog missing " << id << '\n';
       return 1;
     }
+    const size_t next_item = package_catalog_text.find("},{\"id\":\"", item + 1);
+    const size_t default_on = package_catalog_text.find("\"defaultEnabled\":true", item);
+    if (default_on != std::string::npos &&
+        (next_item == std::string::npos || default_on < next_item)) {
+      std::cerr << "package unexpectedly enabled by default: " << id << '\n';
+      return 1;
+    }
+  }
+  auto package_available = [&package_catalog_text](const char *id) {
+    const size_t item = package_catalog_text.find(std::string("\"id\":\"") + id + "\"");
+    if (item == std::string::npos) return false;
+    const size_t next_item = package_catalog_text.find("},{\"id\":\"", item + 1);
+    const size_t available = package_catalog_text.find("\"available\":true", item);
+    return available != std::string::npos &&
+           (next_item == std::string::npos || available < next_item);
+  };
+
+  char *package_plan = nullptr;
+  std::string package_plan_text;
+  if (package_available("mathtools") && package_available("physics") &&
+      package_available("siunitx") && package_available("xcolor") &&
+      package_available("cancel")) {
+    const char *plan_ids[] = {"physics", "siunitx", "cancel", "xcolor"};
+    package_plan = stemtex_profile_package_plan_json(&context, plan_ids, 4, &code, &error);
+    if (!package_plan) {
+      std::cerr << (error ? error : "package plan failed") << '\n';
+      stemtex_profile_free_string(error);
+      return 1;
+    }
+    package_plan_text = package_plan;
+    std::cout << package_plan << '\n';
+    stemtex_profile_free_string(package_plan);
+    stemtex_profile_free_string(error);
+    size_t mathtools_position = package_plan_text.find("\"id\":\"mathtools\"");
+    size_t physics_position = package_plan_text.find("\"id\":\"physics\"");
+    size_t siunitx_position = package_plan_text.find("\"id\":\"siunitx\"");
+    size_t xcolor_position = package_plan_text.find("\"id\":\"xcolor\"");
+    size_t cancel_position = package_plan_text.find("\"id\":\"cancel\"");
+    if (mathtools_position == std::string::npos || physics_position == std::string::npos ||
+        siunitx_position == std::string::npos ||
+        xcolor_position == std::string::npos || cancel_position == std::string::npos ||
+        !(mathtools_position < physics_position && physics_position < siunitx_position &&
+          xcolor_position < cancel_position) ||
+        package_plan_text.find("\"id\":\"mathtools\",\"displayName\":\"mathtools\",\"explicit\":false") ==
+            std::string::npos ||
+        package_plan_text.find("\"id\":\"physics-siunitx-qty\",\"severity\":\"notice\"") ==
+            std::string::npos) {
+      std::cerr << "package plan did not resolve dependencies/order as expected\n";
+      return 1;
+    }
+  } else {
+    std::cout << "skip=base-package-plan reason=packages unavailable\n";
   }
 
-  const char *plan_ids[] = {"physics", "siunitx", "cancel", "xcolor"};
-  char *package_plan = stemtex_profile_package_plan_json(&context, plan_ids, 4, &code, &error);
-  if (!package_plan) {
-    std::cerr << (error ? error : "package plan failed") << '\n';
+  if (package_available("xcolor") && package_available("tikz") &&
+      package_available("pgfplots") && package_available("chemfig")) {
+    const char *drawing_plan_ids[] = {"pgfplots", "chemfig"};
+    package_plan = stemtex_profile_package_plan_json(&context, drawing_plan_ids, 2, &code, &error);
+    if (!package_plan) {
+      std::cerr << (error ? error : "drawing package plan failed") << '\n';
+      stemtex_profile_free_string(error);
+      return 1;
+    }
+    package_plan_text = package_plan;
+    std::cout << package_plan << '\n';
+    stemtex_profile_free_string(package_plan);
     stemtex_profile_free_string(error);
-    return 1;
-  }
-  std::string package_plan_text = package_plan;
-  std::cout << package_plan << '\n';
-  stemtex_profile_free_string(package_plan);
-  stemtex_profile_free_string(error);
-  size_t mathtools_position = package_plan_text.find("\"id\":\"mathtools\"");
-  size_t physics_position = package_plan_text.find("\"id\":\"physics\"");
-  size_t siunitx_position = package_plan_text.find("\"id\":\"siunitx\"");
-  size_t xcolor_position = package_plan_text.find("\"id\":\"xcolor\"");
-  size_t cancel_position = package_plan_text.find("\"id\":\"cancel\"");
-  if (mathtools_position == std::string::npos || physics_position == std::string::npos ||
-      siunitx_position == std::string::npos ||
-      xcolor_position == std::string::npos || cancel_position == std::string::npos ||
-      !(mathtools_position < physics_position && physics_position < siunitx_position &&
-        xcolor_position < cancel_position) ||
-      package_plan_text.find("\"id\":\"mathtools\",\"displayName\":\"mathtools\",\"explicit\":false") ==
-          std::string::npos ||
-      package_plan_text.find("\"id\":\"physics-siunitx-qty\",\"severity\":\"notice\"") ==
-          std::string::npos) {
-    std::cerr << "package plan did not resolve dependencies/order as expected\n";
-    return 1;
+    size_t xcolor_position = package_plan_text.find("\"id\":\"xcolor\"");
+    size_t tikz_position = package_plan_text.find("\"id\":\"tikz\"");
+    size_t pgfplots_position = package_plan_text.find("\"id\":\"pgfplots\"");
+    size_t chemfig_position = package_plan_text.find("\"id\":\"chemfig\"");
+    if (xcolor_position == std::string::npos || tikz_position == std::string::npos ||
+        pgfplots_position == std::string::npos || chemfig_position == std::string::npos ||
+        !(xcolor_position < tikz_position && tikz_position < pgfplots_position &&
+          pgfplots_position < chemfig_position) ||
+        package_plan_text.find("\"id\":\"tikz\",\"displayName\":\"TikZ\",\"explicit\":false") ==
+            std::string::npos) {
+      std::cerr << "drawing package plan did not resolve dependencies/order as expected\n";
+      return 1;
+    }
+  } else {
+    std::cout << "skip=drawing-package-plan reason=packages unavailable\n";
   }
 
-  const char *drawing_plan_ids[] = {"pgfplots", "chemfig"};
-  package_plan = stemtex_profile_package_plan_json(&context, drawing_plan_ids, 2, &code, &error);
-  if (!package_plan) {
-    std::cerr << (error ? error : "drawing package plan failed") << '\n';
+  if (package_available("graphicx") && package_available("array") &&
+      package_available("booktabs") && package_available("tabularx") &&
+      package_available("multirow") && package_available("adjustbox") &&
+      package_available("enumitem")) {
+    const char *table_plan_ids[] = {"booktabs", "tabularx", "multirow", "adjustbox", "enumitem"};
+    package_plan = stemtex_profile_package_plan_json(&context, table_plan_ids, 5, &code, &error);
+    if (!package_plan) {
+      std::cerr << (error ? error : "table/layout package plan failed") << '\n';
+      stemtex_profile_free_string(error);
+      return 1;
+    }
+    package_plan_text = package_plan;
+    std::cout << package_plan << '\n';
+    stemtex_profile_free_string(package_plan);
     stemtex_profile_free_string(error);
-    return 1;
-  }
-  package_plan_text = package_plan;
-  std::cout << package_plan << '\n';
-  stemtex_profile_free_string(package_plan);
-  stemtex_profile_free_string(error);
-  xcolor_position = package_plan_text.find("\"id\":\"xcolor\"");
-  size_t tikz_position = package_plan_text.find("\"id\":\"tikz\"");
-  size_t pgfplots_position = package_plan_text.find("\"id\":\"pgfplots\"");
-  size_t chemfig_position = package_plan_text.find("\"id\":\"chemfig\"");
-  if (xcolor_position == std::string::npos || tikz_position == std::string::npos ||
-      pgfplots_position == std::string::npos || chemfig_position == std::string::npos ||
-      !(xcolor_position < tikz_position && tikz_position < pgfplots_position &&
-        pgfplots_position < chemfig_position) ||
-      package_plan_text.find("\"id\":\"tikz\",\"displayName\":\"TikZ\",\"explicit\":false") ==
-          std::string::npos) {
-    std::cerr << "drawing package plan did not resolve dependencies/order as expected\n";
-    return 1;
-  }
-
-  const char *table_plan_ids[] = {"booktabs", "tabularx", "multirow", "adjustbox", "enumitem"};
-  package_plan = stemtex_profile_package_plan_json(&context, table_plan_ids, 5, &code, &error);
-  if (!package_plan) {
-    std::cerr << (error ? error : "table/layout package plan failed") << '\n';
-    stemtex_profile_free_string(error);
-    return 1;
-  }
-  package_plan_text = package_plan;
-  std::cout << package_plan << '\n';
-  stemtex_profile_free_string(package_plan);
-  stemtex_profile_free_string(error);
-  size_t graphicx_position = package_plan_text.find("\"id\":\"graphicx\"");
-  size_t array_position = package_plan_text.find("\"id\":\"array\"");
-  size_t booktabs_position = package_plan_text.find("\"id\":\"booktabs\"");
-  size_t tabularx_position = package_plan_text.find("\"id\":\"tabularx\"");
-  size_t multirow_position = package_plan_text.find("\"id\":\"multirow\"");
-  size_t adjustbox_position = package_plan_text.find("\"id\":\"adjustbox\"");
-  size_t enumitem_position = package_plan_text.find("\"id\":\"enumitem\"");
-  if (graphicx_position == std::string::npos || array_position == std::string::npos ||
-      booktabs_position == std::string::npos || tabularx_position == std::string::npos ||
-      multirow_position == std::string::npos || adjustbox_position == std::string::npos ||
-      enumitem_position == std::string::npos ||
-      !(graphicx_position < array_position && array_position < booktabs_position &&
-        booktabs_position < tabularx_position && tabularx_position < multirow_position &&
-        multirow_position < adjustbox_position && adjustbox_position < enumitem_position) ||
-      package_plan_text.find("\"id\":\"graphicx\",\"displayName\":\"graphicx\",\"explicit\":false") ==
-          std::string::npos ||
-      package_plan_text.find("\"id\":\"array\",\"displayName\":\"array\",\"explicit\":false") ==
-          std::string::npos) {
-    std::cerr << "table/layout package plan did not resolve dependencies/order as expected\n";
-    return 1;
+    size_t graphicx_position = package_plan_text.find("\"id\":\"graphicx\"");
+    size_t array_position = package_plan_text.find("\"id\":\"array\"");
+    size_t booktabs_position = package_plan_text.find("\"id\":\"booktabs\"");
+    size_t tabularx_position = package_plan_text.find("\"id\":\"tabularx\"");
+    size_t multirow_position = package_plan_text.find("\"id\":\"multirow\"");
+    size_t adjustbox_position = package_plan_text.find("\"id\":\"adjustbox\"");
+    size_t enumitem_position = package_plan_text.find("\"id\":\"enumitem\"");
+    if (graphicx_position == std::string::npos || array_position == std::string::npos ||
+        booktabs_position == std::string::npos || tabularx_position == std::string::npos ||
+        multirow_position == std::string::npos || adjustbox_position == std::string::npos ||
+        enumitem_position == std::string::npos ||
+        !(graphicx_position < array_position && array_position < booktabs_position &&
+          booktabs_position < tabularx_position && tabularx_position < multirow_position &&
+          multirow_position < adjustbox_position && adjustbox_position < enumitem_position) ||
+        package_plan_text.find("\"id\":\"graphicx\",\"displayName\":\"graphicx\",\"explicit\":false") ==
+            std::string::npos ||
+        package_plan_text.find("\"id\":\"array\",\"displayName\":\"array\",\"explicit\":false") ==
+            std::string::npos) {
+      std::cerr << "table/layout package plan did not resolve dependencies/order as expected\n";
+      return 1;
+    }
+  } else {
+    std::cout << "skip=table-layout-package-plan reason=packages unavailable\n";
   }
 
   fs::path root = fs::temp_directory_path() / "stemtex-profile-smoke";
@@ -168,6 +208,7 @@ int main(int argc, char **argv) {
     const char *cjk;
     std::vector<const char *> packages;
     bool package_aware;
+    const char *user_preamble = nullptr;
   };
   const std::vector<SmokeSpec> cases = {
       {"package-selection", "latin-modern", "latin-modern-math", "none", {"mhchem", "xcolor", "cancel"}, true},
@@ -177,6 +218,10 @@ int main(int argc, char **argv) {
        {"pgfplots", "tikz-cd", "circuitikz", "forest", "chemfig", "quantikz"}, true},
       {"table-layout-packages", "latin-modern", "latin-modern-math", "none",
        {"booktabs", "tabularx", "multirow", "adjustbox", "enumitem"}, true},
+      {"user-preamble", "latin-modern", "latin-modern-math", "none", {"booktabs"}, true,
+       R"TEX(\usepackage[unicode,colorlinks=true]{hyperref}
+\newcommand{\StemTeXCustom}[1]{\textbf{#1}}
+)TEX"},
       {"math-arsenal", "latin-modern", "arsenal-math", "none"},
       {"math-asana", "latin-modern", "asana-math", "none"},
       {"math-concrete", "latin-modern", "concrete-math", "none"},
@@ -223,7 +268,11 @@ int main(int argc, char **argv) {
     error = nullptr;
     code = STEMTEX_PROFILE_OK;
     int ok = 0;
-    if (!item.package_aware) {
+    if (item.user_preamble) {
+      StemTeXProfileSpecV3 spec{item.name, item.text, item.math, item.cjk,
+                               item.packages.data(), item.packages.size(), item.user_preamble};
+      ok = stemtex_profile_materialize_v3(&context, &spec, profiles_root.c_str(), &result_json, &code, &error);
+    } else if (!item.package_aware) {
       StemTeXProfileSpec spec{item.name, item.text, item.math, item.cjk};
       ok = stemtex_profile_materialize(&context, &spec, profiles_root.c_str(), &result_json, &code, &error);
     } else {
@@ -370,6 +419,23 @@ int main(int argc, char **argv) {
         return 1;
       }
     }
+    if (std::string(item.name) == "user-preamble") {
+      const std::string preamble = read_text(profile / "preamble.tex");
+      const std::string manifest = read_text(profile / "profile.json");
+      const size_t booktabs = preamble.find("\\usepackage{booktabs}");
+      const size_t preview = preamble.find("\\usepackage[active,tightpage]{preview}");
+      const size_t hyperref = preamble.find("\\usepackage[unicode,colorlinks=true]{hyperref}");
+      const size_t command = preamble.find("\\newcommand{\\StemTeXCustom}");
+      if (booktabs == std::string::npos || preview == std::string::npos || hyperref == std::string::npos ||
+          command == std::string::npos || !(booktabs < preview && preview < hyperref && hyperref < command) ||
+          manifest.find("\"schemaVersion\": 3") == std::string::npos ||
+          manifest.find("\"userPreamble\": \"\\\\usepackage[unicode,colorlinks=true]{hyperref}") ==
+              std::string::npos) {
+        std::cerr << "user preamble profile output is incorrect\n";
+        fs::remove_all(root, ignored);
+        return 1;
+      }
+    }
 
     if (!runtime_root.empty()) {
       std::string repo = root.u8string();
@@ -433,6 +499,9 @@ Item & Description & Value \\
 \item compact list
 \item controlled labels
 \end{enumerate})TEX";
+      } else if (std::string(item.name) == "user-preamble") {
+        snippet = R"TEX(\StemTeXCustom{User preamble}:
+\href{https://example.com}{custom package and command})TEX";
       } else {
         snippet = std::string(item.cjk) == "none"
                       ? "StemTeX font profile: $E=mc^2$ and $\\int_0^1x^2\\,dx=\\frac13$."

@@ -4,9 +4,10 @@ StemTeX is a low-latency XeLaTeX snippet renderer. The current implementation
 targets Windows and ships a trimmed TeX Live runtime, a native C ABI, and an
 optional Qt GUI. The current version is recorded in [`VERSION`](VERSION).
 
-StemTeX is built for short Chinese/English STEM fragments with text, math,
-chemistry, physics, and color. It is not a general document compiler or a TeX
-sandbox.
+StemTeX is built for short TeX fragments. Its bundled default is deliberately
+limited to Latin text and `unicode-math`; user-created profiles backed by an
+external TeX Live tree can add other fonts, CJK, and packages. It is not a
+general document compiler or a TeX sandbox.
 
 ## What It Provides
 
@@ -71,14 +72,11 @@ selects a profile explicitly; the renderer does not guess one.
 
 | Profile | Intended use |
 | --- | --- |
-| `unicodemath` | Broad Latin STEM profile with math, chemistry, physics, color, and cancel. |
-| `unicodemath_cjk` | Broad CJK STEM profile and the installer warmup target. |
-| `xits_cjk` | Times-compatible XITS text and math for Word-oriented academic documents, with Windows CJK fonts. |
-| `arial_lete_simhei` | Arial text, Lete Sans Math, and SimHei CJK with deterministic synthetic bold and slant. |
+| `unicodemath` | Minimal Latin Modern text and `unicode-math` profile; no CJK or optional whitelist packages. |
 
 `warmup.tex` is source. `warmup.xdv` and Fontconfig caches are generated
 artifacts and are intentionally not committed or copied by CMake install. The
-full installer may generate the maintained `unicodemath_cjk` cache after files
+full installer may generate the maintained `unicodemath` cache after files
 are installed. At runtime the renderer keeps derived XDV state in the per-user
 `%LOCALAPPDATA%\StemTeX\profile-xdv` cache and rebuilds it when the preamble,
 warmup source, or selected format is newer. The corresponding Fontconfig cache
@@ -96,14 +94,21 @@ The current whitelist contains the original `mathtools`, `mhchem`, `physics`,
 `xcolor`, and `cancel` set; opt-in `siunitx`; opt-in document building blocks
 `graphicx`, `array`, `booktabs`, `tabularx`, `multirow`, `adjustbox`, and
 `enumitem`; plus opt-in TikZ drawing recipes for `tikz`, `pgfplots`, `tikz-cd`,
-`circuitikz`, `forest`, `chemfig`, and `quantikz`. Only the original five remain
-enabled by default for compatibility. The library generates `preamble.tex` and
-a selection-aware `warmup.tex` from the resulting plan.
+`circuitikz`, `forest`, `chemfig`, and `quantikz`. All whitelist packages are
+off by default and must be selected by the user. The library generates `preamble.tex` and
+a selection-aware `warmup.tex` from the resulting plan. A separate Custom tab
+accepts a free-form user preamble for additional package loads, definitions, and
+configuration; the text is appended verbatim and participates in the profile
+fingerprint.
 
-The bundled small tree enables its maintained Latin Modern, XITS, and Lete Sans
-Math recipes. Pointing the creator at a full TeX Live root additionally exposes
-families such as TeX Gyre, Libertinus, STIX Two, and Fandol. Windows font recipes
-cover Arial, SimSun/SimHei, and Microsoft YaHei.
+The bundled small tree enables only the maintained Latin Modern text and math
+recipes. Its font payload is a file-level runtime closure: the selected
+OpenType faces plus the classic Computer Modern metrics/outlines still needed
+when the renderer switches math to a non-default point size. Pointing the
+creator at a full TeX Live root additionally exposes
+families such as Lete Sans Math, XITS, TeX Gyre, Libertinus, STIX Two, and
+Fandol. CJK recipes require `xeCJK`, so they are unavailable with the bundled
+tree even when the corresponding Windows fonts are installed.
 
 Generated profiles live under `%LOCALAPPDATA%\StemTeX\profiles`. The Renderer
 GUI scans that location and exposes one `Profile...` button that launches

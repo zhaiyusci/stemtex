@@ -58,7 +58,7 @@ static void print_usage(const char *argv0) {
                "       bad-stress, latin-math, latin-text, restart, async,\n"
                "       async-callback-throw, cancel,\n"
                "       recover-no-worker, bad-corpus, bad-output-corpus, list-state, lifecycle-stress,\n"
-               "       profile-switch-stress, bytes, output-pdf, output-pdf-bytes,\n"
+               "       bytes, output-pdf, output-pdf-bytes,\n"
                "       svg, svg-bytes\n",
                argv0, argv0);
 }
@@ -254,7 +254,7 @@ int main(int argc, char **argv) {
   if (case_name == "--lifecycle-stress") {
     stemtex_renderer_destroy(renderer);
     renderer = nullptr;
-    const char *probe = u8"Lifecycle probe: $E=mc^2$ \\[\\ce{H2O}\\]";
+    const char *probe = "Lifecycle probe: $E=mc^2$ \\[\\int_0^1 x^2\\,dx=\\frac13\\]";
     int failures = 0;
     for (int i = 0; i < runs; ++i) {
       error = nullptr;
@@ -288,59 +288,9 @@ int main(int argc, char **argv) {
     return failures == 0 ? 0 : 1;
   }
 
-  if (case_name == "--profile-switch-stress") {
-    stemtex_renderer_destroy(renderer);
-    renderer = nullptr;
-    fs::path profile_parent = opts.profile_root.parent_path();
-    std::vector<fs::path> profiles = {
-        profile_parent / "unicodemath_cjk",
-        profile_parent / "unicodemath",
-    };
-    int failures = 0;
-    for (int i = 0; i < runs; ++i) {
-      fs::path profile_path = profiles[(size_t)i % profiles.size()];
-      std::string loop_profile_utf8 = profile_path.generic_string();
-      StemTeXConfig loop_cfg = cfg;
-      loop_cfg.profile_root_utf8 = loop_profile_utf8.c_str();
-      const char *probe = profile_path.filename() == "unicodemath"
-                              ? u8"Profile switch probe: $E=mc^2$ \\[\\ce{H2O}\\]"
-                              : u8"\u4e2d\u6587 profile switch probe: $E=mc^2$ \\[\\ce{H2O}\\]";
-      error = nullptr;
-      long long loop_create_start = now_ms();
-      StemTeXRenderer *loop_renderer = stemtex_renderer_create(&loop_cfg, &error_code, &error);
-      long long loop_create_end = now_ms();
-      if (!loop_renderer) {
-        ++failures;
-        std::printf("profileSwitch run=%d profile=%s createOk=0 code=%d createMs=%lld err=%s\n", i + 1,
-                    loop_profile_utf8.c_str(), (int)error_code, loop_create_end - loop_create_start, error ? error : "");
-        stemtex_renderer_free_string(error);
-        continue;
-      }
-      StemTeXRenderResult result{};
-      long long render_start = now_ms();
-      int ok = stemtex_renderer_render(loop_renderer, probe, width_pt, &result, &error_code, &error);
-      long long render_end = now_ms();
-      std::printf("profileSwitch run=%d profile=%s createOk=1 createMs=%lld renderOk=%d code=%d renderMs=%lld\n", i + 1,
-                  profile_path.filename().generic_string().c_str(), loop_create_end - loop_create_start, ok,
-                  (int)error_code, render_end - render_start);
-      if (ok) {
-        stemtex_renderer_free_result(&result);
-      } else {
-        ++failures;
-        std::printf("profileSwitch run=%d err=%s\n", i + 1, error ? error : "");
-        stemtex_renderer_free_string(error);
-        error = nullptr;
-      }
-      stemtex_renderer_destroy(loop_renderer);
-    }
-    std::printf("profileSwitch passed=%d failed=%d total=%d\n", runs - failures, failures, runs);
-    return failures == 0 ? 0 : 1;
-  }
-
   const char *snippet =
-      u8"\u4e2d\u6587 C++ DLL smoke test: $E=mc^2$ "
-      u8"\\[\\int_0^1 x^2\\,dx=\\frac13\\] "
-      u8"{\\color{blue}$\\ce{2H2 + O2 -> 2H2O}$}";
+      "StemTeX C++ DLL smoke test: $E=mc^2$ "
+      "\\[\\int_0^1 x^2\\,dx=\\frac13\\]";
   bool bad_then_good = false;
   if (case_name == "--bad") {
     snippet = u8"\u4e2d\u6587 error test: \\undefinedstemtexcommand";
@@ -407,17 +357,14 @@ int main(int argc, char **argv) {
         {"unclosed-enumerate", "\\begin{enumerate}\\item leaked"},
         {"unclosed-itemize", "\\begin{itemize}\\item leaked"},
         {"mismatched-list-end", "\\begin{enumerate}\\item one\\end{itemize}"},
-        {"open-textcolor", u8"\u8fd9\u662f\u4e00\u6bb5\uff1a\\textcolor{blue}{\u84dd\u8272\u6587\u5b57"},
+        {"open-textbf", "This is \\textbf{unfinished"},
         {"input-missing-file", "\\input{definitely-not-existing-file}"},
     };
     const std::vector<FormatCase> formats = {
         {STEMTEX_OUTPUT_PDF, "pdf"},
         {STEMTEX_OUTPUT_SVG, "svg"},
     };
-    const char *good =
-        u8"\u4fee\u6b63\u540e\u7684\u7247\u6bb5\uff1a\\textbf{Circulant matrix}"
-        u8"\uff08\u5faa\u73af\u77e9\u9635\uff09\u53ef\u4ee5\u6b63\u5e38\u6392\u7248\u3002"
-        u8"$E=mc^2$\uff0c\\textcolor{blue}{ok}\u3002";
+    const char *good = "Recovered fragment: \\textbf{Circulant matrix}. $E=mc^2$.";
     int passed = 0;
     int failed = 0;
     wait_for_spares(renderer, 30);
@@ -525,7 +472,7 @@ int main(int argc, char **argv) {
         {"mismatched-list-end", "\\begin{enumerate}\\item one\\end{itemize}"},
         {"cr-outside-alignment", "\\cr"},
         {"extra-close-brace", "hello }"},
-        {"open-textcolor", u8"\u8fd9\u662f\u4e00\u6bb5\uff1a\\textcolor{blue}{\u84dd\u8272\u6587\u5b57"},
+        {"open-textbf", "This is \\textbf{unfinished"},
         {"open-group", "\\begingroup unfinished"},
         {"input-missing-file", "\\input{definitely-not-existing-file}"},
         {"missing-image", "\\includegraphics{definitely-not-existing-image.png}"},
@@ -547,18 +494,15 @@ int main(int argc, char **argv) {
         {"sparse-register-then-error",
          "\\count32767=12345 \\toks32767={polluted}\\errmessage{STEMTEX forced after sparse register}",
          "\\ifnum\\count32767=12345 \\errmessage{STEMTEX sparse register leaked}\\fi sparse ok"},
-        {"open-textcolor", u8"\u8fd9\u662f\u4e00\u6bb5\uff1a\\textcolor{blue}{\u84dd\u8272\u6587\u5b57"},
+        {"open-textbf", "This is \\textbf{unfinished"},
         {"open-group", "\\begingroup unfinished"},
         {"input-missing-file", "\\input{definitely-not-existing-file}"},
     };
     const auto &selected_cases = case_name == "--checkpoint-critical" ? critical_cases : cases;
     const char *good =
-        u8"\u8fd9\u662f\u4e00\u6bb5 StemTeX Renderer GUI \u91cc\u7684\u4e2d\u6587\u3001"
-        u8"\u6570\u5b66\u548c\u5316\u5b66\u9884\u89c8\uff1a$E=mc^2$\uff0c"
-        u8"\u4ee5\u53ca \\textcolor{blue}{\u84dd\u8272\u6587\u5b57}\u3002\n\n"
-        u8"\\begin{equation}\nE = mc^2\n\\end{equation}\n\n"
-        u8"\\[\\int_0^1 x^2\\,dx = \\frac{1}{3},\\quad \\langle\\psi,\\phi\\rangle\\]\n\n"
-        u8"\\ce{2H2 + O2 -> 2H2O}";
+        "StemTeX recovery probe: $E=mc^2$.\n\n"
+        "\\begin{equation}\nE = mc^2\n\\end{equation}\n\n"
+        "\\[\\int_0^1 x^2\\,dx = \\frac{1}{3},\\quad \\langle\\psi,\\phi\\rangle\\]";
     int passed = 0;
     int failed = 0;
     wait_for_spares(renderer, 30);
@@ -954,8 +898,8 @@ int main(int argc, char **argv) {
         stemtex_renderer_destroy(renderer);
         return 1;
       }
-      snippet = u8"\u4e2d\u6587 recovery test: $E=mc^2$ "
-                u8"\\[\\ip{\\psi}{\\phi}\\quad \\ce{H2O}\\]";
+      snippet = "Recovery test: $E=mc^2$ "
+                "\\[\\langle\\psi,\\phi\\rangle\\quad \\int_0^1 x^2\\,dx\\]";
       continue;
     }
     long long render_end = now_ms();

@@ -90,8 +90,8 @@ if(STEMTEX_BUILD_GUI)
   ]])
 endif()
 
-install(DIRECTORY gui/profiles/
-  DESTINATION gui/profiles
+install(DIRECTORY gui/profiles/unicodemath/
+  DESTINATION gui/profiles/unicodemath
   FILES_MATCHING
     PATTERN "*.tex"
     PATTERN "*.aux" EXCLUDE
@@ -106,10 +106,24 @@ if(STEMTEX_INSTALL_TEXMF)
 
   set(STEMTEX_TEXMF_FILES
     dvipdfmx/dvipdfmx.cfg
-    fonts/map/dvipdfmx/ckx.map
     fonts/misc/xetex/fontmapping/base/tex-text.tec
     fonts/map/fontname/texfonts.map
-    tex/latex/ctex/ctexhook.sty
+    fonts/opentype/public/lm/lmmono10-italic.otf
+    fonts/opentype/public/lm/lmmono10-regular.otf
+    fonts/opentype/public/lm/lmroman10-bold.otf
+    fonts/opentype/public/lm/lmroman10-bolditalic.otf
+    fonts/opentype/public/lm/lmroman10-italic.otf
+    fonts/opentype/public/lm/lmroman10-regular.otf
+    fonts/opentype/public/lm/lmsans10-bold.otf
+    fonts/opentype/public/lm/lmsans10-boldoblique.otf
+    fonts/opentype/public/lm/lmsans10-oblique.otf
+    fonts/opentype/public/lm/lmsans10-regular.otf
+    fonts/opentype/public/lm-math/latinmodern-math.otf
+    tex/generic/babel/hyphen.cfg
+    tex/generic/babel/xebabel.def
+    tex/generic/hyphen/dumyhyph.tex
+    tex/generic/hyphen/hyphen.tex
+    tex/generic/hyphen/zerohyph.tex
     web2c/fmtutil.cnf
     web2c/texmf.cnf
   )
@@ -119,65 +133,37 @@ if(STEMTEX_INSTALL_TEXMF)
   endforeach()
 
   set(STEMTEX_TEXMF_DIRS
-    fonts/afm/public/amsfonts
-    fonts/afm/public/lm
-    fonts/enc/dvips/lm
-    fonts/map/dvipdfm/lm
-    fonts/map/dvips/amsfonts
-    fonts/map/dvips/lm
-    fonts/opentype/public/lm
-    fonts/opentype/public/lm-math
-    fonts/opentype/public/lete-sans-math
-    fonts/opentype/public/xits
-    fonts/source/public/amsfonts
-    fonts/source/public/cm
-    fonts/source/public/latex-fonts
-    fonts/tfm/public/amsfonts
     fonts/tfm/public/cm
     fonts/tfm/public/latex-fonts
-    fonts/tfm/public/lm
-    fonts/type1/public/amsfonts
-    fonts/type1/public/lm
     tex/latex/amsmath
-    tex/latex/amsfonts
     tex/latex/base
-    tex/latex/cancel
     tex/latex/tex-ini-files
     tex/latex/firstaid
     tex/latex/fontspec
-    tex/latex/chemgreek
-    tex/generic/babel
     tex/generic/config
-    tex/generic/hyph-utf8
-    tex/generic/hyphen
     tex/generic/iftex
     tex/generic/unicode-data
-    tex/latex/graphics
-    tex/latex/graphics-cfg
-    tex/latex/graphics-def
     tex/latex/l3backend
     tex/latex/l3kernel
     tex/latex/l3packages/l3keys2e
     tex/latex/l3packages/xparse
     tex/latex/l3packages/xtemplate
-    tex/latex/mathtools
-    tex/latex/mhchem
     tex/latex/preview
-    tex/latex/siunitx
-    tex/latex/physics
-    tex/latex/tools
     tex/latex/unicode-math
-    tex/latex/xcolor
-    tex/xelatex/xecjk
     tex/latex/lm
-    tex/latex/lete-sans-math
-    tex/plain/amsfonts
-    doc/fonts/xits
   )
   foreach(rel IN LISTS STEMTEX_TEXMF_DIRS)
     get_filename_component(rel_parent "${rel}" DIRECTORY)
     install(DIRECTORY "${STEMTEX_TEXMF_DIST}/${rel}" DESTINATION "runtime/texmf-dist/${rel_parent}")
   endforeach()
+
+  # Dynamic font-size requests can select the classic Computer Modern math
+  # families embedded in the daemon format. Keep their metrics and Type 1
+  # outlines, but omit the unused PFM companions and the rest of AMSFonts.
+  install(DIRECTORY "${STEMTEX_TEXMF_DIST}/fonts/type1/public/amsfonts/cm/"
+    DESTINATION "runtime/texmf-dist/fonts/type1/public/amsfonts/cm"
+    FILES_MATCHING PATTERN "*.pfb"
+  )
 
   install(CODE [=[
     set(runtime_root "${CMAKE_INSTALL_PREFIX}/runtime")

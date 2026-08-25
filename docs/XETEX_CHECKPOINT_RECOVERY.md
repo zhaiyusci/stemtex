@@ -174,8 +174,6 @@ relevant cases are:
 - `list-state` with `SPARES=0`: repeated `itemize`/`enumerate` snippets and a
   malformed open list, verifying fragment-local list state returns to zero;
 - `lifecycle-stress` with `SPARES=1`: repeated create/render/destroy cycles;
-- `profile-switch-stress` with `SPARES=1`: alternating `unicodemath_cjk` and
-  `unicodemath`;
 - `quick` with `SPARES=1`: validate, default rendering, async, recover-no-worker.
 
 The most important regression test is:
@@ -187,7 +185,7 @@ cmake --build --preset ninja-release --target stemtex-checkpoint-audit
 $repo = (Get-Location).Path
 $smoke = ".\build\stemtex-ninja\cpp-daemon\stemtex-renderer-smoke.exe"
 $runtime = ".\staging\runtime"
-$profile = ".\staging\gui\profiles\unicodemath_cjk"
+$profile = ".\staging\gui\profiles\unicodemath"
 
 & $smoke --repo $repo --runtime $runtime --profile $profile --case bad-corpus --spares 0 --runs 1
 & $smoke --repo $repo --runtime $runtime --profile $profile --case checkpoint-critical --spares 0 --runs 1

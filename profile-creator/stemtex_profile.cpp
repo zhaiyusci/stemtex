@@ -29,7 +29,7 @@ namespace {
 #endif
 
 constexpr const char *kVersion = STEMTEX_PROFILE_VERSION;
-constexpr const char *kAbiVersion = "2";
+constexpr const char *kAbiVersion = "3";
 
 class ProfileException : public std::runtime_error {
  public:
@@ -76,14 +76,14 @@ struct PackageRecipe {
 const std::vector<PackageRecipe> &package_recipes() {
   static const std::vector<PackageRecipe> value = {
       {"mathtools", "mathtools", "math", "AMS mathematics extensions and a stable pre-font math foundation",
-       {RequirementRoot::TexmfDist, "tex/latex/mathtools/mathtools.sty"}, true,
+       {RequirementRoot::TexmfDist, "tex/latex/mathtools/mathtools.sty"}, false,
        PackagePhase::BeforeFonts, 100, "", "", "Math tools: $a \\coloneqq b$.\n", {}, {}},
       {"mhchem", "mhchem", "chemistry", "Chemical formulae and equations through \\ce",
-       {RequirementRoot::TexmfDist, "tex/latex/mhchem/mhchem.sty"}, true,
+       {RequirementRoot::TexmfDist, "tex/latex/mhchem/mhchem.sty"}, false,
        PackagePhase::AfterFonts, 200, "version=4", "", "\\ce{H2O} \\ce{2H2 + O2 -> 2H2O}.\n",
        {"mathtools"}, {}},
       {"physics", "physics", "physics", "Common derivatives, vectors, operators, and bra-ket notation",
-       {RequirementRoot::TexmfDist, "tex/latex/physics/physics.sty"}, true,
+       {RequirementRoot::TexmfDist, "tex/latex/physics/physics.sty"}, false,
        PackagePhase::AfterFonts, 300, "", "", "Physics: $\\dv{x}{t}$ and $\\qty(1+x)$.\n",
        {"mathtools"}, {}},
       {"siunitx", "siunitx", "units", "Consistent typesetting of numbers, SI units, and physical quantities",
@@ -91,10 +91,10 @@ const std::vector<PackageRecipe> &package_recipes() {
        PackagePhase::AfterFonts, 350, "", "", "Units: \\SI{9.81}{\\metre\\per\\second\\squared}.\n",
        {}, {"physics"}},
       {"xcolor", "xcolor", "text", "Named colors and color-aware text and mathematics",
-       {RequirementRoot::TexmfDist, "tex/latex/xcolor/xcolor.sty"}, true,
+       {RequirementRoot::TexmfDist, "tex/latex/xcolor/xcolor.sty"}, false,
        PackagePhase::AfterFonts, 400, "", "", "\\textcolor{blue}{StemTeX color probe}.\n", {}, {}},
       {"cancel", "cancel", "math", "Cancellation strokes for mathematical expressions",
-       {RequirementRoot::TexmfDist, "tex/latex/cancel/cancel.sty"}, true,
+       {RequirementRoot::TexmfDist, "tex/latex/cancel/cancel.sty"}, false,
        PackagePhase::AfterFonts, 500, "", "", "Cancel: $\\cancel{x}+y$.\n", {}, {"xcolor"}},
       {"graphicx", "graphicx", "images", "Include, scale, rotate, and resize graphics or boxed content",
        {RequirementRoot::TexmfDist, "tex/latex/graphics/graphicx.sty"}, false,
@@ -480,28 +480,32 @@ const std::vector<FontRecipe> &recipes() {
 
       {"none", "cjk", "No CJK font", "none", "Do not load xeCJK", {}, ""},
       {"simsun", "cjk", "SimSun / SimHei", "system", "Windows SimSun body with SimHei sans text",
-       {{RequirementRoot::SystemFonts, "simsun.ttc"}, {RequirementRoot::SystemFonts, "simhei.ttf"}},
+       {{RequirementRoot::TexmfDist, "tex/xelatex/xecjk/xeCJK.sty"},
+        {RequirementRoot::SystemFonts, "simsun.ttc"}, {RequirementRoot::SystemFonts, "simhei.ttf"}},
        R"TEX(\usepackage{xeCJK}
 \setCJKmainfont{SimSun}
 \setCJKsansfont{SimHei}
 \setCJKmonofont{SimSun}
 )TEX"},
       {"simhei", "cjk", "SimHei", "system", "Windows SimHei with deterministic synthetic shapes",
-       {{RequirementRoot::SystemFonts, "simhei.ttf"}},
+       {{RequirementRoot::TexmfDist, "tex/xelatex/xecjk/xeCJK.sty"},
+        {RequirementRoot::SystemFonts, "simhei.ttf"}},
        R"TEX(\usepackage{xeCJK}
 \setCJKmainfont{SimHei}[AutoFakeBold=1.5,AutoFakeSlant=0.2]
 \setCJKsansfont{SimHei}[AutoFakeBold=1.5,AutoFakeSlant=0.2]
 \setCJKmonofont{SimHei}[AutoFakeBold=1.5,AutoFakeSlant=0.2]
 )TEX"},
       {"microsoft-yahei", "cjk", "Microsoft YaHei", "system", "Windows Microsoft YaHei CJK text",
-       {{RequirementRoot::SystemFonts, "msyh.ttc"}, {RequirementRoot::SystemFonts, "msyhbd.ttc"}},
+       {{RequirementRoot::TexmfDist, "tex/xelatex/xecjk/xeCJK.sty"},
+        {RequirementRoot::SystemFonts, "msyh.ttc"}, {RequirementRoot::SystemFonts, "msyhbd.ttc"}},
        R"TEX(\usepackage{xeCJK}
 \setCJKmainfont{Microsoft YaHei}[BoldFont={Microsoft YaHei Bold}]
 \setCJKsansfont{Microsoft YaHei}[BoldFont={Microsoft YaHei Bold}]
 \setCJKmonofont{Microsoft YaHei}[BoldFont={Microsoft YaHei Bold}]
 )TEX"},
       {"fandol-song", "cjk", "Fandol Song", "texlive", "TeX Live Fandol Song, Kai, Hei, and Fang stack",
-       {{RequirementRoot::TexmfDist, "fonts/opentype/public/fandol/FandolSong-Regular.otf"},
+       {{RequirementRoot::TexmfDist, "tex/xelatex/xecjk/xeCJK.sty"},
+        {RequirementRoot::TexmfDist, "fonts/opentype/public/fandol/FandolSong-Regular.otf"},
         {RequirementRoot::TexmfDist, "fonts/opentype/public/fandol/FandolSong-Bold.otf"},
         {RequirementRoot::TexmfDist, "fonts/opentype/public/fandol/FandolKai-Regular.otf"},
         {RequirementRoot::TexmfDist, "fonts/opentype/public/fandol/FandolHei-Regular.otf"},
@@ -516,7 +520,8 @@ const std::vector<FontRecipe> &recipes() {
 \setCJKmonofont{FandolFang-Regular.otf}
 )TEX"},
       {"fandol-hei", "cjk", "Fandol Hei", "texlive", "TeX Live Fandol sans-serif CJK text",
-       {{RequirementRoot::TexmfDist, "fonts/opentype/public/fandol/FandolHei-Regular.otf"},
+       {{RequirementRoot::TexmfDist, "tex/xelatex/xecjk/xeCJK.sty"},
+        {RequirementRoot::TexmfDist, "fonts/opentype/public/fandol/FandolHei-Regular.otf"},
         {RequirementRoot::TexmfDist, "fonts/opentype/public/fandol/FandolHei-Bold.otf"}},
        R"TEX(\usepackage{xeCJK}
 \setCJKmainfont{FandolHei-Regular.otf}[BoldFont=FandolHei-Bold.otf]
@@ -786,6 +791,25 @@ std::vector<std::string> package_ids_from_api(const char *const *ids, size_t cou
   return result;
 }
 
+std::string user_preamble_from_api(const char *user_preamble_utf8) {
+  std::string preamble = user_preamble_utf8 ? user_preamble_utf8 : "";
+  if (preamble.size() > 1024 * 1024) {
+    throw ProfileException(STEMTEX_PROFILE_ERROR_INVALID_ARGUMENT,
+                           "user_preamble_utf8 exceeds the supported 1 MiB limit");
+  }
+  std::string normalized;
+  normalized.reserve(preamble.size());
+  for (size_t index = 0; index < preamble.size(); ++index) {
+    if (preamble[index] == '\r') {
+      if (index + 1 < preamble.size() && preamble[index + 1] == '\n') ++index;
+      normalized.push_back('\n');
+    } else {
+      normalized.push_back(preamble[index]);
+    }
+  }
+  return normalized;
+}
+
 void append_package_tex(std::ostringstream &preamble, const PackageRecipe &recipe) {
   preamble << "\\usepackage";
   if (recipe.options && *recipe.options) preamble << '[' << recipe.options << ']';
@@ -834,6 +858,8 @@ struct InternalProfileSpec {
   const char *math_font_id = nullptr;
   const char *cjk_font_id = nullptr;
   std::vector<std::string> package_ids;
+  std::string user_preamble;
+  int manifest_schema_version = 2;
 };
 
 InternalProfileSpec legacy_spec(const StemTeXProfileSpec *spec) {
@@ -846,6 +872,16 @@ InternalProfileSpec package_aware_spec(const StemTeXProfileSpecV2 *spec) {
   if (!spec) throw ProfileException(STEMTEX_PROFILE_ERROR_INVALID_ARGUMENT, "profile spec is required");
   return {spec->name_utf8, spec->text_font_id_utf8, spec->math_font_id_utf8,
           spec->cjk_font_id_utf8, package_ids_from_api(spec->package_ids_utf8, spec->package_count)};
+}
+
+InternalProfileSpec user_preamble_spec(const StemTeXProfileSpecV3 *spec) {
+  if (!spec) throw ProfileException(STEMTEX_PROFILE_ERROR_INVALID_ARGUMENT, "profile spec is required");
+  InternalProfileSpec result{
+      spec->name_utf8, spec->text_font_id_utf8, spec->math_font_id_utf8,
+      spec->cjk_font_id_utf8, package_ids_from_api(spec->package_ids_utf8, spec->package_count)};
+  result.user_preamble = user_preamble_from_api(spec->user_preamble_utf8);
+  result.manifest_schema_version = 3;
+  return result;
 }
 
 std::string fingerprint(const std::string &value) {
@@ -884,6 +920,11 @@ GeneratedProfile generate_profile(const StemTeXProfileContext *context, const In
   }
   preamble << "\\usepackage[active,tightpage]{preview}\n"
            << "\\PreviewBorder=1pt\n";
+  if (!spec.user_preamble.empty()) {
+    preamble << "% User preamble; emitted verbatim after the managed section.\n"
+             << spec.user_preamble;
+    if (spec.user_preamble.back() != '\n') preamble << '\n';
+  }
 
   std::ostringstream warmup;
   warmup << "% Generated by StemTeX Profile Creator.\n"
@@ -948,7 +989,7 @@ void write_text(const fs::path &path, const std::string &text) {
 std::string profile_manifest(const InternalProfileSpec &spec, const GeneratedProfile &generated) {
   std::ostringstream out;
   out << "{\n"
-      << "  \"schemaVersion\": 2,\n"
+      << "  \"schemaVersion\": " << spec.manifest_schema_version << ",\n"
       << "  \"generator\": \"StemTeX Profile Creator " << json_escape(kVersion) << "\",\n"
       << "  \"name\": \"" << json_escape(spec.name ? spec.name : "") << "\",\n"
       << "  \"fonts\": {\n"
@@ -969,8 +1010,11 @@ std::string profile_manifest(const InternalProfileSpec &spec, const GeneratedPro
     out << "\"" << generated.packages.ordered[index]->id << "\"";
   }
   out << "]\n"
-      << "  },\n"
-      << "  \"fingerprint\": \"" << generated.fingerprint << "\"\n"
+      << "  }";
+  if (spec.manifest_schema_version >= 3) {
+    out << ",\n  \"userPreamble\": \"" << json_escape(spec.user_preamble) << "\"";
+  }
+  out << ",\n  \"fingerprint\": \"" << generated.fingerprint << "\"\n"
       << "}\n";
   return out.str();
 }
@@ -1210,6 +1254,17 @@ STEMTEX_PROFILE_API char *stemtex_profile_preamble_v2_utf8(
   }, error_code, error_utf8);
 }
 
+STEMTEX_PROFILE_API char *stemtex_profile_preamble_v3_utf8(
+    const StemTeXProfileContext *context, const StemTeXProfileSpecV3 *spec,
+    StemTeXProfileErrorCode *error_code, char **error_utf8) {
+  return api_call([&]() -> char * {
+    GeneratedProfile generated = generate_profile(context, user_preamble_spec(spec));
+    char *result = copy_string(generated.preamble);
+    if (!result) throw ProfileException(STEMTEX_PROFILE_ERROR_INTERNAL, "Cannot allocate generated preamble");
+    return result;
+  }, error_code, error_utf8);
+}
+
 STEMTEX_PROFILE_API int stemtex_profile_materialize(
     const StemTeXProfileContext *context, const StemTeXProfileSpec *spec,
     const char *profiles_root_utf8, char **result_json_utf8,
@@ -1227,6 +1282,16 @@ STEMTEX_PROFILE_API int stemtex_profile_materialize_v2(
   if (result_json_utf8) *result_json_utf8 = nullptr;
   return api_call([&]() -> int {
     return materialize_profile(context, package_aware_spec(spec), profiles_root_utf8, result_json_utf8);
+  }, error_code, error_utf8);
+}
+
+STEMTEX_PROFILE_API int stemtex_profile_materialize_v3(
+    const StemTeXProfileContext *context, const StemTeXProfileSpecV3 *spec,
+    const char *profiles_root_utf8, char **result_json_utf8,
+    StemTeXProfileErrorCode *error_code, char **error_utf8) {
+  if (result_json_utf8) *result_json_utf8 = nullptr;
+  return api_call([&]() -> int {
+    return materialize_profile(context, user_preamble_spec(spec), profiles_root_utf8, result_json_utf8);
   }, error_code, error_utf8);
 }
 

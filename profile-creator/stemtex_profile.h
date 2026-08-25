@@ -57,6 +57,22 @@ typedef struct StemTeXProfileSpecV2 {
   size_t package_count;
 } StemTeXProfileSpecV2;
 
+/*
+ * User-extensible profile specification. Curated package IDs are still
+ * dependency-resolved first. user_preamble_utf8 is then appended verbatim as
+ * the final preamble section and may contain package loads, definitions, and
+ * configuration commands; null means no user preamble.
+ */
+typedef struct StemTeXProfileSpecV3 {
+  const char *name_utf8;
+  const char *text_font_id_utf8;
+  const char *math_font_id_utf8;
+  const char *cjk_font_id_utf8;
+  const char *const *package_ids_utf8;
+  size_t package_count;
+  const char *user_preamble_utf8;
+} StemTeXProfileSpecV3;
+
 /* Catalog JSON contains text, math, and CJK recipes plus current availability. */
 STEMTEX_PROFILE_API char *stemtex_profile_font_catalog_json(
     const StemTeXProfileContext *context,
@@ -91,6 +107,13 @@ STEMTEX_PROFILE_API char *stemtex_profile_preamble_v2_utf8(
     StemTeXProfileErrorCode *error_code,
     char **error_utf8);
 
+/* Curated packages plus a final verbatim user preamble section. */
+STEMTEX_PROFILE_API char *stemtex_profile_preamble_v3_utf8(
+    const StemTeXProfileContext *context,
+    const StemTeXProfileSpecV3 *spec,
+    StemTeXProfileErrorCode *error_code,
+    char **error_utf8);
+
 /*
  * Atomically creates <profiles_root>/<spec.name>. Existing directories are
  * never overwritten. The result JSON reports the new profile path and recipe
@@ -107,6 +130,14 @@ STEMTEX_PROFILE_API int stemtex_profile_materialize(
 STEMTEX_PROFILE_API int stemtex_profile_materialize_v2(
     const StemTeXProfileContext *context,
     const StemTeXProfileSpecV2 *spec,
+    const char *profiles_root_utf8,
+    char **result_json_utf8,
+    StemTeXProfileErrorCode *error_code,
+    char **error_utf8);
+
+STEMTEX_PROFILE_API int stemtex_profile_materialize_v3(
+    const StemTeXProfileContext *context,
+    const StemTeXProfileSpecV3 *spec,
     const char *profiles_root_utf8,
     char **result_json_utf8,
     StemTeXProfileErrorCode *error_code,

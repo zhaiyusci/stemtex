@@ -402,8 +402,8 @@ rules for what is inside a valid profile. The returned string is JSON:
 
 ```json
 {
-  "name": "unicodemath_cjk",
-  "path": "C:\\StemTeX\\gui\\profiles\\unicodemath_cjk",
+  "name": "unicodemath",
+  "path": "C:\\StemTeX\\gui\\profiles\\unicodemath",
   "valid": true,
   "hasPreamble": true,
   "hasWarmup": true,
@@ -525,7 +525,7 @@ int main() {
   cfg.repo_root_utf8 = "C:\\path\\to\\stemtex";
   cfg.runtime_root_utf8 = "C:\\StemTeX\\runtime";
   cfg.texmf_root_utf8 = "C:\\texlive\\2026";
-  cfg.profile_root_utf8 = "C:\\StemTeX\\gui\\profiles\\unicodemath_cjk";
+  cfg.profile_root_utf8 = "C:\\StemTeX\\gui\\profiles\\unicodemath";
 
   char *error = nullptr;
   StemTeXErrorCode error_code = STEMTEX_OK;
@@ -718,11 +718,11 @@ cmake --build --preset ninja-release --target stemtex-renderer-smoke
 $repo = (Get-Location).Path
 $smoke = ".\build\stemtex-ninja\cpp-daemon\stemtex-renderer-smoke.exe"
 $runtime = ".\staging\runtime"
-$profile = ".\staging\gui\profiles\unicodemath_cjk"
+$profile = ".\staging\gui\profiles\unicodemath"
 
 & $smoke --repo $repo --runtime $runtime --profile $profile --case validate
 & $smoke --repo $repo --runtime $runtime --profile $profile --runs 2
-& $smoke --repo $repo --runtime $runtime --profile $profile --case physics
+& $smoke --repo $repo --runtime $runtime --profile $profile --case latin-math
 & $smoke --repo $repo --runtime $runtime --profile $profile --case bad-corpus --spares 0
 & $smoke --repo $repo --runtime $runtime --profile $profile --case bad-output-corpus --spares 0
 & $smoke --repo $repo --runtime $runtime --profile $profile --case list-state --spares 0
@@ -736,7 +736,7 @@ Useful options:
 --texmf PATH             Optional external TeX Live tree for packages/fonts.
 --profile PATH           Profile directory containing preamble.tex and warmup.tex.
 --runs N                 Number of repeated renders for applicable cases.
---case NAME              Test case such as validate, physics, bad-corpus, async.
+--case NAME              Test case such as validate, latin-math, bad-corpus, async.
 --spares N               Hot spare target for the renderer.
 --worker-template PATH   Optional worker-state template.
 --allow-exe              Allow xdvipdfmx process fallback during diagnostics.
@@ -745,7 +745,7 @@ Useful options:
 Examples:
 
 ```text
-stemtex-renderer-smoke.exe --repo PATH --runtime PATH --profile PROFILE --case physics --spares 2
+stemtex-renderer-smoke.exe --repo PATH --runtime PATH --profile PROFILE --case latin-math --spares 2
 stemtex-renderer-smoke.exe --repo PATH --runtime PATH --profile PROFILE --case async --runs 5 --spares 2
 ```
 
@@ -753,7 +753,7 @@ For timing checks, run representative cases with `--runs` and capture the
 console output from the smoke executable. Useful cases are:
 
 - cold create/warmup/live-worker startup;
-- physics, font, and chemistry representative snippets;
+- Latin text and mathematics representative snippets;
 - the expected bad-snippet error path;
 - font, native font resource, e-TeX sparse register, and hyphenation state
   rollback after bad snippets;

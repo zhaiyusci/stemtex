@@ -189,6 +189,26 @@ class CreatorWindow : public QMainWindow {
     packagePageLayout->addWidget(packageBox, 1);
     tabs->addTab(packagePage, QStringLiteral("宏包"));
 
+    auto *customPage = new QWidget(tabs);
+    auto *customPageLayout = new QVBoxLayout(customPage);
+    customPageLayout->setContentsMargins(12, 12, 12, 12);
+    auto *customBox = new QGroupBox(QStringLiteral("用户 preamble"), customPage);
+    auto *customLayout = new QVBoxLayout(customBox);
+    auto *customHint = new QLabel(
+        QStringLiteral("这里的内容会原样追加在 StemTeX 管理部分之后。可以直接写 \\usepackage、"
+                       "\\newcommand 和其他 preamble 命令；不要写 \\documentclass 或 document 环境。"),
+        customBox);
+    customHint->setWordWrap(true);
+    userPreambleEdit_ = new QPlainTextEdit(customBox);
+    userPreambleEdit_->setLineWrapMode(QPlainTextEdit::NoWrap);
+    userPreambleEdit_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    userPreambleEdit_->setPlaceholderText(
+        QStringLiteral("% 例如：\n\\usepackage{hyperref}\n\\newcommand{\\R}{\\mathbb{R}}"));
+    customLayout->addWidget(customHint);
+    customLayout->addWidget(userPreambleEdit_, 1);
+    customPageLayout->addWidget(customBox, 1);
+    tabs->addTab(customPage, QStringLiteral("自定义"));
+
     auto *preamblePage = new QWidget(tabs);
     auto *preamblePageLayout = new QVBoxLayout(preamblePage);
     preamblePageLayout->setContentsMargins(12, 12, 12, 12);
@@ -228,6 +248,7 @@ class CreatorWindow : public QMainWindow {
     }
     connect(packageTree_, &QTreeWidget::itemChanged, this,
             [this](QTreeWidgetItem *item, int column) { packageSelectionChanged(item, column); });
+    connect(userPreambleEdit_, &QPlainTextEdit::textChanged, this, [this]() { selectionChanged(); });
     connect(createButton_, &QPushButton::clicked, this, [this]() { createProfile(); });
 
     reloadCatalog("latin-modern", "latin-modern-math", "simsun");
@@ -241,11 +262,14 @@ class CreatorWindow : public QMainWindow {
     QByteArray cjk;
     std::vector<QByteArray> packageIds;
     std::vector<const char *> packagePointers;
-    StemTeXProfileSpecV2 spec{};
+    QByteArray userPreamble;
+    StemTeXProfileSpecV3 spec{};
 
     SpecStorage(const QString &profileName, const QString &textId,
-                const QString &mathId, const QString &cjkId, const QStringList &packages)
-        : name(profileName.toUtf8()), text(textId.toUtf8()), math(mathId.toUtf8()), cjk(cjkId.toUtf8()) {
+                const QString &mathId, const QString &cjkId, const QStringList &packages,
+                const QString &userPreambleText)
+        : name(profileName.toUtf8()), text(textId.toUtf8()), math(mathId.toUtf8()), cjk(cjkId.toUtf8()),
+          userPreamble(userPreambleText.toUtf8()) {
       packageIds.reserve(static_cast<size_t>(packages.size()));
       packagePointers.reserve(static_cast<size_t>(packages.size()));
       for (const QString &id : packages) packageIds.push_back(id.toUtf8());
@@ -256,6 +280,7 @@ class CreatorWindow : public QMainWindow {
       spec.cjk_font_id_utf8 = cjk.constData();
       spec.package_ids_utf8 = packagePointers.empty() ? nullptr : packagePointers.data();
       spec.package_count = packagePointers.size();
+      spec.user_preamble_utf8 = userPreamble.isEmpty() ? nullptr : userPreamble.constData();
     }
   };
 
@@ -576,7 +601,7 @@ class CreatorWindow : public QMainWindow {
   SpecStorage currentSpec(const QString &nameOverride = QString()) const {
     QString name = nameOverride.isEmpty() ? nameEdit_->text().trimmed() : nameOverride;
     return SpecStorage(name, selectedId(textCombo_), selectedId(mathCombo_), selectedId(cjkCombo_),
-                       explicitPackageIds());
+                       explicitPackageIds(), userPreambleEdit_->toPlainText());
   }
 
   bool generateTemporaryProfile(const QString &root, const SpecStorage &storage, QString *profilePath, QString *errorText) {
@@ -586,7 +611,7 @@ class CreatorWindow : public QMainWindow {
     StemTeXProfileErrorCode code = STEMTEX_PROFILE_OK;
     char *result = nullptr;
     char *error = nullptr;
-    int ok = stemtex_profile_materialize_v2(&context, &storage.spec, profiles.constData(), &result, &code, &error);
+    int ok = stemtex_profile_materialize_v3(&context, &storage.spec, profiles.constData(), &result, &code, &error);
     if (!ok) {
       if (errorText) *errorText = profileErrorText(error);
       stemtex_profile_free_string(result);
@@ -611,7 +636,7 @@ class CreatorWindow : public QMainWindow {
     SpecStorage storage = currentSpec(QStringLiteral("preamble-preview"));
     StemTeXProfileErrorCode code = STEMTEX_PROFILE_OK;
     char *error = nullptr;
-    char *preamble = stemtex_profile_preamble_v2_utf8(&context, &storage.spec, &code, &error);
+    char *preamble = stemtex_profile_preamble_v3_utf8(&context, &storage.spec, &code, &error);
     if (!preamble) {
       QString message = profileErrorText(error);
       preambleEdit_->setPlainText(QStringLiteral("% 无法生成 preamble.tex\n% %1").arg(message));
@@ -657,6 +682,7 @@ class CreatorWindow : public QMainWindow {
   QTreeWidget *packageTree_ = nullptr;
   QLabel *packagePlanLabel_ = nullptr;
   QLabel *packageNoticeLabel_ = nullptr;
+  QPlainTextEdit *userPreambleEdit_ = nullptr;
   QHash<QString, QTreeWidgetItem *> package_items_;
   QStringList package_catalog_order_;
   QSet<QString> explicit_package_ids_;

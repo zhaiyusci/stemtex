@@ -91,7 +91,7 @@ Run the native renderer against the staged runtime and profile:
 $repo = (Get-Location).Path
 $smoke = ".\build\stemtex-ninja\cpp-daemon\stemtex-renderer-smoke.exe"
 $runtime = ".\staging\runtime"
-$profile = ".\staging\gui\profiles\unicodemath_cjk"
+$profile = ".\staging\gui\profiles\unicodemath"
 
 & $smoke --repo $repo --runtime $runtime --profile $profile --case validate --spares 0
 & .\staging\gui\stemtex-renderer-gui.exe --smoke
@@ -102,7 +102,7 @@ cmake --build --preset ninja-release --target stemtex-checkpoint-audit
 
 The Profile Creator smoke materializes representative font combinations. With
 `--runtime`, it also starts a real worker and renders each combination. Against
-the bundled tree it tests the three available built-in combinations and skips
+the bundled tree it tests the available minimal combinations and skips
 full-tree-only recipes. Pass a compatible full TeX Live root to `--texmf` to
 exercise TeX Gyre/Fandol, Libertinus, and STIX Two as well.
 
@@ -141,12 +141,12 @@ refresh-profile-cache.bat
 ```
 
 With no argument, the helper uses the adjacent
-`gui\profiles\unicodemath_cjk` directory. Pass an absolute profile path to
+`gui\profiles\unicodemath` directory. Pass an absolute profile path to
 refresh a different profile. Do not pass a bare relative Windows path with
 backslashes: XeTeX can interpret the backslashes in that path as control
 sequences.
 
-The full installer runs this helper for `unicodemath_cjk` after installation
+The full installer runs this helper for `unicodemath` after installation
 when both the GUI and bundled `texmf` components are selected. That result is an
 optional bundled-tree startup cache; external TeX trees always use their own
 per-user keyed cache. The installer does not ship the generated cache in its
@@ -189,6 +189,6 @@ dist/installer/StemTeX-<version>-Setup.exe
 
 Run the renderer smoke test against `$packageStage` before invoking Inno Setup,
 using `$packageStage\runtime` and
-`$packageStage\gui\profiles\unicodemath_cjk`. After building the installer,
+`$packageStage\gui\profiles\unicodemath`. After building the installer,
 install it into a test directory and verify both PDF and SVG output through the
 GUI or the generic output API.

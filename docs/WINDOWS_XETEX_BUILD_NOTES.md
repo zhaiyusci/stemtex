@@ -94,9 +94,9 @@ Install the built binaries into the static StemTeX side tree:
 
 The maintained CMake install tree copies profile warmup sources and installs
 `runtime/refresh-profile-cache.bat`. The installer runs that batch file for the
-maintained `unicodemath_cjk` profile during installation. For a manual staged
+maintained `unicodemath` profile during installation. For a manual staged
 tree, run the same installed helper from the runtime directory; it defaults to
-the staged `..\gui\profiles\unicodemath_cjk` profile:
+the staged `..\gui\profiles\unicodemath` profile:
 
 ```bat
 cd /d C:\path\to\StemTeX\runtime

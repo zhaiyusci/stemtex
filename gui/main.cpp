@@ -170,11 +170,10 @@ QVector<ProfileEntry> profileRoots(const QString &, QString *errorText) {
 
 QString defaultSnippet() {
   return QString::fromUtf8(
-      "这是一段 StemTeX Renderer GUI 里的中文、数学和化学预览：$E=mc^2$，以及 \\textcolor{blue}{蓝色文字}。\n\n"
+      "StemTeX Renderer GUI: inline mathematics $E=mc^2$.\n\n"
       "\\[\n"
       "  \\int_0^1 x^2\\,dx = \\frac{1}{3},\\quad \\langle\\psi,\\phi\\rangle\n"
-      "\\]\n\n"
-      "\\ce{2H2 + O2 -> 2H2O}\n");
+      "\\]\n");
 }
 
 void configureRendererDllSearch(const QString &runtimeRoot) {

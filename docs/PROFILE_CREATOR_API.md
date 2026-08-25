@@ -63,12 +63,12 @@ StemTeX profiles and an opt-in XeTeX-native drawing group:
 
 | ID | Category | Default | Managed relation |
 | --- | --- | --- | --- |
-| `mathtools` | mathematics | on | pre-font math foundation |
-| `mhchem` | chemistry | on | requires `mathtools`; uses `version=4` |
-| `physics` | physics | on | requires `mathtools` |
+| `mathtools` | mathematics | off | pre-font math foundation |
+| `mhchem` | chemistry | off | requires `mathtools`; uses `version=4` |
+| `physics` | physics | off | requires `mathtools` |
 | `siunitx` | numbers/units | off | ordered after `physics` when both are selected; emits a compatibility notice |
-| `xcolor` | text/color | on | normal post-font package |
-| `cancel` | mathematics | on | ordered after `xcolor` when both are selected |
+| `xcolor` | text/color | off | normal post-font package |
+| `cancel` | mathematics | off | ordered after `xcolor` when both are selected |
 | `graphicx` | images | off | graphics inclusion and box transforms; required by `adjustbox` |
 | `array` | tables | off | extended table and mathematical-array columns; required by `tabularx` |
 | `booktabs` | tables | off | publication-quality table rules |
@@ -108,10 +108,14 @@ pre-font whitelist packages
 managed math/text/CJK font recipes
 post-font whitelist packages
 managed preview package and settings
+verbatim user preamble
 ```
 
-The planned user-authored command section will be appended after this managed
-section. It is intentionally not exposed by the current ABI or Qt UI yet.
+The user preamble is deliberately not parsed or dependency-managed. It may
+contain additional `\usepackage` declarations, command definitions, and package
+configuration. The creator normalizes line endings, appends the text verbatim,
+and includes it in the profile fingerprint. TeX reports any error when the
+profile is initialized.
 `preview`, `fontspec`, `unicode-math`, and `xeCJK` remain internal/managed rather
 than selectable whitelist entries.
 
@@ -149,13 +153,25 @@ typedef struct StemTeXProfileSpecV2 {
   size_t package_count;
 } StemTeXProfileSpecV2;
 
+typedef struct StemTeXProfileSpecV3 {
+  const char *name_utf8;
+  const char *text_font_id_utf8;
+  const char *math_font_id_utf8;
+  const char *cjk_font_id_utf8;
+  const char *const *package_ids_utf8;
+  size_t package_count;
+  const char *user_preamble_utf8;
+} StemTeXProfileSpecV3;
+
 char *stemtex_profile_font_catalog_json(...);
 char *stemtex_profile_package_catalog_json(...);
 char *stemtex_profile_package_plan_json(...);
 char *stemtex_profile_preamble_utf8(...);
 char *stemtex_profile_preamble_v2_utf8(...);
+char *stemtex_profile_preamble_v3_utf8(...);
 int stemtex_profile_materialize(...);
 int stemtex_profile_materialize_v2(...);
+int stemtex_profile_materialize_v3(...);
 void stemtex_profile_free_string(char *value);
 ```
 
@@ -175,14 +191,13 @@ dependency has `explicit: false` and reports its `requiredBy` parents. Its
 with stable `id`, `severity`, `packageIds`, and fallback English `message`
 fields; hosts may localize known notice IDs.
 
-The original `StemTeXProfileSpec`, `stemtex_profile_preamble_utf8`, and
-`stemtex_profile_materialize` entry points remain available and select all five
-legacy/default packages. New hosts should use `StemTeXProfileSpecV2` and the
-`_v2` entry points; an empty package array intentionally generates a profile
-with no optional whitelist packages.
+The original and V2 entry points remain available. New hosts should use
+`StemTeXProfileSpecV3` and the `_v3` entry points. An empty package array selects
+no optional whitelist packages, and a null `user_preamble_utf8` appends nothing.
+V3 manifests use schema version 3 and retain the user text in `userPreamble`.
 
-Both preamble entry points validate one combination and return the exact
-generated preamble without writing files.
+All preamble entry points validate one combination and return the exact generated
+preamble without writing files.
 
 `stemtex_profile_materialize` creates `<profiles_root>/<name>` through a
 temporary sibling directory and rename. It never overwrites an existing
@@ -196,19 +211,21 @@ Every returned `char *`, including errors, must be released with
 ```cpp
 StemTeXProfileContext context{"C:\\texlive\\2026"};
 const char *packages[] = {"mathtools", "mhchem", "xcolor", "cancel"};
-StemTeXProfileSpecV2 spec{
+StemTeXProfileSpecV3 spec{
     "paper-fonts",
     "tex-gyre-termes",
     "tex-gyre-termes-math",
     "fandol-song",
     packages,
     4,
+    "\\usepackage{hyperref}\n"
+    "\\newcommand{\\R}{\\mathbb{R}}\n",
 };
 
 StemTeXProfileErrorCode code = STEMTEX_PROFILE_OK;
 char *result = nullptr;
 char *error = nullptr;
-int ok = stemtex_profile_materialize_v2(
+int ok = stemtex_profile_materialize_v3(
     &context, &spec,
     "C:\\Users\\me\\AppData\\Local\\StemTeX\\profiles",
     &result, &code, &error);
@@ -233,16 +250,17 @@ as `StemTeXConfig.profile_root_utf8`, while passing the same TeX Live root as
 ```
 
 The Qt application keeps the TeX Live root, destination, and profile name above
-three tabs: fonts, whitelist packages, and the generated preamble. Package rows
-therefore have a full page for selection, dependency/load-order details, and
-compatibility notices, while the preamble remains readable at full size.
+four tabs: fonts, whitelist packages, a large free-form user preamble editor,
+and the generated preamble. Package rows therefore have a full page for
+selection, dependency/load-order details, and compatibility notices, while both
+editors remain readable at full size.
 Unavailable rows remain visible but disabled. A partially checked row denotes
 a package brought in only by another selection. The UI displays the actual
 resolved sequence, including the managed font and preview boundaries; it does
 not maintain a second package-order table.
 
-The lower editor updates immediately through
-`stemtex_profile_preamble_v2_utf8` and shows the exact `preamble.tex` produced
-by the current font/package choices. The Renderer GUI launches the creator with
-its current runtime and TeX Live choices, then rescans user profiles when the
-creator exits.
+The generated editor updates immediately through
+`stemtex_profile_preamble_v3_utf8` and shows the exact `preamble.tex` produced
+by the current font, whitelist, and verbatim user text. The Renderer GUI launches
+the creator with its current runtime and TeX Live choices, then rescans user
+profiles when the creator exits.

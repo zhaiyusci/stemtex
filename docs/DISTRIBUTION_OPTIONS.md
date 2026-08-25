@@ -109,7 +109,7 @@ the renderer continues to consume only `preamble.tex` and `warmup.tex`.
 `warmup.xdv`, `.aux`, `.log`, PDF output, and Fontconfig cache files are
 generated artifacts. CMake install and the installer payload exclude them. On a
 full installation, the installer refreshes Fontconfig and generates
-`unicodemath_cjk/warmup.xdv` after the files are installed.
+`unicodemath/warmup.xdv` after the files are installed.
 
 At runtime, `warmup.tex` remains the nominal profile input. The renderer stores
 its derived cache under:
@@ -144,10 +144,13 @@ should set both writable paths explicitly.
 ## Bundled TeX Tree
 
 The bundled `texmf-dist` is intentionally narrower than a full TeX Live
-installation. It contains the packages, fonts, maps, and configuration needed
-by the maintained profiles. It has no package manager; adding supported packages
-or fonts requires updating the CMake install inventory and rebuilding the
-installer.
+installation. It contains a file-level dependency closure for the maintained
+`unicode-math` profile: selected Latin Modern OpenType faces, the Computer
+Modern metric/Type 1 files needed by dynamic point-size selection, and the
+LaTeX/Unicode data needed to rebuild the daemon format. It does not copy whole
+font packages, all-language hyphenation patterns, or optional whitelist
+packages. It has no package manager; adding supported packages or fonts
+requires updating the CMake install inventory and rebuilding the installer.
 
 This is the most reproducible deployment path because the renderer, package
 versions, font maps, and converter resources are tested together. A bundled
