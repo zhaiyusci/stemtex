@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stddef.h>
+
 #ifdef _WIN32
 #ifdef STEMTEX_PROFILE_EXPORTS
 #define STEMTEX_PROFILE_API __declspec(dllexport)
@@ -22,7 +24,9 @@ typedef enum StemTeXProfileErrorCode {
   STEMTEX_PROFILE_ERROR_FONT_UNAVAILABLE = 4,
   STEMTEX_PROFILE_ERROR_PROFILE_EXISTS = 5,
   STEMTEX_PROFILE_ERROR_FILESYSTEM = 6,
-  STEMTEX_PROFILE_ERROR_INTERNAL = 7
+  STEMTEX_PROFILE_ERROR_INTERNAL = 7,
+  STEMTEX_PROFILE_ERROR_UNKNOWN_PACKAGE = 8,
+  STEMTEX_PROFILE_ERROR_PACKAGE_UNAVAILABLE = 9
 } StemTeXProfileErrorCode;
 
 typedef struct StemTeXProfileContext {
@@ -38,9 +42,38 @@ typedef struct StemTeXProfileSpec {
   const char *cjk_font_id_utf8;
 } StemTeXProfileSpec;
 
+/*
+ * Package-aware profile specification. package_ids_utf8 contains the package
+ * recipes explicitly selected by the user. Dependencies and load order are
+ * resolved by stemtex-profile.dll; an empty array intentionally selects no
+ * optional whitelist packages.
+ */
+typedef struct StemTeXProfileSpecV2 {
+  const char *name_utf8;
+  const char *text_font_id_utf8;
+  const char *math_font_id_utf8;
+  const char *cjk_font_id_utf8;
+  const char *const *package_ids_utf8;
+  size_t package_count;
+} StemTeXProfileSpecV2;
+
 /* Catalog JSON contains text, math, and CJK recipes plus current availability. */
 STEMTEX_PROFILE_API char *stemtex_profile_font_catalog_json(
     const StemTeXProfileContext *context,
+    StemTeXProfileErrorCode *error_code,
+    char **error_utf8);
+
+/* Curated package recipes, availability, dependencies, and ordering metadata. */
+STEMTEX_PROFILE_API char *stemtex_profile_package_catalog_json(
+    const StemTeXProfileContext *context,
+    StemTeXProfileErrorCode *error_code,
+    char **error_utf8);
+
+/* Resolves explicit package IDs to their dependency closure and load order. */
+STEMTEX_PROFILE_API char *stemtex_profile_package_plan_json(
+    const StemTeXProfileContext *context,
+    const char *const *package_ids_utf8,
+    size_t package_count,
     StemTeXProfileErrorCode *error_code,
     char **error_utf8);
 
@@ -48,6 +81,13 @@ STEMTEX_PROFILE_API char *stemtex_profile_font_catalog_json(
 STEMTEX_PROFILE_API char *stemtex_profile_preamble_utf8(
     const StemTeXProfileContext *context,
     const StemTeXProfileSpec *spec,
+    StemTeXProfileErrorCode *error_code,
+    char **error_utf8);
+
+/* Package-aware preamble generation. */
+STEMTEX_PROFILE_API char *stemtex_profile_preamble_v2_utf8(
+    const StemTeXProfileContext *context,
+    const StemTeXProfileSpecV2 *spec,
     StemTeXProfileErrorCode *error_code,
     char **error_utf8);
 
@@ -59,6 +99,14 @@ STEMTEX_PROFILE_API char *stemtex_profile_preamble_utf8(
 STEMTEX_PROFILE_API int stemtex_profile_materialize(
     const StemTeXProfileContext *context,
     const StemTeXProfileSpec *spec,
+    const char *profiles_root_utf8,
+    char **result_json_utf8,
+    StemTeXProfileErrorCode *error_code,
+    char **error_utf8);
+
+STEMTEX_PROFILE_API int stemtex_profile_materialize_v2(
+    const StemTeXProfileContext *context,
+    const StemTeXProfileSpecV2 *spec,
     const char *profiles_root_utf8,
     char **result_json_utf8,
     StemTeXProfileErrorCode *error_code,

@@ -89,10 +89,15 @@ scan for the current combination.
 ## Profile Creator
 
 `stemtex-profile-creator.exe` creates normal StemTeX profiles without exposing
-font-loading TeX commands. Text, math, and CJK fonts are selected independently;
-the creator library resolves a maintained recipe for each choice, checks it
-against the selected TeX Live tree, and generates `preamble.tex` and
-`warmup.tex`.
+font-loading TeX commands. Text, math, and CJK fonts are selected independently.
+It also offers a curated common-package whitelist whose availability,
+dependencies, options, and load order are owned by the Qt-free creator library.
+The current whitelist contains the original `mathtools`, `mhchem`, `physics`,
+`xcolor`, and `cancel` set plus opt-in TikZ drawing recipes for `tikz`,
+`pgfplots`, `tikz-cd`, `circuitikz`, `forest`, `chemfig`, and `quantikz`.
+Only the original five remain enabled by default for compatibility. The library
+generates `preamble.tex` and a selection-aware `warmup.tex` from the resulting
+plan.
 
 The bundled small tree enables its maintained Latin Modern, XITS, and Lete Sans
 Math recipes. Pointing the creator at a full TeX Live root additionally exposes
@@ -100,7 +105,7 @@ families such as TeX Gyre, Libertinus, STIX Two, and Fandol. Windows font recipe
 cover Arial, SimSun/SimHei, and Microsoft YaHei.
 
 Generated profiles live under `%LOCALAPPDATA%\StemTeX\profiles`. The Renderer
-GUI scans that location and exposes one `字体 Profile...` button that launches
+GUI scans that location and exposes one `Profile...` button that launches
 the separate creator. Other GUI technologies can call `stemtex-profile.dll`
 directly through its C ABI. See [Profile Creator API](docs/PROFILE_CREATOR_API.md).
 

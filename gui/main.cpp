@@ -573,7 +573,7 @@ class MainWindow : public QMainWindow {
     texmfButton_ = new QPushButton("TeXLive...", central);
     profileCombo_ = new QComboBox(central);
     reloadProfiles();
-    profileCreatorButton_ = new QPushButton(QStringLiteral("字体 Profile..."), central);
+    profileCreatorButton_ = new QPushButton(QStringLiteral("Profile..."), central);
     clearXdvButton_ = new QPushButton(QStringLiteral("清空 XDV"), central);
     clearXdvButton_->setToolTip(QStringLiteral("删除当前 Profile 的 XDV 与字体缓存并重新生成"));
     encodingCombo_ = new QComboBox(central);

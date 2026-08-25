@@ -9,6 +9,8 @@
 #include <QFontDatabase>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QHash>
+#include <QHeaderView>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QJsonArray>
@@ -20,18 +22,22 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSet>
 #include <QStandardItem>
 #include <QStandardItemModel>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QStringList>
 #include <QTextCursor>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <windows.h>
 
@@ -84,21 +90,21 @@ class CreatorWindow : public QMainWindow {
       : texmf_root_(std::move(texmfRoot)),
         profiles_root_(std::move(profilesRoot)) {
     setWindowTitle(QStringLiteral("StemTeX Profile Creator"));
-    resize(820, 680);
+    resize(940, 860);
 
     auto *central = new QWidget(this);
     auto *root = new QVBoxLayout(central);
     root->setContentsMargins(14, 14, 14, 14);
     root->setSpacing(12);
 
-    auto *title = new QLabel(QStringLiteral("字体 Profile"), central);
+    auto *title = new QLabel(QStringLiteral("StemTeX Profile Creator"), central);
     QFont titleFont = title->font();
     titleFont.setPointSize(titleFont.pointSize() + 5);
     titleFont.setBold(true);
     title->setFont(titleFont);
     root->addWidget(title);
     auto *intro = new QLabel(
-        QStringLiteral("独立选择正文字体、数学字体和 CJK 字体。StemTeX 会隐藏具体的宏包、字体文件与加载顺序。"),
+        QStringLiteral("选择字体和受支持的常用宏包。StemTeX 负责解析依赖，并生成顺序确定的 preamble.tex。"),
         central);
     intro->setWordWrap(true);
     root->addWidget(intro);
@@ -113,21 +119,21 @@ class CreatorWindow : public QMainWindow {
     auto *chooseTexmf = new QPushButton(QStringLiteral("选择 TeX Live..."), texmfRow);
     texmfLayout->addWidget(texmfEdit_, 1);
     texmfLayout->addWidget(chooseTexmf);
-    environmentForm->addRow(QStringLiteral("字体树"), texmfRow);
+    environmentForm->addRow(QStringLiteral("TeX Live 树"), texmfRow);
 
     profilesEdit_ = new QLineEdit(profiles_root_, environmentBox);
     profilesEdit_->setReadOnly(true);
     profilesEdit_->setToolTip(QStringLiteral("Renderer GUI 会自动扫描这个用户 Profile 目录"));
     environmentForm->addRow(QStringLiteral("保存到"), profilesEdit_);
+    nameEdit_ = new QLineEdit(environmentBox);
+    environmentForm->addRow(QStringLiteral("Profile 名称"), nameEdit_);
     root->addWidget(environmentBox);
 
     auto *fontBox = new QGroupBox(QStringLiteral("字体组合"), central);
     auto *fontForm = new QFormLayout(fontBox);
-    nameEdit_ = new QLineEdit(fontBox);
     textCombo_ = new QComboBox(fontBox);
     mathCombo_ = new QComboBox(fontBox);
     cjkCombo_ = new QComboBox(fontBox);
-    fontForm->addRow(QStringLiteral("Profile 名称"), nameEdit_);
     fontForm->addRow(QStringLiteral("正文字体"), textCombo_);
     fontForm->addRow(QStringLiteral("数学字体"), mathCombo_);
     fontForm->addRow(QStringLiteral("CJK 字体"), cjkCombo_);
@@ -136,6 +142,32 @@ class CreatorWindow : public QMainWindow {
     selectionInfo_->setStyleSheet(QStringLiteral("QLabel { color: #555; padding-top: 4px; }"));
     fontForm->addRow(QString(), selectionInfo_);
     root->addWidget(fontBox);
+
+    auto *packageBox = new QGroupBox(QStringLiteral("常用宏包（StemTeX 白名单）"), central);
+    auto *packageLayout = new QVBoxLayout(packageBox);
+    auto *packageHint = new QLabel(
+        QStringLiteral("勾选需要的功能；依赖项会自动加入。字体配置和 preview 由 StemTeX 管理，不在此重复显示。"),
+        packageBox);
+    packageHint->setWordWrap(true);
+    packageLayout->addWidget(packageHint);
+    packageTree_ = new QTreeWidget(packageBox);
+    packageTree_->setColumnCount(4);
+    packageTree_->setHeaderLabels({QStringLiteral("宏包"), QStringLiteral("类别"),
+                                   QStringLiteral("加载位置"), QStringLiteral("用途")});
+    packageTree_->setRootIsDecorated(false);
+    packageTree_->setAlternatingRowColors(true);
+    packageTree_->setSelectionMode(QAbstractItemView::SingleSelection);
+    packageTree_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    packageTree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    packageTree_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    packageTree_->header()->setSectionResizeMode(3, QHeaderView::Stretch);
+    packageTree_->setMinimumHeight(150);
+    packagePlanLabel_ = new QLabel(packageBox);
+    packagePlanLabel_->setWordWrap(true);
+    packagePlanLabel_->setStyleSheet(QStringLiteral("QLabel { color: #555; padding-top: 3px; }"));
+    packageLayout->addWidget(packageTree_);
+    packageLayout->addWidget(packagePlanLabel_);
+    root->addWidget(packageBox);
 
     auto *preambleBox = new QGroupBox(QStringLiteral("生成的 preamble.tex"), central);
     auto *preambleLayout = new QVBoxLayout(preambleBox);
@@ -169,6 +201,8 @@ class CreatorWindow : public QMainWindow {
     for (QComboBox *combo : {textCombo_, mathCombo_, cjkCombo_}) {
       connect(combo, &QComboBox::currentIndexChanged, this, [this](int) { selectionChanged(); });
     }
+    connect(packageTree_, &QTreeWidget::itemChanged, this,
+            [this](QTreeWidgetItem *item, int column) { packageSelectionChanged(item, column); });
     connect(createButton_, &QPushButton::clicked, this, [this]() { createProfile(); });
 
     reloadCatalog("latin-modern", "latin-modern-math", "simsun");
@@ -180,15 +214,23 @@ class CreatorWindow : public QMainWindow {
     QByteArray text;
     QByteArray math;
     QByteArray cjk;
-    StemTeXProfileSpec spec{};
+    std::vector<QByteArray> packageIds;
+    std::vector<const char *> packagePointers;
+    StemTeXProfileSpecV2 spec{};
 
     SpecStorage(const QString &profileName, const QString &textId,
-                const QString &mathId, const QString &cjkId)
+                const QString &mathId, const QString &cjkId, const QStringList &packages)
         : name(profileName.toUtf8()), text(textId.toUtf8()), math(mathId.toUtf8()), cjk(cjkId.toUtf8()) {
+      packageIds.reserve(static_cast<size_t>(packages.size()));
+      packagePointers.reserve(static_cast<size_t>(packages.size()));
+      for (const QString &id : packages) packageIds.push_back(id.toUtf8());
+      for (const QByteArray &id : packageIds) packagePointers.push_back(id.constData());
       spec.name_utf8 = name.constData();
       spec.text_font_id_utf8 = text.constData();
       spec.math_font_id_utf8 = math.constData();
       spec.cjk_font_id_utf8 = cjk.constData();
+      spec.package_ids_utf8 = packagePointers.empty() ? nullptr : packagePointers.data();
+      spec.package_count = packagePointers.size();
     }
   };
 
@@ -197,7 +239,8 @@ class CreatorWindow : public QMainWindow {
   }
 
   bool selectionsValid() const {
-    return !selectedId(textCombo_).isEmpty() && !selectedId(mathCombo_).isEmpty() && !selectedId(cjkCombo_).isEmpty();
+    return !selectedId(textCombo_).isEmpty() && !selectedId(mathCombo_).isEmpty() &&
+           !selectedId(cjkCombo_).isEmpty() && package_plan_valid_;
   }
 
   void chooseTexmfRoot() {
@@ -243,6 +286,186 @@ class CreatorWindow : public QMainWindow {
     combo->blockSignals(false);
   }
 
+  QString packageCategoryLabel(const QString &category) const {
+    if (category == "math") return QStringLiteral("数学");
+    if (category == "chemistry") return QStringLiteral("化学");
+    if (category == "physics") return QStringLiteral("物理");
+    if (category == "text") return QStringLiteral("文字/颜色");
+    if (category == "graphics") return QStringLiteral("绘图基础");
+    if (category == "plots") return QStringLiteral("函数图");
+    if (category == "diagrams") return QStringLiteral("专业图表");
+    return category;
+  }
+
+  QString packagePhaseLabel(const QString &phase) const {
+    return phase == "before-fonts" ? QStringLiteral("字体前") : QStringLiteral("字体后");
+  }
+
+  QStringList explicitPackageIds() const {
+    QStringList result;
+    for (const QString &id : package_catalog_order_) {
+      if (explicit_package_ids_.contains(id)) result.push_back(id);
+    }
+    return result;
+  }
+
+  bool reloadPackageCatalog() {
+    QByteArray texmf = texmf_root_.toUtf8();
+    StemTeXProfileContext context{texmf.constData()};
+    StemTeXProfileErrorCode code = STEMTEX_PROFILE_OK;
+    char *error = nullptr;
+    char *json = stemtex_profile_package_catalog_json(&context, &code, &error);
+    if (!json) {
+      QString message = profileErrorText(error);
+      packageTree_->clear();
+      packagePlanLabel_->setText(message);
+      package_plan_valid_ = false;
+      QMessageBox::critical(this, QStringLiteral("无法读取宏包白名单"), message);
+      return false;
+    }
+    QJsonParseError parseError{};
+    QJsonDocument document = QJsonDocument::fromJson(QByteArray(json), &parseError);
+    stemtex_profile_free_string(json);
+    stemtex_profile_free_string(error);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+      packageTree_->clear();
+      packagePlanLabel_->setText(parseError.errorString());
+      package_plan_valid_ = false;
+      QMessageBox::critical(this, QStringLiteral("宏包白名单错误"), parseError.errorString());
+      return false;
+    }
+
+    const QSet<QString> previousExplicit = explicit_package_ids_;
+    updating_packages_ = true;
+    packageTree_->clear();
+    package_items_.clear();
+    package_catalog_order_.clear();
+    explicit_package_ids_.clear();
+    for (const QJsonValue &value : document.object().value("packages").toArray()) {
+      const QJsonObject package = value.toObject();
+      const QString id = package.value("id").toString();
+      const bool available = package.value("available").toBool();
+      const bool selected = available && (package_selection_initialized_
+                                               ? previousExplicit.contains(id)
+                                               : package.value("defaultEnabled").toBool());
+      auto *item = new QTreeWidgetItem(packageTree_);
+      item->setText(0, package.value("displayName").toString());
+      item->setText(1, packageCategoryLabel(package.value("category").toString()));
+      item->setText(2, packagePhaseLabel(package.value("phase").toString()));
+      QString purpose = package.value("description").toString();
+      QStringList requires;
+      for (const QJsonValue &dependency : package.value("requires").toArray()) requires.push_back(dependency.toString());
+      QStringList after;
+      for (const QJsonValue &dependency : package.value("after").toArray()) after.push_back(dependency.toString());
+      if (!requires.isEmpty()) purpose += QStringLiteral("；自动依赖：%1").arg(requires.join(QStringLiteral("、")));
+      if (!after.isEmpty()) purpose += QStringLiteral("；若启用则晚于：%1").arg(after.join(QStringLiteral("、")));
+      item->setText(3, purpose);
+      item->setData(0, Qt::UserRole, id);
+      item->setData(0, Qt::UserRole + 1, package);
+      Qt::ItemFlags flags = item->flags() | Qt::ItemIsUserCheckable;
+      if (!available) flags &= ~(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
+      item->setFlags(flags);
+      item->setCheckState(0, selected ? Qt::Checked : Qt::Unchecked);
+      QString tooltip = purpose;
+      const QString relative = package.value("relativePath").toString();
+      if (!relative.isEmpty()) tooltip += QStringLiteral("\nTeX Live: texmf-dist/%1").arg(relative);
+      if (!available) {
+        item->setText(0, item->text(0) + QStringLiteral("  （当前树缺失）"));
+        const QJsonArray missing = package.value("missing").toArray();
+        if (!missing.isEmpty()) tooltip += QStringLiteral("\n缺失：%1").arg(missing.first().toString());
+      }
+      for (int column = 0; column < 4; ++column) item->setToolTip(column, tooltip);
+      package_items_.insert(id, item);
+      package_catalog_order_.push_back(id);
+      if (selected) explicit_package_ids_.insert(id);
+    }
+    package_selection_initialized_ = true;
+    updating_packages_ = false;
+    return refreshPackagePlan();
+  }
+
+  bool refreshPackagePlan() {
+    const QStringList ids = explicitPackageIds();
+    std::vector<QByteArray> storage;
+    std::vector<const char *> pointers;
+    storage.reserve(static_cast<size_t>(ids.size()));
+    pointers.reserve(static_cast<size_t>(ids.size()));
+    for (const QString &id : ids) storage.push_back(id.toUtf8());
+    for (const QByteArray &id : storage) pointers.push_back(id.constData());
+
+    QByteArray texmf = texmf_root_.toUtf8();
+    StemTeXProfileContext context{texmf.constData()};
+    StemTeXProfileErrorCode code = STEMTEX_PROFILE_OK;
+    char *error = nullptr;
+    char *json = stemtex_profile_package_plan_json(
+        &context, pointers.empty() ? nullptr : pointers.data(), pointers.size(), &code, &error);
+    if (!json) {
+      const QString message = profileErrorText(error);
+      packagePlanLabel_->setText(QStringLiteral("无法解析宏包顺序：%1").arg(message));
+      package_plan_valid_ = false;
+      return false;
+    }
+    QJsonParseError parseError{};
+    QJsonDocument document = QJsonDocument::fromJson(QByteArray(json), &parseError);
+    stemtex_profile_free_string(json);
+    stemtex_profile_free_string(error);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+      packagePlanLabel_->setText(QStringLiteral("宏包顺序数据错误：%1").arg(parseError.errorString()));
+      package_plan_valid_ = false;
+      return false;
+    }
+
+    QSet<QString> resolved;
+    QStringList dependencyNotes;
+    for (const QJsonValue &value : document.object().value("packages").toArray()) {
+      const QJsonObject package = value.toObject();
+      const QString id = package.value("id").toString();
+      resolved.insert(id);
+      if (!package.value("explicit").toBool()) {
+        QStringList parents;
+        for (const QJsonValue &parent : package.value("requiredBy").toArray()) parents.push_back(parent.toString());
+        dependencyNotes.push_back(QStringLiteral("%1（由 %2 自动加入）")
+                                      .arg(package.value("displayName").toString(), parents.join(QStringLiteral("、"))));
+      }
+    }
+
+    updating_packages_ = true;
+    for (const QString &id : package_catalog_order_) {
+      QTreeWidgetItem *item = package_items_.value(id, nullptr);
+      if (!item || !(item->flags() & Qt::ItemIsEnabled)) continue;
+      item->setCheckState(0, explicit_package_ids_.contains(id) ? Qt::Checked
+                             : resolved.contains(id) ? Qt::PartiallyChecked
+                                                     : Qt::Unchecked);
+    }
+    updating_packages_ = false;
+
+    QStringList order;
+    for (const QJsonValue &value : document.object().value("loadOrder").toArray()) {
+      QJsonObject item = value.toObject();
+      if (item.value("kind").toString() == "managed") {
+        order.push_back(item.value("id").toString() == "fonts"
+                            ? QStringLiteral("字体配置")
+                            : QStringLiteral("preview（StemTeX）"));
+      } else {
+        order.push_back(item.value("displayName").toString());
+      }
+    }
+    QString text = QStringLiteral("实际加载顺序：%1").arg(order.join(QStringLiteral("  →  ")));
+    if (!dependencyNotes.isEmpty()) text += QStringLiteral("\n依赖：%1").arg(dependencyNotes.join(QStringLiteral("；")));
+    packagePlanLabel_->setText(text);
+    package_plan_valid_ = true;
+    return true;
+  }
+
+  void packageSelectionChanged(QTreeWidgetItem *item, int column) {
+    if (updating_packages_ || !item || column != 0 || !(item->flags() & Qt::ItemIsEnabled)) return;
+    const QString id = item->data(0, Qt::UserRole).toString();
+    if (item->checkState(0) == Qt::Checked) explicit_package_ids_.insert(id);
+    else explicit_package_ids_.remove(id);
+    refreshPackagePlan();
+    selectionChanged();
+  }
+
   void reloadCatalog(const QString &wantedText, const QString &wantedMath, const QString &wantedCjk) {
     QByteArray texmf = texmf_root_.toUtf8();
     StemTeXProfileContext context{texmf.constData()};
@@ -254,6 +477,9 @@ class CreatorWindow : public QMainWindow {
       statusBar()->showMessage(message);
       QMessageBox::critical(this, QStringLiteral("无法读取字体目录"), message);
       for (QComboBox *combo : {textCombo_, mathCombo_, cjkCombo_}) combo->clear();
+      packageTree_->clear();
+      packagePlanLabel_->clear();
+      package_plan_valid_ = false;
       selectionChanged();
       return;
     }
@@ -269,7 +495,8 @@ class CreatorWindow : public QMainWindow {
     addCatalogItems(textCombo_, fonts, "text", wantedText);
     addCatalogItems(mathCombo_, fonts, "math", wantedMath);
     addCatalogItems(cjkCombo_, fonts, "cjk", wantedCjk);
-    statusBar()->showMessage(QStringLiteral("已读取当前 TeX Live 字体目录"), 4000);
+    reloadPackageCatalog();
+    statusBar()->showMessage(QStringLiteral("已读取当前 TeX Live 字体与宏包目录"), 4000);
     selectionChanged();
   }
 
@@ -300,7 +527,8 @@ class CreatorWindow : public QMainWindow {
 
   SpecStorage currentSpec(const QString &nameOverride = QString()) const {
     QString name = nameOverride.isEmpty() ? nameEdit_->text().trimmed() : nameOverride;
-    return SpecStorage(name, selectedId(textCombo_), selectedId(mathCombo_), selectedId(cjkCombo_));
+    return SpecStorage(name, selectedId(textCombo_), selectedId(mathCombo_), selectedId(cjkCombo_),
+                       explicitPackageIds());
   }
 
   bool generateTemporaryProfile(const QString &root, const SpecStorage &storage, QString *profilePath, QString *errorText) {
@@ -310,7 +538,7 @@ class CreatorWindow : public QMainWindow {
     StemTeXProfileErrorCode code = STEMTEX_PROFILE_OK;
     char *result = nullptr;
     char *error = nullptr;
-    int ok = stemtex_profile_materialize(&context, &storage.spec, profiles.constData(), &result, &code, &error);
+    int ok = stemtex_profile_materialize_v2(&context, &storage.spec, profiles.constData(), &result, &code, &error);
     if (!ok) {
       if (errorText) *errorText = profileErrorText(error);
       stemtex_profile_free_string(result);
@@ -335,7 +563,7 @@ class CreatorWindow : public QMainWindow {
     SpecStorage storage = currentSpec(QStringLiteral("preamble-preview"));
     StemTeXProfileErrorCode code = STEMTEX_PROFILE_OK;
     char *error = nullptr;
-    char *preamble = stemtex_profile_preamble_utf8(&context, &storage.spec, &code, &error);
+    char *preamble = stemtex_profile_preamble_v2_utf8(&context, &storage.spec, &code, &error);
     if (!preamble) {
       QString message = profileErrorText(error);
       preambleEdit_->setPlainText(QStringLiteral("% 无法生成 preamble.tex\n% %1").arg(message));
@@ -346,7 +574,7 @@ class CreatorWindow : public QMainWindow {
     stemtex_profile_free_string(preamble);
     stemtex_profile_free_string(error);
     preambleEdit_->moveCursor(QTextCursor::Start);
-    statusBar()->showMessage(QStringLiteral("preamble.tex 已按当前字体组合更新"), 3000);
+    statusBar()->showMessage(QStringLiteral("preamble.tex 已按当前字体与宏包组合更新"), 3000);
   }
 
   void createProfile() {
@@ -378,9 +606,17 @@ class CreatorWindow : public QMainWindow {
   QComboBox *mathCombo_ = nullptr;
   QComboBox *cjkCombo_ = nullptr;
   QLabel *selectionInfo_ = nullptr;
+  QTreeWidget *packageTree_ = nullptr;
+  QLabel *packagePlanLabel_ = nullptr;
+  QHash<QString, QTreeWidgetItem *> package_items_;
+  QStringList package_catalog_order_;
+  QSet<QString> explicit_package_ids_;
   QPlainTextEdit *preambleEdit_ = nullptr;
   QPushButton *createButton_ = nullptr;
   bool name_touched_ = false;
+  bool package_selection_initialized_ = false;
+  bool updating_packages_ = false;
+  bool package_plan_valid_ = false;
 };
 
 }  // namespace

@@ -2,11 +2,20 @@
 #include "stemtex_renderer.h"
 
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
 namespace fs = std::filesystem;
+
+std::string read_text(const fs::path &path) {
+  std::ifstream stream(path, std::ios::binary);
+  std::ostringstream text;
+  text << stream.rdbuf();
+  return text.str();
+}
 
 int main(int argc, char **argv) {
   std::string texmf_root;
@@ -40,6 +49,75 @@ int main(int argc, char **argv) {
   std::cout << catalog << '\n';
   stemtex_profile_free_string(catalog);
 
+  char *package_catalog = stemtex_profile_package_catalog_json(&context, &code, &error);
+  if (!package_catalog) {
+    std::cerr << (error ? error : "package catalog failed") << '\n';
+    stemtex_profile_free_string(error);
+    return 1;
+  }
+  std::string package_catalog_text = package_catalog;
+  std::cout << package_catalog << '\n';
+  stemtex_profile_free_string(package_catalog);
+  stemtex_profile_free_string(error);
+  const std::vector<const char *> known_packages = {
+      "mathtools", "mhchem", "physics", "xcolor", "cancel", "tikz", "pgfplots",
+      "tikz-cd", "circuitikz", "forest", "chemfig", "quantikz"};
+  for (const char *id : known_packages) {
+    if (package_catalog_text.find(std::string("\"id\":\"") + id + "\"") == std::string::npos) {
+      std::cerr << "package catalog missing " << id << '\n';
+      return 1;
+    }
+  }
+
+  const char *plan_ids[] = {"physics", "cancel", "xcolor"};
+  char *package_plan = stemtex_profile_package_plan_json(&context, plan_ids, 3, &code, &error);
+  if (!package_plan) {
+    std::cerr << (error ? error : "package plan failed") << '\n';
+    stemtex_profile_free_string(error);
+    return 1;
+  }
+  std::string package_plan_text = package_plan;
+  std::cout << package_plan << '\n';
+  stemtex_profile_free_string(package_plan);
+  stemtex_profile_free_string(error);
+  size_t mathtools_position = package_plan_text.find("\"id\":\"mathtools\"");
+  size_t physics_position = package_plan_text.find("\"id\":\"physics\"");
+  size_t xcolor_position = package_plan_text.find("\"id\":\"xcolor\"");
+  size_t cancel_position = package_plan_text.find("\"id\":\"cancel\"");
+  if (mathtools_position == std::string::npos || physics_position == std::string::npos ||
+      xcolor_position == std::string::npos || cancel_position == std::string::npos ||
+      !(mathtools_position < physics_position && xcolor_position < cancel_position) ||
+      package_plan_text.find("\"id\":\"mathtools\",\"displayName\":\"mathtools\",\"explicit\":false") ==
+          std::string::npos) {
+    std::cerr << "package plan did not resolve dependencies/order as expected\n";
+    return 1;
+  }
+
+  const char *drawing_plan_ids[] = {"pgfplots", "chemfig"};
+  package_plan = stemtex_profile_package_plan_json(&context, drawing_plan_ids, 2, &code, &error);
+  if (!package_plan) {
+    std::cerr << (error ? error : "drawing package plan failed") << '\n';
+    stemtex_profile_free_string(error);
+    return 1;
+  }
+  package_plan_text = package_plan;
+  std::cout << package_plan << '\n';
+  stemtex_profile_free_string(package_plan);
+  stemtex_profile_free_string(error);
+  xcolor_position = package_plan_text.find("\"id\":\"xcolor\"");
+  size_t tikz_position = package_plan_text.find("\"id\":\"tikz\"");
+  size_t pgfplots_position = package_plan_text.find("\"id\":\"pgfplots\"");
+  size_t chemfig_position = package_plan_text.find("\"id\":\"chemfig\"");
+  if (xcolor_position == std::string::npos || tikz_position == std::string::npos ||
+      pgfplots_position == std::string::npos || chemfig_position == std::string::npos ||
+      !(xcolor_position < tikz_position && tikz_position < pgfplots_position &&
+        pgfplots_position < chemfig_position) ||
+      package_plan_text.find("\"id\":\"tikz\",\"displayName\":\"TikZ\",\"explicit\":false") ==
+          std::string::npos) {
+    std::cerr << "drawing package plan did not resolve dependencies/order as expected\n";
+    return 1;
+  }
+
   fs::path root = fs::temp_directory_path() / "stemtex-profile-smoke";
   std::error_code ignored;
   fs::remove_all(root, ignored);
@@ -49,8 +127,14 @@ int main(int argc, char **argv) {
     const char *text;
     const char *math;
     const char *cjk;
+    std::vector<const char *> packages;
+    bool package_aware;
   };
   const std::vector<SmokeSpec> cases = {
+      {"package-selection", "latin-modern", "latin-modern-math", "none", {"mhchem", "xcolor", "cancel"}, true},
+      {"package-none", "latin-modern", "latin-modern-math", "none", {}, true},
+      {"drawing-packages", "latin-modern", "latin-modern-math", "none",
+       {"pgfplots", "tikz-cd", "circuitikz", "forest", "chemfig", "quantikz"}, true},
       {"math-arsenal", "latin-modern", "arsenal-math", "none"},
       {"math-asana", "latin-modern", "asana-math", "none"},
       {"math-concrete", "latin-modern", "concrete-math", "none"},
@@ -93,12 +177,20 @@ int main(int argc, char **argv) {
   for (const SmokeSpec &item : cases) {
     if (!selected_case.empty() && selected_case != item.name) continue;
     ++selected;
-    StemTeXProfileSpec spec{item.name, item.text, item.math, item.cjk};
     char *result_json = nullptr;
     error = nullptr;
     code = STEMTEX_PROFILE_OK;
-    int ok = stemtex_profile_materialize(&context, &spec, profiles_root.c_str(), &result_json, &code, &error);
-    if (!ok && code == STEMTEX_PROFILE_ERROR_FONT_UNAVAILABLE) {
+    int ok = 0;
+    if (!item.package_aware) {
+      StemTeXProfileSpec spec{item.name, item.text, item.math, item.cjk};
+      ok = stemtex_profile_materialize(&context, &spec, profiles_root.c_str(), &result_json, &code, &error);
+    } else {
+      StemTeXProfileSpecV2 spec{item.name, item.text, item.math, item.cjk,
+                               item.packages.data(), item.packages.size()};
+      ok = stemtex_profile_materialize_v2(&context, &spec, profiles_root.c_str(), &result_json, &code, &error);
+    }
+    if (!ok && (code == STEMTEX_PROFILE_ERROR_FONT_UNAVAILABLE ||
+                code == STEMTEX_PROFILE_ERROR_PACKAGE_UNAVAILABLE)) {
       std::cout << "skip=" << item.name << " reason=" << (error ? error : "unavailable") << '\n';
       stemtex_profile_free_string(error);
       ++skipped;
@@ -124,6 +216,77 @@ int main(int argc, char **argv) {
       return 1;
     }
 
+    if (std::string(item.name) == "package-selection") {
+      const std::string preamble = read_text(profile / "preamble.tex");
+      const std::string manifest = read_text(profile / "profile.json");
+      const size_t mathtools = preamble.find("\\usepackage{mathtools}");
+      const size_t fonts = preamble.find("\\usepackage{unicode-math}");
+      const size_t mhchem = preamble.find("\\usepackage[version=4]{mhchem}");
+      const size_t xcolor = preamble.find("\\usepackage{xcolor}");
+      const size_t cancel = preamble.find("\\usepackage{cancel}");
+      const size_t preview = preamble.find("\\usepackage[active,tightpage]{preview}");
+      if (mathtools == std::string::npos || fonts == std::string::npos || mhchem == std::string::npos ||
+          xcolor == std::string::npos || cancel == std::string::npos || preview == std::string::npos ||
+          !(mathtools < fonts && fonts < mhchem && mhchem < xcolor && xcolor < cancel && cancel < preview) ||
+          preamble.find("\\usepackage{physics}") != std::string::npos ||
+          manifest.find("\"schemaVersion\": 2") == std::string::npos ||
+          manifest.find("\"selected\": [\"mhchem\", \"xcolor\", \"cancel\"]") == std::string::npos ||
+          manifest.find("\"resolvedOrder\": [\"mathtools\", \"mhchem\", \"xcolor\", \"cancel\"]") ==
+              std::string::npos) {
+        std::cerr << "package-aware profile output is incorrect\n";
+        fs::remove_all(root, ignored);
+        return 1;
+      }
+    }
+    if (std::string(item.name) == "package-none") {
+      const std::string preamble = read_text(profile / "preamble.tex");
+      const std::string warmup = read_text(profile / "warmup.tex");
+      for (const char *package : known_packages) {
+        if (preamble.find(std::string("{") + package + "}") != std::string::npos) {
+          std::cerr << "empty package selection unexpectedly loaded " << package << '\n';
+          fs::remove_all(root, ignored);
+          return 1;
+        }
+      }
+      if (warmup.find("\\ce") != std::string::npos || warmup.find("\\cancel") != std::string::npos ||
+          warmup.find("\\textcolor") != std::string::npos) {
+        std::cerr << "empty package selection retained an optional warmup probe\n";
+        fs::remove_all(root, ignored);
+        return 1;
+      }
+    }
+    if (std::string(item.name) == "drawing-packages") {
+      const std::string preamble = read_text(profile / "preamble.tex");
+      const std::string warmup = read_text(profile / "warmup.tex");
+      const size_t xcolor = preamble.find("\\usepackage{xcolor}");
+      const size_t tikz = preamble.find("\\usepackage{tikz}");
+      const size_t pgfplots = preamble.find("\\usepackage{pgfplots}");
+      const size_t compat = preamble.find("\\pgfplotsset{compat=newest}");
+      const size_t tikz_cd = preamble.find("\\usepackage{tikz-cd}");
+      const size_t circuitikz = preamble.find("\\usepackage{circuitikz}");
+      const size_t forest = preamble.find("\\usepackage{forest}");
+      const size_t chemfig = preamble.find("\\usepackage{chemfig}");
+      const size_t quantikz = preamble.find("\\usepackage{quantikz}");
+      const size_t preview = preamble.find("\\usepackage[active,tightpage]{preview}");
+      if (xcolor == std::string::npos || tikz == std::string::npos || pgfplots == std::string::npos ||
+          compat == std::string::npos || tikz_cd == std::string::npos || circuitikz == std::string::npos ||
+          forest == std::string::npos || chemfig == std::string::npos || quantikz == std::string::npos ||
+          preview == std::string::npos ||
+          !(xcolor < tikz && tikz < pgfplots && pgfplots < compat && compat < tikz_cd &&
+            tikz_cd < circuitikz && circuitikz < forest && forest < chemfig && chemfig < quantikz &&
+            quantikz < preview) ||
+          warmup.find("\\begin{axis}") == std::string::npos ||
+          warmup.find("\\begin{tikzcd}") == std::string::npos ||
+          warmup.find("\\begin{circuitikz}") == std::string::npos ||
+          warmup.find("\\begin{forest}") == std::string::npos ||
+          warmup.find("\\chemfig") == std::string::npos ||
+          warmup.find("\\begin{quantikz}") == std::string::npos) {
+        std::cerr << "drawing package profile output is incorrect\n";
+        fs::remove_all(root, ignored);
+        return 1;
+      }
+    }
+
     if (!runtime_root.empty()) {
       std::string repo = root.u8string();
       std::string profile_string = profile.u8string();
@@ -146,9 +309,33 @@ int main(int argc, char **argv) {
         return 1;
       }
       stemtex_renderer_free_string(renderer_error);
-      const char *snippet = std::string(item.cjk) == "none"
-                                ? "StemTeX font profile: $E=mc^2$ and $\\int_0^1x^2\\,dx=\\frac13$."
-                                : u8"字体组合验证：$E=mc^2$，以及 $\\int_0^1x^2\\,dx=\\frac13$。";
+      const char *snippet = nullptr;
+      if (std::string(item.name) == "drawing-packages") {
+        snippet = R"TEX(\begin{tikzpicture}
+\begin{axis}[
+  width=.92\linewidth,
+  height=180pt,
+  axis lines=middle,
+  xlabel={$x$},
+  ylabel={$y$},
+  xmin=-6.4, xmax=6.4,
+  ymin=-1.25, ymax=1.25,
+  domain=-6.283:6.283,
+  samples=161,
+  grid=both,
+  legend pos=north east
+]
+  \addplot[blue, very thick] {sin(deg(x))};
+  \addlegendentry{$\sin x$}
+  \addplot[red, very thick, dashed] {cos(deg(x))};
+  \addlegendentry{$\cos x$}
+\end{axis}
+\end{tikzpicture})TEX";
+      } else {
+        snippet = std::string(item.cjk) == "none"
+                      ? "StemTeX font profile: $E=mc^2$ and $\\int_0^1x^2\\,dx=\\frac13$."
+                      : u8"字体组合验证：$E=mc^2$，以及 $\\int_0^1x^2\\,dx=\\frac13$。";
+      }
       StemTeXRenderResult render_result{};
       renderer_error = nullptr;
       ok = stemtex_renderer_render_with_font_size(renderer, snippet, 360.0, 12.0, &render_result,
