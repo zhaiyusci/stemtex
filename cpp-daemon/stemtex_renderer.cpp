@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -721,6 +722,7 @@ struct RendererConfig {
   fs::path repo_root;
   fs::path runtime_root;
   fs::path texmf_root;
+  fs::path format_root;
   fs::path profile_root;
   fs::path state_root;
   fs::path renders_root;
@@ -909,7 +911,7 @@ void write_fontconfig_config(const RendererConfig &cfg) {
 std::vector<wchar_t> worker_environment(const RendererConfig &cfg) {
   fs::path bin = cfg.runtime_root / "bin" / "windows";
   fs::path texmfcnf = cfg.texmf_root / "texmf-dist" / "web2c";
-  fs::path fmt = cfg.runtime_root / "texmf-var" / "web2c" / "xetex";
+  fs::path fmt = cfg.format_root;
   fs::path fontconf = cfg.fontconfig_conf_root;
   fs::path fontcache = cfg.fontconfig_cache_root;
   std::wstring fontmaps =
@@ -990,7 +992,7 @@ struct ScopedEnvironment {
 std::map<std::wstring, std::wstring> runtime_environment_overrides(const RendererConfig &cfg) {
   fs::path bin = cfg.runtime_root / "bin" / "windows";
   fs::path texmfcnf = cfg.texmf_root / "texmf-dist" / "web2c";
-  fs::path fmt = cfg.runtime_root / "texmf-var" / "web2c" / "xetex";
+  fs::path fmt = cfg.format_root;
   fs::path fontconf = cfg.fontconfig_conf_root;
   fs::path fontcache = cfg.fontconfig_cache_root;
   std::wstring fontmaps =
@@ -1409,17 +1411,6 @@ XdvParts run_warmup(const RendererConfig &cfg) {
   }
 }
 
-XdvParts load_or_run_warmup(const RendererConfig &cfg) {
-  fs::path profile_xdv = cfg.profile_root / "warmup.xdv";
-  for (const fs::path &candidate : {
-           profile_xdv,
-           cfg.profile_root / "worker-template.xdv",
-       }) {
-    if (auto parts = try_read_xdv_parts(candidate)) return *parts;
-  }
-  return run_warmup(cfg);
-}
-
 std::string json_escape(const std::string &s) {
   std::string out;
   for (char c : s) {
@@ -1459,6 +1450,352 @@ std::string random_id() {
   std::ostringstream s;
   s << t << "-" << GetCurrentProcessId() << "-" << seq.fetch_add(1);
   return s.str();
+}
+
+fs::path path_for_identity(const fs::path &path) {
+  std::error_code ec;
+  fs::path resolved = fs::weakly_canonical(path, ec);
+  if (!ec) return resolved;
+  ec.clear();
+  resolved = fs::absolute(path, ec);
+  return (ec ? path : resolved).lexically_normal();
+}
+
+std::string format_cache_key(const RendererConfig &cfg) {
+  uint64_t hash = 14695981039346656037ull;
+  auto add = [&](const std::string &text) {
+    for (unsigned char byte : text) {
+      hash ^= byte;
+      hash *= 1099511628211ull;
+    }
+    hash ^= 0xff;
+    hash *= 1099511628211ull;
+  };
+  add(path_utf8(path_for_identity(cfg.texmf_root)));
+  add(path_utf8(path_for_identity(cfg.runtime_root)));
+  std::ostringstream out;
+  out << std::hex << std::setfill('0') << std::setw(16) << hash;
+  return out.str();
+}
+
+std::string profile_xdv_cache_key(const RendererConfig &cfg) {
+  uint64_t hash = 14695981039346656037ull;
+  auto add = [&](const std::string &text) {
+    for (unsigned char byte : text) {
+      hash ^= byte;
+      hash *= 1099511628211ull;
+    }
+    hash ^= 0xff;
+    hash *= 1099511628211ull;
+  };
+  add(path_utf8(path_for_identity(cfg.profile_root)));
+  add(path_utf8(path_for_identity(cfg.texmf_root)));
+  add(path_utf8(path_for_identity(cfg.runtime_root)));
+  std::ostringstream out;
+  out << std::hex << std::setfill('0') << std::setw(16) << hash;
+  return out.str();
+}
+
+bool has_format_file(const fs::path &format_root) {
+  std::error_code ec;
+  const fs::path format = format_root / "xelatexdaemon.fmt";
+  return fs::is_regular_file(format, ec) && !ec && fs::file_size(format, ec) > 0 && !ec;
+}
+
+class ScopedFormatMutex {
+ public:
+  explicit ScopedFormatMutex(const std::string &key) {
+    const std::wstring name = L"Local\\StemTeXFormat-" + widen_utf8(key);
+    handle_ = CreateMutexW(nullptr, FALSE, name.c_str());
+    if (!handle_) throw std::runtime_error("CreateMutexW failed for the StemTeX format cache");
+    const DWORD wait = WaitForSingleObject(handle_, 300000);
+    if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) {
+      CloseHandle(handle_);
+      handle_ = nullptr;
+      throw std::runtime_error("Timed out waiting for another StemTeX process to generate a daemon format");
+    }
+    locked_ = true;
+  }
+
+  ~ScopedFormatMutex() {
+    if (locked_) ReleaseMutex(handle_);
+    if (handle_) CloseHandle(handle_);
+  }
+
+  ScopedFormatMutex(const ScopedFormatMutex &) = delete;
+  ScopedFormatMutex &operator=(const ScopedFormatMutex &) = delete;
+
+ private:
+  HANDLE handle_ = nullptr;
+  bool locked_ = false;
+};
+
+class ScopedProfileXdvMutex {
+ public:
+  explicit ScopedProfileXdvMutex(const std::string &key) {
+    const std::wstring name = L"Local\\StemTeXProfileXdv-" + widen_utf8(key);
+    handle_ = CreateMutexW(nullptr, FALSE, name.c_str());
+    if (!handle_) throw std::runtime_error("CreateMutexW failed for the StemTeX profile XDV cache");
+    const DWORD wait = WaitForSingleObject(handle_, 300000);
+    if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) {
+      CloseHandle(handle_);
+      handle_ = nullptr;
+      throw std::runtime_error("Timed out waiting for another StemTeX process to update a profile XDV cache");
+    }
+    locked_ = true;
+  }
+
+  ~ScopedProfileXdvMutex() {
+    if (locked_) ReleaseMutex(handle_);
+    if (handle_) CloseHandle(handle_);
+  }
+
+  ScopedProfileXdvMutex(const ScopedProfileXdvMutex &) = delete;
+  ScopedProfileXdvMutex &operator=(const ScopedProfileXdvMutex &) = delete;
+
+ private:
+  HANDLE handle_ = nullptr;
+  bool locked_ = false;
+};
+
+void generate_daemon_format(RendererConfig &cfg, const fs::path &cache_root) {
+  const fs::path parent = cache_root.parent_path();
+  const fs::path build_root = parent / (".building-" + cache_root.filename().string() + "-" + random_id());
+  std::error_code cleanup_ec;
+  try {
+    fs::create_directories(build_root);
+    RendererConfig build_cfg = cfg;
+    build_cfg.format_root = build_root;
+    auto env = worker_environment(build_cfg);
+    std::ostringstream cmd;
+    cmd << quote_cmd_arg(xetexdaemon_exe(build_cfg).string())
+        << " -ini -etex -jobname=xelatexdaemon -interaction=nonstopmode -halt-on-error"
+        << " -output-directory=" << quote_cmd_arg(build_root.string()) << " xelatex.ini";
+    const DWORD timeout = (DWORD)std::max(90000, build_cfg.request_timeout_ms);
+    run_sync(cmd.str(), build_root, env, timeout, false);
+    if (!has_format_file(build_root)) {
+      throw std::runtime_error("Format generation completed without writing xelatexdaemon.fmt");
+    }
+
+    write_text_file(build_root / "stemtex-format-cache.txt",
+                    "StemTeX generated daemon format\n"
+                    "texmf-root=" + path_utf8(path_for_identity(cfg.texmf_root)) + "\n"
+                    "runtime-root=" + path_utf8(path_for_identity(cfg.runtime_root)) + "\n");
+
+    fs::remove_all(cache_root, cleanup_ec);
+    cleanup_ec.clear();
+    fs::rename(build_root, cache_root, cleanup_ec);
+    if (cleanup_ec) {
+      throw std::runtime_error("Cannot publish generated daemon format cache: " + cleanup_ec.message());
+    }
+  } catch (...) {
+    fs::remove_all(build_root, cleanup_ec);
+    throw;
+  }
+}
+
+void notify_startup_progress(StemTeXStartupProgressCallback callback, void *user_data,
+                             StemTeXStartupStage stage, const char *message) noexcept {
+  if (!callback) return;
+  try {
+    callback(stage, message, user_data);
+  } catch (...) {
+  }
+}
+
+fs::path daemon_format_cache_root(const RendererConfig &cfg) {
+  return local_app_data_root() / "StemTeX" / "formats" / format_cache_key(cfg);
+}
+
+fs::path profile_xdv_cache_root(const RendererConfig &cfg) {
+  return local_app_data_root() / "StemTeX" / "profile-xdv" / profile_xdv_cache_key(cfg);
+}
+
+fs::path profile_fontconfig_cache_root(const RendererConfig &cfg) {
+  return local_app_data_root() / "StemTeX" / "fontconfig" / "cache" / profile_xdv_cache_key(cfg);
+}
+
+bool profile_xdv_is_current(const fs::path &candidate, const RendererConfig &cfg) {
+  std::error_code ec;
+  if (!fs::is_regular_file(candidate, ec) || ec || fs::file_size(candidate, ec) == 0 || ec) return false;
+  const fs::file_time_type candidate_time = fs::last_write_time(candidate, ec);
+  if (ec) return false;
+  for (const fs::path &input : {
+           cfg.preamble_tex,
+           cfg.warmup_tex,
+           cfg.format_root / "xelatexdaemon.fmt",
+       }) {
+    if (!fs::is_regular_file(input, ec) || ec) return false;
+    const fs::file_time_type input_time = fs::last_write_time(input, ec);
+    if (ec || candidate_time < input_time) return false;
+  }
+  return true;
+}
+
+void publish_profile_xdv_cache(const RendererConfig &cfg, const fs::path &cache_root) {
+  const fs::path generated = cfg.state_root / "warmup" / "warmup.xdv";
+  const fs::path cache_xdv = cache_root / "warmup.xdv";
+  const fs::path temporary = cache_root / (".warmup-" + random_id() + ".xdv");
+  fs::create_directories(cache_root);
+  write_file(temporary, read_file(generated));
+  std::error_code ec;
+  fs::remove(cache_xdv, ec);
+  ec.clear();
+  fs::rename(temporary, cache_xdv, ec);
+  if (ec) {
+    std::error_code cleanup_ec;
+    fs::remove(temporary, cleanup_ec);
+    throw std::runtime_error("Cannot publish generated profile XDV cache: " + ec.message());
+  }
+  fs::remove(cache_root / "force-regenerate", ec);
+}
+
+XdvParts load_or_run_warmup(const RendererConfig &cfg,
+                            StemTeXStartupProgressCallback progress_callback = nullptr,
+                            void *progress_user_data = nullptr) {
+  const std::string cache_key = profile_xdv_cache_key(cfg);
+  const fs::path cache_root = profile_xdv_cache_root(cfg);
+  const fs::path force_regenerate = cache_root / "force-regenerate";
+  fs::create_directories(cache_root.parent_path());
+  ScopedProfileXdvMutex lock(cache_key);
+
+  std::error_code ec;
+  const bool forced = fs::is_regular_file(force_regenerate, ec) && !ec;
+  if (!forced) {
+    const fs::path user_cache = cache_root / "warmup.xdv";
+    if (profile_xdv_is_current(user_cache, cfg)) {
+      if (auto parts = try_read_xdv_parts(user_cache)) return *parts;
+    }
+
+    const std::wstring selected_tree = path_for_identity(cfg.texmf_root).wstring();
+    const std::wstring bundled_tree = path_for_identity(cfg.runtime_root).wstring();
+    if (_wcsicmp(selected_tree.c_str(), bundled_tree.c_str()) == 0) {
+      for (const fs::path &candidate : {
+               cfg.profile_root / "warmup.xdv",
+               cfg.profile_root / "worker-template.xdv",
+           }) {
+        if (!profile_xdv_is_current(candidate, cfg)) continue;
+        if (auto parts = try_read_xdv_parts(candidate)) return *parts;
+      }
+    }
+  }
+
+  notify_startup_progress(progress_callback, progress_user_data, STEMTEX_STARTUP_GENERATING_PROFILE_XDV,
+                          forced ? "The profile XDV cache was cleared; regenerating it"
+                                 : "Generating the profile XDV in the user cache");
+  XdvParts parts = run_warmup(cfg);
+  publish_profile_xdv_cache(cfg, cache_root);
+  return parts;
+}
+
+bool paths_equal(const fs::path &left, const fs::path &right) {
+  const std::wstring a = path_for_identity(left).wstring();
+  const std::wstring b = path_for_identity(right).wstring();
+  return _wcsicmp(a.c_str(), b.c_str()) == 0;
+}
+
+struct FormatFileStamp {
+  bool exists = false;
+  uintmax_t size = 0;
+  fs::file_time_type write_time{};
+};
+
+FormatFileStamp format_file_stamp(const fs::path &format_root) {
+  FormatFileStamp stamp;
+  const fs::path format = format_root / "xelatexdaemon.fmt";
+  std::error_code ec;
+  stamp.exists = fs::is_regular_file(format, ec) && !ec;
+  if (!stamp.exists) return stamp;
+  stamp.size = fs::file_size(format, ec);
+  if (ec) return {};
+  stamp.write_time = fs::last_write_time(format, ec);
+  return ec ? FormatFileStamp{} : stamp;
+}
+
+bool same_format_stamp(const FormatFileStamp &left, const FormatFileStamp &right) {
+  return left.exists == right.exists && (!left.exists || (left.size == right.size && left.write_time == right.write_time));
+}
+
+bool contains_daemon_format_compatibility_failure(std::string message) {
+  std::transform(message.begin(), message.end(), message.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return message.find("mismatched latex support files") != std::string::npos ||
+         message.find("made by different executable version") != std::string::npos ||
+         message.find("strings are different") != std::string::npos ||
+         message.find("fatal format file error") != std::string::npos ||
+         (message.find("format file") != std::string::npos &&
+          (message.find("not found") != std::string::npos || message.find("cannot find") != std::string::npos ||
+           message.find("can't find") != std::string::npos));
+}
+
+bool is_daemon_format_compatibility_failure(const std::exception &error) {
+  return contains_daemon_format_compatibility_failure(error.what());
+}
+
+void prepare_compatible_format(RendererConfig &cfg, StemTeXStartupProgressCallback progress_callback = nullptr,
+                               void *progress_user_data = nullptr) {
+  const fs::path shipped_root = cfg.runtime_root / "texmf-var" / "web2c" / "xetex";
+  const std::string cache_key = format_cache_key(cfg);
+  const fs::path cache_root = daemon_format_cache_root(cfg);
+  fs::create_directories(cache_root.parent_path());
+
+  if (has_format_file(cache_root)) {
+    cfg.format_root = cache_root;
+    return;
+  }
+  if (has_format_file(shipped_root)) {
+    cfg.format_root = shipped_root;
+    return;
+  }
+
+  ScopedFormatMutex lock(cache_key);
+  if (has_format_file(cache_root)) {
+    cfg.format_root = cache_root;
+    return;
+  }
+
+  notify_startup_progress(progress_callback, progress_user_data, STEMTEX_STARTUP_GENERATING_FORMAT,
+                          "Generating a compatible daemon format in the user cache");
+  try {
+    generate_daemon_format(cfg, cache_root);
+  } catch (const std::exception &e) {
+    throw ApiException(
+        STEMTEX_ERROR_BAD_CONFIG,
+        "The available xelatexdaemon.fmt is not compatible with the selected TeX Live tree, and StemTeX "
+        "could not generate a replacement in the user cache. Selected tree: " + path_utf8(cfg.texmf_root) +
+        "\n" + e.what());
+  }
+  cfg.format_root = cache_root;
+}
+
+void regenerate_compatible_format(RendererConfig &cfg, const fs::path &failed_format_root,
+                                  const FormatFileStamp &failed_stamp,
+                                  StemTeXStartupProgressCallback progress_callback = nullptr,
+                                  void *progress_user_data = nullptr) {
+  const std::string cache_key = format_cache_key(cfg);
+  const fs::path cache_root = daemon_format_cache_root(cfg);
+  fs::create_directories(cache_root.parent_path());
+  ScopedFormatMutex lock(cache_key);
+
+  const FormatFileStamp current_cache_stamp = format_file_stamp(cache_root);
+  const bool failed_cache = paths_equal(failed_format_root, cache_root);
+  if (current_cache_stamp.exists && (!failed_cache || !same_format_stamp(current_cache_stamp, failed_stamp))) {
+    cfg.format_root = cache_root;
+    return;
+  }
+
+  notify_startup_progress(progress_callback, progress_user_data, STEMTEX_STARTUP_GENERATING_FORMAT,
+                          "The existing format failed; generating a compatible replacement in the user cache");
+  try {
+    generate_daemon_format(cfg, cache_root);
+  } catch (const std::exception &e) {
+    throw ApiException(STEMTEX_ERROR_BAD_CONFIG,
+                       "The existing xelatexdaemon.fmt is not compatible with the selected TeX Live tree, and "
+                       "StemTeX could not generate a replacement in the user cache. Selected tree: " +
+                           path_utf8(cfg.texmf_root) + "\n" + e.what());
+  }
+  cfg.format_root = cache_root;
 }
 
 int normalize_timeout_ms(int value) {
@@ -1510,6 +1847,7 @@ RendererConfig config_from_api_common(const char *repo_root_utf8, const char *ru
   cfg.texmf_root = texmf_root_utf8 && *texmf_root_utf8
                        ? fs::absolute(texmf_root_utf8)
                        : cfg.runtime_root;
+  cfg.format_root = cfg.runtime_root / "texmf-var" / "web2c" / "xetex";
   if (!profile_root_utf8 || !*profile_root_utf8) {
     throw ApiException(STEMTEX_ERROR_BAD_CONFIG, "profile_root_utf8 is required");
   }
@@ -1519,12 +1857,13 @@ RendererConfig config_from_api_common(const char *repo_root_utf8, const char *ru
                       : cfg.profile_root;
   std::string instance_id = random_id();
   fs::path default_work_root = fs::temp_directory_path() / "stemtex-renderer" / instance_id;
-  fs::path state_base_root = state_root_utf8 && *state_root_utf8
-                                 ? fs::absolute(state_root_utf8)
-                                 : default_work_root / "state";
+  const bool has_custom_state_root = state_root_utf8 && *state_root_utf8;
+  fs::path state_base_root = has_custom_state_root ? fs::absolute(state_root_utf8) : default_work_root / "state";
   cfg.state_root = state_base_root / ("instance-" + instance_id);
   cfg.fontconfig_conf_root = cfg.state_root / "fontconfig" / "conf";
-  cfg.fontconfig_cache_root = state_base_root / "fontconfig" / "cache";
+  cfg.fontconfig_cache_root = has_custom_state_root
+                                  ? state_base_root / "fontconfig" / "cache"
+                                  : profile_fontconfig_cache_root(cfg);
   cfg.renders_root = renders_root_utf8 && *renders_root_utf8
                           ? fs::absolute(renders_root_utf8)
                           : default_work_root / "renders";
@@ -1573,7 +1912,6 @@ std::string validate_config_text(const RendererConfig &cfg) {
   require_file(cfg.runtime_root / "bin" / "windows" / "dvipdfmxdaemon.dll", "dvipdfmxdaemon.dll");
   require_file(cfg.runtime_root / "bin" / "windows" / "dvisvgmdaemon.exe", "dvisvgmdaemon.exe");
   require_file(cfg.runtime_root / "bin" / "windows" / "dvisvgmdaemon.dll", "dvisvgmdaemon.dll");
-  require_file(cfg.runtime_root / "texmf-var" / "web2c" / "xetex" / "xelatexdaemon.fmt", "xelatexdaemon.fmt");
   require_dir(cfg.texmf_root / "texmf-dist", "texmf-dist");
   require_dir(cfg.texmf_root / "texmf-dist" / "web2c", "texmf-dist web2c");
   require_file(cfg.warmup_tex, "warmup tex");
@@ -1592,17 +1930,26 @@ void validate_or_throw(const RendererConfig &cfg) {
 }  // namespace
 
 struct StemTeXRenderer {
-  explicit StemTeXRenderer(RendererConfig c) : cfg(std::move(c)), parts(load_or_run_warmup(cfg)) {
+  explicit StemTeXRenderer(RendererConfig c, StemTeXStartupProgressCallback progress_callback = nullptr,
+                           void *progress_user_data = nullptr)
+      : cfg(std::move(c)) {
     snapshot_spare_target.store(cfg.spare_worker_count);
     publish_status(STEMTEX_STATUS_STARTING, STEMTEX_STAGE_REBUILDING);
+    parts = load_or_run_warmup(cfg, progress_callback, progress_user_data);
+    notify_startup_progress(progress_callback, progress_user_data, STEMTEX_STARTUP_LOADING_PROFILE,
+                            "Preparing the profile and output converters");
     worker_env = worker_environment(cfg);
     converter = std::make_unique<DvipdfmxDaemon>(cfg);
     append_log("dvipdfmx hot-start DLL initialized\n");
     svg_converter = std::make_unique<DvisvgmDaemon>(cfg);
     append_log("dvisvgm hot-start DLL initialized\n");
+    notify_startup_progress(progress_callback, progress_user_data, STEMTEX_STARTUP_STARTING_WORKER,
+                            "Starting the primary XeTeX worker");
     primary = create_ready_worker("primary");
     schedule_spare_rebuild_locked();
     publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
+    notify_startup_progress(progress_callback, progress_user_data, STEMTEX_STARTUP_READY,
+                            "StemTeX renderer is ready");
   }
 
   struct WorkerSlot {
@@ -1614,6 +1961,7 @@ struct StemTeXRenderer {
     std::mutex mu;
     std::condition_variable cv;
     bool ready = false;
+    bool startup_format_failure = false;
     bool done = false;
     std::string output_tail;
     std::string request_output;
@@ -1724,6 +2072,10 @@ struct StemTeXRenderer {
         if (raw->request_output.size() > 32768) {
           raw->request_output.erase(0, raw->request_output.size() - 32768);
         }
+        if (!raw->ready && contains_daemon_format_compatibility_failure(raw->output_tail)) {
+          raw->startup_format_failure = true;
+          raw->cv.notify_all();
+        }
       }
       raw->lines.feed(text, [raw](const std::string &line) {
         std::lock_guard<std::mutex> lock(raw->mu);
@@ -1755,13 +2107,16 @@ struct StemTeXRenderer {
     });
     std::unique_lock<std::mutex> lock(raw->mu);
     auto startup_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(cfg.request_timeout_ms);
-    while (!raw->ready && !shutting_down.load() && std::chrono::steady_clock::now() < startup_deadline) {
+    while (!raw->ready && !raw->startup_format_failure && raw->child.is_running() && !shutting_down.load() &&
+           std::chrono::steady_clock::now() < startup_deadline) {
       raw->cv.wait_for(lock, std::chrono::milliseconds(25));
     }
     if (!raw->ready) {
-      std::string tail = raw->output_tail;
       lock.unlock();
       raw->child.stop();
+      lock.lock();
+      std::string tail = raw->output_tail;
+      lock.unlock();
       if (shutting_down.load()) {
         throw ApiException(STEMTEX_ERROR_CANCELLED, "Live worker startup cancelled");
       }
@@ -2083,9 +2438,21 @@ struct StemTeXRenderer {
     spare_rebuilding = false;
     publish_counts_locked();
     shutting_down = false;
-    parts = load_or_run_warmup(cfg);
-    worker_env = worker_environment(cfg);
-    primary = create_ready_worker("primary");
+    prepare_compatible_format(cfg);
+    const fs::path first_format_root = cfg.format_root;
+    const FormatFileStamp first_format_stamp = format_file_stamp(first_format_root);
+    auto start_primary = [&]() {
+      parts = load_or_run_warmup(cfg);
+      worker_env = worker_environment(cfg);
+      primary = create_ready_worker("primary");
+    };
+    try {
+      start_primary();
+    } catch (const std::exception &e) {
+      if (!is_daemon_format_compatibility_failure(e)) throw;
+      regenerate_compatible_format(cfg, first_format_root, first_format_stamp);
+      start_primary();
+    }
     schedule_spare_rebuild_locked();
     publish_status_and_counts_locked(STEMTEX_STATUS_READY, STEMTEX_STAGE_IDLE);
     set_last_error(STEMTEX_OK, "");
@@ -2577,14 +2944,36 @@ extern "C" {
 
 STEMTEX_API StemTeXRenderer *stemtex_renderer_create(const StemTeXConfig *config, StemTeXErrorCode *error_code,
                                                      char **error_utf8) {
+  return stemtex_renderer_create_with_progress(config, nullptr, nullptr, error_code, error_utf8);
+}
+
+STEMTEX_API StemTeXRenderer *stemtex_renderer_create_with_progress(
+    const StemTeXConfig *config, StemTeXStartupProgressCallback progress_callback, void *progress_user_data,
+    StemTeXErrorCode *error_code, char **error_utf8) {
   try {
+    notify_startup_progress(progress_callback, progress_user_data, STEMTEX_STARTUP_VALIDATING,
+                            "Validating renderer configuration");
     RendererConfig cfg = config_from_api(config);
     write_fontconfig_config(cfg);
     validate_or_throw(cfg);
     fs::create_directories(cfg.state_root);
     fs::create_directories(cfg.renders_root);
+    prepare_compatible_format(cfg, progress_callback, progress_user_data);
+    const fs::path first_format_root = cfg.format_root;
+    const FormatFileStamp first_format_stamp = format_file_stamp(first_format_root);
+    try {
+      StemTeXRenderer *renderer = new StemTeXRenderer(cfg, progress_callback, progress_user_data);
+      if (error_code) *error_code = STEMTEX_OK;
+      return renderer;
+    } catch (const std::exception &e) {
+      if (!is_daemon_format_compatibility_failure(e)) throw;
+    }
+
+    regenerate_compatible_format(cfg, first_format_root, first_format_stamp,
+                                 progress_callback, progress_user_data);
+    StemTeXRenderer *renderer = new StemTeXRenderer(cfg, progress_callback, progress_user_data);
     if (error_code) *error_code = STEMTEX_OK;
-    return new StemTeXRenderer(std::move(cfg));
+    return renderer;
   } catch (const std::exception &e) {
     set_error_outputs(exception_code(e), e.what(), error_code, error_utf8);
     return nullptr;
@@ -2985,6 +3374,48 @@ STEMTEX_API int stemtex_renderer_validate_config(const StemTeXConfig *config, St
   }
 }
 
+STEMTEX_API int stemtex_renderer_clear_profile_caches(const StemTeXConfig *config,
+                                                      StemTeXErrorCode *error_code, char **error_utf8) {
+  try {
+    RendererConfig cfg = config_from_api(config);
+    const std::string cache_key = profile_xdv_cache_key(cfg);
+    const fs::path cache_root = profile_xdv_cache_root(cfg);
+    const fs::path font_cache_root = cfg.fontconfig_cache_root;
+    ScopedProfileXdvMutex lock(cache_key);
+    std::error_code ec;
+    fs::remove_all(font_cache_root, ec);
+    if (ec) {
+      throw ApiException(STEMTEX_ERROR_FILESYSTEM,
+                         "Cannot clear profile Fontconfig cache: " + path_utf8(font_cache_root) + ": " + ec.message());
+    }
+    fs::remove_all(cache_root, ec);
+    if (ec) {
+      throw ApiException(STEMTEX_ERROR_FILESYSTEM,
+                         "Cannot clear profile XDV cache: " + path_utf8(cache_root) + ": " + ec.message());
+    }
+    fs::create_directories(cache_root, ec);
+    if (ec) {
+      throw ApiException(STEMTEX_ERROR_FILESYSTEM,
+                         "Cannot recreate profile XDV cache: " + path_utf8(cache_root) + ": " + ec.message());
+    }
+    try {
+      write_text_file(cache_root / "force-regenerate",
+                      "Regenerate this profile XDV and Fontconfig state before accepting a packaged cache.\n");
+    } catch (const std::exception &e) {
+      throw ApiException(STEMTEX_ERROR_FILESYSTEM, e.what());
+    }
+    if (error_code) *error_code = STEMTEX_OK;
+    if (error_utf8) *error_utf8 = nullptr;
+    return 1;
+  } catch (const std::exception &e) {
+    set_error_outputs(exception_code(e), e.what(), error_code, error_utf8);
+    return 0;
+  } catch (...) {
+    set_unknown_error_outputs(error_code, error_utf8);
+    return 0;
+  }
+}
+
 STEMTEX_API int stemtex_refresh_font_cache(const char *runtime_root_utf8, const char *profile_root_utf8,
                                            StemTeXErrorCode *error_code, char **error_utf8) {
   if (!runtime_root_utf8 || !*runtime_root_utf8) {
@@ -2999,6 +3430,7 @@ STEMTEX_API int stemtex_refresh_font_cache(const char *runtime_root_utf8, const 
     RendererConfig cfg;
     cfg.runtime_root = fs::absolute(runtime_root_utf8);
     cfg.texmf_root = cfg.runtime_root;
+    cfg.format_root = cfg.runtime_root / "texmf-var" / "web2c" / "xetex";
     cfg.profile_root = fs::absolute(profile_root_utf8);
     cfg.repo_root = cfg.profile_root;
     fs::path stemtex_user_root = local_app_data_root() / "StemTeX";
@@ -3006,7 +3438,7 @@ STEMTEX_API int stemtex_refresh_font_cache(const char *runtime_root_utf8, const 
     cfg.state_root = refresh_root / "state" / ("instance-" + random_id());
     cfg.renders_root = refresh_root / "renders";
     cfg.fontconfig_conf_root = cfg.state_root / "fontconfig" / "conf";
-    cfg.fontconfig_cache_root = stemtex_user_root / "fontconfig" / "cache";
+    cfg.fontconfig_cache_root = profile_fontconfig_cache_root(cfg);
     cfg.warmup_tex = cfg.profile_root / "warmup.tex";
     cfg.preamble_tex = cfg.profile_root / "preamble.tex";
     cfg.request_timeout_ms = 90000;

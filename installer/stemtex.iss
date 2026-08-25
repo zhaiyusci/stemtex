@@ -46,7 +46,7 @@ Source: "{#SourceDir}\runtime\VERSION"; DestDir: "{app}\runtime"; Flags: ignorev
 Source: "{#SourceDir}\runtime\StemTeX.ico"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#SourceDir}\runtime\run-xelatexdaemon.bat"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#SourceDir}\runtime\refresh-profile-cache.bat"; DestDir: "{app}\runtime"; Flags: ignoreversion
-Source: "{#SourceDir}\runtime\texmf-var\web2c\*"; DestDir: "{app}\runtime\texmf-var\web2c"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.aux,*.log"
+Source: "{#SourceDir}\runtime\texmf-var\web2c\*"; DestDir: "{app}\runtime\texmf-var\web2c"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist; Excludes: "*.aux,*.log"
 Source: "{#SourceDir}\runtime\texmf-var\fonts\conf\*"; DestDir: "{app}\runtime\texmf-var\fonts\conf"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#SourceDir}\runtime\texmf-dist\*"; DestDir: "{app}\runtime\texmf-dist"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: texmf
 Source: "{#SourceDir}\gui\*"; DestDir: "{app}\gui"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: gui; Excludes: "build\*,*.aux,*.log,*.pdf,*.xdv,*.synctex.gz"

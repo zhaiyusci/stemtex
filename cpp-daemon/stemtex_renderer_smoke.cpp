@@ -27,6 +27,11 @@ static fs::path default_runtime_root(const fs::path &repo_root) {
   return fs::path();
 }
 
+static void print_startup_progress(StemTeXStartupStage stage, const char *message_utf8, void *) {
+  std::printf("startupStage=%d message=%s\n", (int)stage, message_utf8 ? message_utf8 : "");
+  std::fflush(stdout);
+}
+
 struct SmokeOptions {
   fs::path repo_root = fs::current_path();
   fs::path runtime_root;
@@ -39,15 +44,16 @@ struct SmokeOptions {
   double font_size_pt = 10.0;
   std::string worker_template;
   bool allow_exe = false;
+  bool default_state = false;
 };
 
 static void print_usage(const char *argv0) {
   std::fprintf(stderr,
                "Usage:\n"
-               "  %s [--repo PATH] [--runtime PATH] [--texmf PATH] --profile PATH [--runs N] [--case NAME] [--spares N] [--width PT] [--font-size PT]\n"
+               "  %s [--repo PATH] [--runtime PATH] [--texmf PATH] --profile PATH [--runs N] [--case NAME] [--spares N] [--width PT] [--font-size PT] [--default-state]\n"
                "  %s --profile PATH --case async --runs 5 --spares 2\n"
                "\n"
-               "Cases: default, validate, refresh, physics, fonts, chem-text, bad,\n"
+               "Cases: default, validate, refresh, clear-xdv-cache, physics, fonts, chem-text, bad,\n"
                "       bad-then-good, bad-then-good-wait, bad-then-good-wait-long,\n"
                "       bad-stress, latin-math, latin-text, restart, async,\n"
                "       async-callback-throw, cancel,\n"
@@ -99,6 +105,8 @@ static SmokeOptions parse_options(int argc, char **argv) {
       opts.worker_template = need_value("--worker-template");
     } else if (arg == "--allow-exe") {
       opts.allow_exe = true;
+    } else if (arg == "--default-state") {
+      opts.default_state = true;
     } else {
       print_usage(argv[0]);
       throw std::runtime_error("unexpected argument: " + arg);
@@ -181,7 +189,7 @@ int main(int argc, char **argv) {
   cfg.runtime_root_utf8 = runtime_root_utf8.c_str();
   cfg.texmf_root_utf8 = texmf_root_utf8.c_str();
   cfg.profile_root_utf8 = profile_root_utf8.empty() ? nullptr : profile_root_utf8.c_str();
-  cfg.state_root_utf8 = state_root_utf8.c_str();
+  cfg.state_root_utf8 = opts.default_state ? nullptr : state_root_utf8.c_str();
   cfg.renders_root_utf8 = renders_root_utf8.c_str();
   int runs = opts.runs;
   std::string case_name = opts.case_name;
@@ -221,8 +229,15 @@ int main(int argc, char **argv) {
     stemtex_renderer_free_string(error);
     return ok ? 0 : 1;
   }
+  if (case_name == "--clear-xdv-cache") {
+    int ok = stemtex_renderer_clear_profile_caches(&cfg, &error_code, &error);
+    std::printf("clearXdvCache=%d code=%d error=%s\n", ok, (int)error_code, error ? error : "");
+    stemtex_renderer_free_string(error);
+    return ok ? 0 : 1;
+  }
   long long create_start = now_ms();
-  StemTeXRenderer *renderer = stemtex_renderer_create(&cfg, &error_code, &error);
+  StemTeXRenderer *renderer = stemtex_renderer_create_with_progress(
+      &cfg, print_startup_progress, nullptr, &error_code, &error);
   long long create_end = now_ms();
   if (!renderer) {
     std::fprintf(stderr, "create failed code=%d: %s\n", (int)error_code, error ? error : "");

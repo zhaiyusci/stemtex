@@ -78,9 +78,13 @@ selects a profile explicitly; the renderer does not guess one.
 
 `warmup.tex` is source. `warmup.xdv` and Fontconfig caches are generated
 artifacts and are intentionally not committed or copied by CMake install. The
-full installer generates the maintained `unicodemath_cjk` cache after files are
-installed. If a profile cache is absent, the renderer compiles `warmup.tex` in
-its private instance state and does not publish a replacement into the profile.
+full installer may generate the maintained `unicodemath_cjk` cache after files
+are installed. At runtime the renderer keeps derived XDV state in the per-user
+`%LOCALAPPDATA%\StemTeX\profile-xdv` cache and rebuilds it when the preamble,
+warmup source, or selected format is newer. The corresponding Fontconfig cache
+is also persistent and keyed by runtime/tree/profile. The Renderer GUI exposes
+`清空 XDV` to clear both caches and force XDV regeneration plus a fresh font
+scan for the current combination.
 
 ## Profile Creator
 
@@ -107,10 +111,15 @@ The bundled tree is the supported default. Advanced hosts can set
 fonts from an external TeX Live root containing `texmf-dist` and
 `texmf-dist/web2c`.
 
-StemTeX still uses its own patched engine, format, converters, and Fontconfig
-setup. This option does not run the external installation's XeTeX binaries.
-MiKTeX roots are not supported because their root, FNDB, and package-management
-model does not match this TeX Live contract.
+StemTeX still uses its own patched engine, converters, and Fontconfig setup.
+At startup it directly tries a cached or bundled `xelatexdaemon.fmt`. If real
+renderer startup reports an explicit format/LaTeX-kernel incompatibility, the
+patched engine regenerates the format once under
+`%LOCALAPPDATA%\StemTeX\formats` and retries. A missing format is generated
+immediately. There is no separate compatibility probe. This option never runs the external
+installation's XeTeX binary or writes into its tree. MiKTeX roots are not
+supported because their root, FNDB, and package-management model does not match
+this TeX Live contract.
 
 ## Documentation
 

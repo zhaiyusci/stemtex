@@ -135,8 +135,26 @@ typedef struct StemTeXRenderer StemTeXRenderer;
 typedef void (*StemTeXRenderCallback)(uint64_t job_id, int ok, const StemTeXRenderResult *result,
                                       StemTeXErrorCode error_code, const char *error_utf8, void *user_data);
 
+typedef enum StemTeXStartupStage {
+  STEMTEX_STARTUP_VALIDATING = 0,
+  /* Reserved for ABI compatibility; current startup has no separate format check. */
+  STEMTEX_STARTUP_CHECKING_FORMAT,
+  STEMTEX_STARTUP_GENERATING_FORMAT,
+  STEMTEX_STARTUP_LOADING_PROFILE,
+  STEMTEX_STARTUP_STARTING_WORKER,
+  STEMTEX_STARTUP_READY,
+  /* Appended to preserve the numeric values of the existing ABI stages. */
+  STEMTEX_STARTUP_GENERATING_PROFILE_XDV
+} StemTeXStartupStage;
+
+typedef void (*StemTeXStartupProgressCallback)(StemTeXStartupStage stage, const char *message_utf8,
+                                               void *user_data);
+
 STEMTEX_API StemTeXRenderer *stemtex_renderer_create(const StemTeXConfig *config, StemTeXErrorCode *error_code,
                                                      char **error_utf8);
+STEMTEX_API StemTeXRenderer *stemtex_renderer_create_with_progress(
+    const StemTeXConfig *config, StemTeXStartupProgressCallback progress_callback, void *progress_user_data,
+    StemTeXErrorCode *error_code, char **error_utf8);
 STEMTEX_API int stemtex_renderer_render(StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt,
                                             StemTeXRenderResult *result, StemTeXErrorCode *error_code,
                                             char **error_utf8);
@@ -189,6 +207,8 @@ STEMTEX_API char *stemtex_renderer_profile_info_json(const char *profile_root_ut
                                                      char **error_utf8);
 STEMTEX_API int stemtex_renderer_validate_config(const StemTeXConfig *config, StemTeXErrorCode *error_code,
                                                  char **diagnostics_utf8);
+STEMTEX_API int stemtex_renderer_clear_profile_caches(const StemTeXConfig *config,
+                                                      StemTeXErrorCode *error_code, char **error_utf8);
 STEMTEX_API int stemtex_refresh_font_cache(const char *runtime_root_utf8, const char *profile_root_utf8,
                                            StemTeXErrorCode *error_code, char **error_utf8);
 STEMTEX_API void stemtex_renderer_free_result(StemTeXRenderResult *result);

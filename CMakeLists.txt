@@ -19,7 +19,7 @@ set(STEMTEX_STANDALONE_DIR
     CACHE PATH "Directory containing daemon engine build outputs")
 set(STEMTEX_RUNTIME_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/dist/stemtex-texlive-daemon-static"
-    CACHE PATH "Runtime side tree containing xelatexdaemon.fmt")
+    CACHE PATH "Optional runtime side tree containing a prebuilt xelatexdaemon.fmt")
 
 add_subdirectory(cpp-daemon)
 add_subdirectory(profile-creator)
@@ -53,7 +53,11 @@ install(FILES
   DESTINATION runtime/bin/windows
 )
 install(FILES "${STEMTEX_ICU_DATA}" DESTINATION runtime/bin/windows/icu-data)
-install(FILES "${STEMTEX_FORMAT_FILE}" DESTINATION runtime/texmf-var/web2c/xetex)
+if(EXISTS "${STEMTEX_FORMAT_FILE}")
+  install(FILES "${STEMTEX_FORMAT_FILE}" DESTINATION runtime/texmf-var/web2c/xetex)
+else()
+  message(STATUS "No prebuilt xelatexdaemon.fmt found; the renderer will generate it in the user cache")
+endif()
 install(FILES
   cmake/run-xelatexdaemon.bat
   cmake/refresh-profile-cache.bat

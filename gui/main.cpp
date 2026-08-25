@@ -25,6 +25,7 @@
 #include <QImage>
 #include <QPainter>
 #include <QPixmap>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QComboBox>
 #include <QSignalBlocker>
@@ -520,10 +521,10 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
 
 class MainWindow : public QMainWindow {
  public:
-  MainWindow(QString repoRoot, QString runtimeRoot)
+  MainWindow(QString repoRoot, QString runtimeRoot, QString texmfRoot)
       : repo_root_(std::move(repoRoot)),
         runtime_root_(normalizeRuntimeRoot(runtimeRoot)),
-        texmf_root_(defaultTexmfRoot(runtime_root_)) {
+        texmf_root_(texmfRoot.isEmpty() ? defaultTexmfRoot(runtime_root_) : normalizeTexmfRoot(texmfRoot)) {
     setWindowTitle("StemTeX Renderer GUI");
     resize(1180, 760);
 
@@ -573,6 +574,8 @@ class MainWindow : public QMainWindow {
     profileCombo_ = new QComboBox(central);
     reloadProfiles();
     profileCreatorButton_ = new QPushButton(QStringLiteral("字体 Profile..."), central);
+    clearXdvButton_ = new QPushButton(QStringLiteral("清空 XDV"), central);
+    clearXdvButton_->setToolTip(QStringLiteral("删除当前 Profile 的 XDV 与字体缓存并重新生成"));
     encodingCombo_ = new QComboBox(central);
     encodingCombo_->addItems({"UTF-8", "GBK", "Big5"});
     encodingCombo_->setCurrentText("UTF-8");
@@ -604,6 +607,7 @@ class MainWindow : public QMainWindow {
     runtimeRow->addWidget(new QLabel("Profile", central));
     runtimeRow->addWidget(profileCombo_);
     runtimeRow->addWidget(profileCreatorButton_);
+    runtimeRow->addWidget(clearXdvButton_);
     runtimeRow->addWidget(new QLabel("输入编码", central));
     runtimeRow->addWidget(encodingCombo_);
     runtimeRow->addWidget(new QLabel("Output", central));
@@ -673,7 +677,20 @@ class MainWindow : public QMainWindow {
     engineStatusLabel_ = new QLabel(this);
     engineStatusLabel_->setTextFormat(Qt::RichText);
     engineStatusLabel_->setMinimumWidth(180);
-    statusBar()->addWidget(engineStatusLabel_, 1);
+    startupProgress_ = new QProgressBar(this);
+    startupProgress_->setRange(0, 0);
+    startupProgress_->setTextVisible(false);
+    startupProgress_->setFixedWidth(120);
+    startupProgress_->hide();
+    startupTimingLabel_ = new QLabel(this);
+    startupTimingLabel_->setTextFormat(Qt::PlainText);
+    startupTimingLabel_->setMinimumWidth(420);
+    statusBar()->addWidget(startupProgress_);
+    statusBar()->addWidget(engineStatusLabel_);
+    statusBar()->addWidget(startupTimingLabel_, 1);
+    startupTimingTimer_ = new QTimer(this);
+    startupTimingTimer_->setInterval(100);
+    connect(startupTimingTimer_, &QTimer::timeout, this, [this]() { updateStartupTimingDisplay(); });
     enginePollTimer_ = new QTimer(this);
     enginePollTimer_->setInterval(500);
     connect(enginePollTimer_, &QTimer::timeout, this, [this]() { refreshEngineStatus(); });
@@ -714,6 +731,7 @@ class MainWindow : public QMainWindow {
     connect(texmfButton_, &QPushButton::clicked, this, [this]() { chooseTexmfRoot(); });
     connect(profileCombo_, &QComboBox::currentIndexChanged, this, [this](int) { switchProfile(); });
     connect(profileCreatorButton_, &QPushButton::clicked, this, [this]() { openProfileCreator(); });
+    connect(clearXdvButton_, &QPushButton::clicked, this, [this]() { clearProfileXdvCache(); });
     connect(renderButton_, &QPushButton::clicked, this, [this]() {
       if (autoRenderTimer_) autoRenderTimer_->stop();
       renderSnippet();
@@ -739,6 +757,151 @@ class MainWindow : public QMainWindow {
   }
 
  private:
+  struct StartupProgressContext {
+    MainWindow *window = nullptr;
+    uint64_t generation = 0;
+  };
+
+  struct StartupTimingEntry {
+    QString label;
+    qint64 durationMs = 0;
+  };
+
+  static void startupProgressCallback(StemTeXStartupStage stage, const char *message_utf8, void *user_data) {
+    auto *context = static_cast<StartupProgressContext *>(user_data);
+    if (!context || !context->window) return;
+    MainWindow *window = context->window;
+    const uint64_t generation = context->generation;
+    const QString message = message_utf8 ? QString::fromUtf8(message_utf8) : QString();
+    QMetaObject::invokeMethod(window, [window, generation, stage, message]() {
+      if (window->shuttingDown_.load() || generation != window->rendererGeneration_.load()) return;
+      window->showStartupProgress(stage, message);
+    }, Qt::QueuedConnection);
+  }
+
+  QString startupStageLabel(StemTeXStartupStage stage) const {
+    switch (stage) {
+      case STEMTEX_STARTUP_VALIDATING:
+        return QStringLiteral("配置");
+      case STEMTEX_STARTUP_CHECKING_FORMAT:
+        return QStringLiteral("format");
+      case STEMTEX_STARTUP_GENERATING_FORMAT:
+        return QStringLiteral("生成 format");
+      case STEMTEX_STARTUP_GENERATING_PROFILE_XDV:
+        return QStringLiteral("生成 Profile XDV");
+      case STEMTEX_STARTUP_LOADING_PROFILE:
+        return QStringLiteral("Profile/转换器");
+      case STEMTEX_STARTUP_STARTING_WORKER:
+        return QStringLiteral("XeTeX worker");
+      case STEMTEX_STARTUP_READY:
+      default:
+        return QStringLiteral("完成");
+    }
+  }
+
+  QString startupDuration(qint64 durationMs) const {
+    return QStringLiteral("%1s").arg(qMax<qint64>(0, durationMs) / 1000.0, 0, 'f', 2);
+  }
+
+  QString completedStartupTimeline(qint64 totalMs = -1) const {
+    QStringList parts;
+    for (const StartupTimingEntry &entry : startupTimingEntries_) {
+      parts.push_back(QStringLiteral("%1 %2").arg(entry.label, startupDuration(entry.durationMs)));
+    }
+    if (totalMs >= 0) parts.push_back(QStringLiteral("总计 %1").arg(startupDuration(totalMs)));
+    return parts.join(QStringLiteral("  ·  "));
+  }
+
+  void completeCurrentStartupStage(qint64 nowMs) {
+    if (!startupTimingActive_) return;
+    startupTimingEntries_.push_back(
+        {startupStageLabel(currentStartupStage_), qMax<qint64>(0, nowMs - currentStartupStageStartedMs_)});
+  }
+
+  void updateStartupTimingDisplay() {
+    if (!startupTimingLabel_ || !startupTimingActive_ || !startupClock_.isValid()) return;
+    const qint64 nowMs = startupClock_.elapsed();
+    QString timeline = completedStartupTimeline();
+    const QString current = QStringLiteral("%1 %2…")
+                                .arg(startupStageLabel(currentStartupStage_),
+                                     startupDuration(nowMs - currentStartupStageStartedMs_));
+    if (!timeline.isEmpty()) timeline += QStringLiteral("  ·  ");
+    timeline += current;
+    startupTimingLabel_->setText(timeline);
+    startupTimingLabel_->setToolTip(currentStartupDetail_.isEmpty()
+                                        ? timeline
+                                        : currentStartupDetail_ + QStringLiteral("\n") + timeline);
+  }
+
+  void beginStartupProgress() {
+    startupTimingEntries_.clear();
+    startupFinalTimeline_.clear();
+    currentStartupDetail_.clear();
+    startupClock_.start();
+    startupTimingActive_ = true;
+    currentStartupStage_ = STEMTEX_STARTUP_VALIDATING;
+    currentStartupStageStartedMs_ = 0;
+    if (startupProgress_) startupProgress_->show();
+    if (startupTimingTimer_) startupTimingTimer_->start();
+    updateEngineStatus(false, 0, spareTarget_);
+    updateStartupTimingDisplay();
+  }
+
+  void finishStartupProgress() {
+    if (!startupTimingActive_ || !startupClock_.isValid()) return;
+    const qint64 totalMs = startupClock_.elapsed();
+    completeCurrentStartupStage(totalMs);
+    startupTimingActive_ = false;
+    if (startupTimingTimer_) startupTimingTimer_->stop();
+    if (startupProgress_) startupProgress_->hide();
+    startupFinalTimeline_ = completedStartupTimeline(totalMs);
+    if (startupTimingLabel_) {
+      startupTimingLabel_->setText(startupFinalTimeline_);
+      startupTimingLabel_->setToolTip(startupFinalTimeline_);
+    }
+  }
+
+  void cancelStartupProgress() {
+    startupTimingActive_ = false;
+    startupTimingEntries_.clear();
+    startupFinalTimeline_.clear();
+    currentStartupDetail_.clear();
+    if (startupTimingTimer_) startupTimingTimer_->stop();
+    if (startupProgress_) startupProgress_->hide();
+    if (startupTimingLabel_) {
+      startupTimingLabel_->clear();
+      startupTimingLabel_->setToolTip(QString());
+    }
+  }
+
+  void showStartupProgress(StemTeXStartupStage stage, const QString &detail = QString()) {
+    if (stage == STEMTEX_STARTUP_READY) {
+      finishStartupProgress();
+      return;
+    }
+    if (!startupTimingActive_) beginStartupProgress();
+    if (stage == STEMTEX_STARTUP_GENERATING_FORMAT && currentStartupStage_ != stage) {
+      startupTimingEntries_.clear();
+      startupFinalTimeline_.clear();
+      startupClock_.restart();
+      currentStartupStage_ = stage;
+      currentStartupStageStartedMs_ = 0;
+      currentStartupDetail_ = detail;
+      if (startupProgress_) startupProgress_->show();
+      updateStartupTimingDisplay();
+      return;
+    }
+    const qint64 nowMs = startupClock_.elapsed();
+    if (stage != currentStartupStage_) {
+      completeCurrentStartupStage(nowMs);
+      currentStartupStage_ = stage;
+      currentStartupStageStartedMs_ = nowMs;
+    }
+    currentStartupDetail_ = detail;
+    if (startupProgress_) startupProgress_->show();
+    updateStartupTimingDisplay();
+  }
+
   void startBackgroundWorker() {
     backgroundWorker_ = std::thread([this]() { backgroundLoop(); });
   }
@@ -777,9 +940,9 @@ class MainWindow : public QMainWindow {
   }
 
   void setUiReady(bool ready) {
-    (void)ready;
     bool hasProfile = profileCombo_ && profileCombo_->currentIndex() >= 0;
     renderButton_->setEnabled(hasProfile);
+    if (clearXdvButton_) clearXdvButton_->setEnabled(ready && hasProfile);
     if (profileCombo_) profileCombo_->setEnabled(profileCombo_->count() > 0);
     if (outputCombo_) outputCombo_->setEnabled(true);
   }
@@ -821,7 +984,7 @@ class MainWindow : public QMainWindow {
   void updateEngineStatus(bool primaryOk, int spareReady, int spareTarget, const QString &note = QString()) {
     spareReady_ = qMax(0, spareReady);
     spareTarget_ = qMax(0, spareTarget);
-    QString engineText = primaryOk ? "primary ready" : "preparing primary ...";
+    QString engineText = primaryOk ? "primary ready" : (startupTimingActive_ ? "renderer initializing" : "primary unavailable");
     QString text = lightHtml(primaryOk);
     text += QString(" <span style=\"color:#333;\">%1</span>").arg(engineText);
     text += QString(" <span style=\"color:#777;\">spares %1/%2</span>").arg(spareReady_).arg(spareTarget_);
@@ -924,6 +1087,48 @@ class MainWindow : public QMainWindow {
     profileCreatorProcess_->start();
   }
 
+  void clearProfileXdvCache() {
+    const QString profileRoot = selectedProfileRoot();
+    if (profileRoot.isEmpty()) return;
+
+    stopRenderer(true);
+    clearProfileOutput();
+    setUiReady(false);
+    updateEngineStatus(false, 0, spareTarget_, QStringLiteral("正在清空 Profile XDV 与字体缓存"));
+    const uint64_t generation = rendererGeneration_.load();
+    const QString runtimeRoot = runtime_root_;
+    const QString texmfRoot = texmf_root_;
+    if (!postBackground([this, runtimeRoot, texmfRoot, profileRoot, generation]() {
+      const QByteArray runtime = QDir::cleanPath(runtimeRoot).toUtf8();
+      const QByteArray texmf = QDir::cleanPath(texmfRoot).toUtf8();
+      const QByteArray profile = QDir::cleanPath(profileRoot).toUtf8();
+      StemTeXConfig cfg{};
+      cfg.runtime_root_utf8 = runtime.constData();
+      cfg.texmf_root_utf8 = texmf.constData();
+      cfg.profile_root_utf8 = profile.constData();
+      StemTeXErrorCode code = STEMTEX_OK;
+      char *error = nullptr;
+      const int ok = stemtex_renderer_clear_profile_caches(&cfg, &code, &error);
+      const QString errorText = error ? QString::fromUtf8(error) : QString();
+      stemtex_renderer_free_string(error);
+      QMetaObject::invokeMethod(this, [this, ok, code, errorText, generation]() {
+        if (shuttingDown_.load() || generation != rendererGeneration_.load()) return;
+        if (!ok) {
+          setUiReady(true);
+          updateEngineStatus(false, 0, spareTarget_,
+                             QStringLiteral("清空 XDV/字体缓存失败，code %1").arg((int)code));
+          details_->setPlainText(errorText);
+          return;
+        }
+        updateEngineStatus(false, 0, spareTarget_, QStringLiteral("XDV 与字体缓存已清空，准备重新生成"));
+        initializeRenderer(false);
+      }, Qt::QueuedConnection);
+    })) {
+      setUiReady(true);
+      updateEngineStatus(false, 0, spareTarget_, QStringLiteral("无法安排 XDV 清理任务"));
+    }
+  }
+
   void destroyRendererLater(StemTeXRenderer *renderer) {
     if (!renderer) return;
     if (postBackground([renderer]() {
@@ -941,6 +1146,7 @@ class MainWindow : public QMainWindow {
     ++latestUiRequestId_;
     enginePollTimer_->stop();
     if (autoRenderTimer_) autoRenderTimer_->stop();
+    cancelStartupProgress();
     pendingStartupRender_ = false;
     StemTeXRenderer *renderer = nullptr;
     {
@@ -1027,14 +1233,13 @@ class MainWindow : public QMainWindow {
       return;
     }
     setUiReady(false);
-    updateEngineStatus(false, 0, spareTarget_, QString("starting profile: %1").arg(QFileInfo(profileRoot).fileName()));
+    beginStartupProgress();
     uint64_t generation = ++rendererGeneration_;
     QString repoRoot = repo_root_;
     QString runtimeRoot = runtime_root_;
     QString texmfRoot = texmf_root_;
     postBackground([this, repoRoot, runtimeRoot, texmfRoot, profileRoot, generation, renderAfterInit]() {
       if (shuttingDown_.load() || generation != rendererGeneration_.load()) return;
-      auto start = std::chrono::steady_clock::now();
       QByteArray repo = QDir::cleanPath(repoRoot).toUtf8();
       QByteArray runtime = QDir::cleanPath(runtimeRoot).toUtf8();
       QByteArray texmf = QDir::cleanPath(texmfRoot).toUtf8();
@@ -1050,11 +1255,13 @@ class MainWindow : public QMainWindow {
       StemTeXErrorCode code = STEMTEX_OK;
       char *error = nullptr;
       StemTeXRenderer *renderer = nullptr;
+      StartupProgressContext progressContext{this, generation};
       bool installed = false;
       bool stale = false;
       {
         std::lock_guard<std::mutex> lifecycleLock(gRendererLifecycleMutex);
-        renderer = stemtex_renderer_create(&cfg, &code, &error);
+        renderer = stemtex_renderer_create_with_progress(&cfg, &MainWindow::startupProgressCallback,
+                                                         &progressContext, &code, &error);
         stale = shuttingDown_.load() || generation != rendererGeneration_.load();
         if (renderer && !stale) {
           std::lock_guard<std::mutex> rendererLock(rendererMutex_);
@@ -1071,22 +1278,25 @@ class MainWindow : public QMainWindow {
           renderer = nullptr;
         }
       }
-      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
       QString errorText = error ? QString::fromUtf8(error) : QString();
       stemtex_renderer_free_string(error);
       if (stale && !installed) return;
-      QMetaObject::invokeMethod(this, [this, installed, code, errorText, elapsed, generation, renderAfterInit]() {
+      QMetaObject::invokeMethod(this, [this, installed, code, errorText, generation, renderAfterInit]() {
         if (shuttingDown_.load() || generation != rendererGeneration_.load()) {
           return;
         }
         if (!installed) {
+          finishStartupProgress();
           setUiReady(false);
-          updateEngineStatus(false, 0, spareTarget_, QString("renderer init failed, code %1").arg((int)code));
+          QString failure = QString("renderer init failed, code %1").arg((int)code);
+          if (!startupFinalTimeline_.isEmpty()) failure += QStringLiteral(" · ") + startupFinalTimeline_;
+          updateEngineStatus(false, 0, spareTarget_, failure);
           details_->setPlainText(errorText);
           return;
         }
+        finishStartupProgress();
         setUiReady(true);
-        refreshEngineStatus(QString("renderer initialized in %1 ms").arg(elapsed));
+        refreshEngineStatus();
         enginePollTimer_->start();
         if (pendingStartupRender_) {
           pendingStartupRender_ = false;
@@ -1333,6 +1543,7 @@ class MainWindow : public QMainWindow {
   QPushButton *texmfButton_ = nullptr;
   QComboBox *profileCombo_ = nullptr;
   QPushButton *profileCreatorButton_ = nullptr;
+  QPushButton *clearXdvButton_ = nullptr;
   QProcess *profileCreatorProcess_ = nullptr;
   QComboBox *encodingCombo_ = nullptr;
   QComboBox *outputCombo_ = nullptr;
@@ -1350,6 +1561,16 @@ class MainWindow : public QMainWindow {
   QString lastOutcomeMessage_;
   QTextBrowser *details_ = nullptr;
   QLabel *engineStatusLabel_ = nullptr;
+  QProgressBar *startupProgress_ = nullptr;
+  QLabel *startupTimingLabel_ = nullptr;
+  QTimer *startupTimingTimer_ = nullptr;
+  QElapsedTimer startupClock_;
+  QVector<StartupTimingEntry> startupTimingEntries_;
+  QString startupFinalTimeline_;
+  QString currentStartupDetail_;
+  StemTeXStartupStage currentStartupStage_ = STEMTEX_STARTUP_VALIDATING;
+  qint64 currentStartupStageStartedMs_ = 0;
+  bool startupTimingActive_ = false;
   QTimer *enginePollTimer_ = nullptr;
   QTimer *editorPollTimer_ = nullptr;
   QTimer *autoRenderTimer_ = nullptr;
@@ -1382,7 +1603,7 @@ int main(int argc, char **argv) {
   QString profileRoot = args.size() > 3 ? args.at(3) : (profiles.isEmpty() ? QString() : profiles.first().path);
   QString texmfRoot = args.size() > 4 ? args.at(4) : defaultTexmfRoot(runtimeRoot);
   if (smoke) return runSmoke(repoRoot, runtimeRoot, profileRoot, texmfRoot);
-  MainWindow w(repoRoot, runtimeRoot);
+  MainWindow w(repoRoot, runtimeRoot, texmfRoot);
   w.show();
   return app.exec();
 }

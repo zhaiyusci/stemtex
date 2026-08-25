@@ -77,6 +77,12 @@ CMake install copies files but does not remove stale files from an existing
 destination. Release packaging must therefore use a new or verified-empty stage
 directory. A stage assembled over an older version is not valid release input.
 
+If `STEMTEX_RUNTIME_SOURCE` contains a prebuilt `xelatexdaemon.fmt`, CMake
+installs it to reduce first-start latency. The format is optional: when it is
+absent, or when it is incompatible with the selected TeX tree, the renderer
+generates a compatible copy in `%LOCALAPPDATA%\StemTeX\formats` with the
+patched StemTeX engine.
+
 ## Validate The Stage
 
 Run the native renderer against the staged runtime and profile:
@@ -118,6 +124,14 @@ CMake install copies profile `preamble.tex` and `warmup.tex`, but deliberately
 excludes `warmup.xdv`, logs, and other generated TeX output. A source or fresh
 package stage should therefore have no profile `warmup.xdv`.
 
+During normal use, the renderer derives XDV state from `warmup.tex` and caches
+it under `%LOCALAPPDATA%\StemTeX\profile-xdv`. Its persistent Fontconfig cache
+uses a matching runtime/tree/profile key under `%LOCALAPPDATA%\StemTeX`.
+An XDV cache older than the profile sources or selected daemon format is rebuilt
+automatically. The Renderer GUI also exposes `清空 XDV`, which clears both
+keyed caches and forces the next initialization to regenerate XDV and rescan
+fonts.
+
 For a manually installed tree, generate the maintained default profile cache by
 running the installed helper from the runtime directory:
 
@@ -133,8 +147,10 @@ backslashes: XeTeX can interpret the backslashes in that path as control
 sequences.
 
 The full installer runs this helper for `unicodemath_cjk` after installation
-when both the GUI and bundled `texmf` components are selected. The installer
-does not ship the generated cache in its payload.
+when both the GUI and bundled `texmf` components are selected. That result is an
+optional bundled-tree startup cache; external TeX trees always use their own
+per-user keyed cache. The installer does not ship the generated cache in its
+payload.
 
 ## Build The Installer
 

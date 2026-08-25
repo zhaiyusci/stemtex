@@ -48,7 +48,8 @@ StemTeX/
 
 The Inno Setup package exposes three components:
 
-- `runtime`: required daemon binaries, renderer, SDK, format, and helpers;
+- `runtime`: required daemon binaries, renderer, SDK, helpers, and optionally a
+  prebuilt format for faster first startup;
 - `gui`: optional GUI and profile source;
 - `texmf`: optional bundled package/font tree.
 
@@ -58,9 +59,26 @@ Live package/font tree.
 
 ## Runtime Ownership
 
-StemTeX always runs the patched binaries and daemon format from its own runtime.
-The GUI and third-party hosts both call the same `stemtex-renderer.dll`. The
-runtime does not search for or switch to a user's `xelatex.exe`.
+StemTeX always runs the patched binaries from its own runtime. The GUI and
+third-party hosts both call the same `stemtex-renderer.dll`. The runtime does
+not search for or switch to a user's `xelatex.exe` or stock `xelatex.fmt`.
+
+A prebuilt `xelatexdaemon.fmt` in the runtime is an optional startup
+optimization. The renderer uses an existing format directly. If it is absent,
+or if real renderer startup reports an explicit format/LaTeX-kernel mismatch,
+the patched StemTeX engine generates a replacement in:
+
+```text
+%LOCALAPPDATA%/StemTeX/formats/<tree-and-runtime-key>/
+```
+
+The cache key identifies the selected tree and StemTeX installation; it does
+not attempt to model TeX Live package versions. There is no separate
+compatibility probe: an explicit mismatch from real profile/worker startup
+causes one regeneration and retry. Ordinary profile, package, and font errors
+do not. Regeneration uses a private temporary directory and is published under
+an inter-process lock, so neither the runtime tree nor the selected TeX Live
+tree has to be writable.
 
 Each renderer has one primary XeTeX worker. `spare_worker_count = 0` is the
 normal low-memory configuration; positive values add failover workers, not
@@ -93,16 +111,28 @@ generated artifacts. CMake install and the installer payload exclude them. On a
 full installation, the installer refreshes Fontconfig and generates
 `unicodemath_cjk/warmup.xdv` after the files are installed.
 
-At runtime, a valid profile `warmup.xdv` can accelerate worker startup. If it is
-missing or unreadable, the renderer compiles `warmup.tex` inside that renderer
-instance's private state directory. It does not write a new cache into the
-profile directory, so concurrent renderer instances do not publish over one
-another.
+At runtime, `warmup.tex` remains the nominal profile input. The renderer stores
+its derived cache under:
+
+```text
+%LOCALAPPDATA%/StemTeX/profile-xdv/<runtime-tree-profile-key>/warmup.xdv
+%LOCALAPPDATA%/StemTeX/fontconfig/cache/<runtime-tree-profile-key>/
+```
+
+It reuses that file only when it parses correctly and is not older than
+`preamble.tex`, `warmup.tex`, or the selected `xelatexdaemon.fmt`. Otherwise it
+compiles `warmup.tex` and publishes a replacement under an inter-process lock.
+A current profile-local `warmup.xdv` may still serve as an optional prebuilt
+cache for the bundled tree; it is not reused for an external tree. The Qt GUI's
+`清空 XDV` button calls the renderer C API to discard both keyed caches and
+force XDV generation plus a fresh font scan without modifying the profile
+directory.
 
 The C API also makes writable locations explicit:
 
-- `state_root_utf8` is an optional base for per-instance worker state and shared
-  Fontconfig cache. Each instance creates and removes its own unique child;
+- `state_root_utf8` is an optional base for per-instance worker state. When it
+  is explicitly set, it also owns the host's shared Fontconfig cache. Each
+  instance creates and removes its own unique child;
 - `renders_root_utf8` is an optional output directory for generated results;
 - when either is omitted, the renderer uses a unique directory under the system
   temporary directory.
@@ -119,8 +149,10 @@ by the maintained profiles. It has no package manager; adding supported packages
 or fonts requires updating the CMake install inventory and rebuilding the
 installer.
 
-This is the most reproducible deployment path because the renderer, format,
-package versions, font maps, and converter resources are tested together.
+This is the most reproducible deployment path because the renderer, package
+versions, font maps, and converter resources are tested together. A bundled
+format avoids first-start generation, but it is a reproducible cache rather
+than a compatibility boundary.
 
 ## External TeX Live Tree
 
@@ -134,8 +166,12 @@ to a TeX Live-style root containing:
 
 For example, `C:\texlive\2026` is a valid shape. The selected tree supplies
 kpathsea configuration, packages, fonts, maps, CMaps, and related backend data.
-StemTeX still uses its own patched XeTeX/converter binaries, daemon format,
-Fontconfig configuration, and writable cache locations.
+StemTeX still uses its own patched XeTeX/converter binaries and Fontconfig
+configuration. It first tries a compatible cached or bundled daemon format. If
+the selected tree has moved ahead of that format, as in an `expl3`/LaTeX kernel
+update, the patched engine regenerates the format in the per-user cache. It
+does not use the external tree's stock format and does not write into the
+external tree.
 
 This mode is useful when a snippet needs packages or fonts outside the bundled
 small tree, but it has a larger compatibility surface. Validate the chosen tree

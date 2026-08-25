@@ -53,12 +53,20 @@ hosts may opt into hot spares by passing a positive `spare_worker_count`:
 On create, it:
 
 1. Reads the configured StemTeX runtime.
-2. Loads XDV font definitions for the selected profile. The renderer reuses a
-   valid `profile_root\warmup.xdv` cache when present. If the cache is missing
-   or unreadable, it compiles `warmup.tex` in the renderer instance state
-   directory and does not update the profile cache.
-3. Starts and primes a primary live worker.
-4. If requested, starts building spare live workers in the background.
+2. Directly tries an existing `xelatexdaemon.fmt`. If real renderer startup
+   reports an explicit format/LaTeX-kernel incompatibility, the patched StemTeX
+   engine regenerates it once in the per-user format cache and retries. A
+   missing format is generated immediately; there is no separate probe.
+3. Loads XDV font definitions for the selected profile. `warmup.tex` is the
+   profile input; the renderer keeps the derived `warmup.xdv` under
+   `%LOCALAPPDATA%\StemTeX\profile-xdv`. It regenerates the cache when it is
+   missing, unreadable, or older than `preamble.tex`, `warmup.tex`, or the
+   selected daemon format. A current profile-local XDV is accepted only with
+   the bundled TeX tree; external trees get their own keyed user cache. The
+   corresponding Fontconfig cache is persistent and keyed by the same
+   runtime/tree/profile identity.
+4. Starts and primes a primary live worker.
+5. If requested, starts building spare live workers in the background.
 
 `create` returns after the primary worker is ready. Spare workers are then built
 asynchronously, so increasing the spare count does not lengthen the foreground
@@ -74,8 +82,8 @@ font mappings have been selected:
 ```
 
 So the product path does not try to bake the full preamble into a custom fmt.
-Instead, installation-time warmup owns fontconfig cache generation and XDV
-font-definition extraction.
+Instead, warmup owns XDV font-definition extraction, while the warmup and live
+worker share a persistent per-profile Fontconfig cache.
 
 On render, it:
 
@@ -131,17 +139,22 @@ Fields:
 - `texmf_root_utf8`: optional TeX Live tree used for packages and TeX fonts.
   If null, it defaults to `runtime_root_utf8`. When set, the path must be a
   TeX Live-style root that contains `texmf-dist` and `texmf-dist\web2c`, such as
-  `C:\texlive\2026`. The renderer still runs patched binaries, formats,
-  fontconfig configuration, and cache from `runtime_root_utf8`; this field
-  redirects `TEXMFROOT`, `TEXMFDIST`, `TEXMFCNF`, and `WEB2C`. It does not switch
-  to a user-provided TeX engine, and it does not support MiKTeX roots.
+  `C:\texlive\2026`. The renderer still runs patched binaries from
+  `runtime_root_utf8`; this field redirects `TEXMFROOT`, `TEXMFDIST`,
+  `TEXMFCNF`, and `WEB2C`. The renderer optimistically uses an existing daemon
+  format and, after an explicit compatibility failure during real startup,
+  uses the patched engine to regenerate one under
+  `%LOCALAPPDATA%\StemTeX\formats`. It does not switch to a user-provided TeX
+  engine or stock format, and it does not support MiKTeX roots.
 - `profile_root_utf8`: required profile directory. It must directly contain
   `preamble.tex` and `warmup.tex`. The renderer does not guess a default
   profile.
 - `state_root_utf8`: optional worker state base directory. Each renderer
-  instance creates and later removes its own unique child directory there. If
-  null, the renderer uses a unique directory under the system temporary
-  directory.
+  instance creates and later removes its own unique child directory there. An
+  explicit state root also owns that host's shared Fontconfig cache. If null,
+  transient worker state uses a unique system-temporary directory while the
+  Fontconfig cache persists under `%LOCALAPPDATA%\StemTeX\fontconfig\cache`,
+  keyed by runtime, TeX tree, and profile.
 - `renders_root_utf8`: optional render output directory. If null, the renderer
   uses a unique directory under the system temporary directory.
 - `request_timeout_ms`: startup, warmup, and active-render request timeout.
@@ -167,7 +180,12 @@ Fields:
 The external `texmf_root_utf8` option is deliberately narrow: it lets StemTeX's
 patched TeX Live-derived daemon read package/font data from another TeX Live
 installation. The selected tree supplies kpathsea configuration and data files;
-the running binaries still come from the StemTeX runtime.
+the running binaries still come from the StemTeX runtime. StemTeX first uses an
+existing daemon format directly. If real profile/worker startup reports a
+format or LaTeX-kernel mismatch, StemTeX regenerates the format with its own
+patched engine and the selected tree's format sources, then retries once. The
+result is stored in the per-user cache; the selected tree remains read-only.
+Ordinary profile, package, and font errors do not trigger regeneration.
 
 MiKTeX is not accepted as a `texmf_root_utf8` value. It has a different
 multi-root and FNDB model, and StemTeX does not query MiKTeX Core, invoke
@@ -182,6 +200,38 @@ StemTeXRenderer *stemtex_renderer_create(
   char **error_utf8
 );
 ```
+
+GUI hosts can receive synchronous startup-stage notifications while the same
+creation work runs on their background thread:
+
+```cpp
+typedef void (*StemTeXStartupProgressCallback)(
+  StemTeXStartupStage stage,
+  const char *message_utf8,
+  void *user_data
+);
+
+StemTeXRenderer *stemtex_renderer_create_with_progress(
+  const StemTeXConfig *config,
+  StemTeXStartupProgressCallback progress_callback,
+  void *progress_user_data,
+  StemTeXErrorCode *error_code,
+  char **error_utf8
+);
+```
+
+The current create flow emits `VALIDATING`, `LOADING_PROFILE`,
+`STARTING_WORKER`, and `READY`. It emits `GENERATING_PROFILE_XDV` only when the
+selected profile XDV must be compiled, and `GENERATING_FORMAT` only when no
+format exists or real startup has reported an explicit format incompatibility.
+`CHECKING_FORMAT` is retained in the enum for API compatibility but there is no
+independent checking step and the renderer does not emit it. The callback runs
+on the calling thread and is valid only for the duration of the create call. A
+GUI should marshal updates to its UI thread. Format generation does not expose
+a meaningful percentage, so hosts should present it as an indeterminate
+operation with the supplied stage/message. The original
+`stemtex_renderer_create` remains equivalent to calling this function with a
+null callback.
 
 Render one snippet:
 
@@ -338,6 +388,9 @@ char *stemtex_renderer_runtime_version(StemTeXRenderer *renderer);
 char *stemtex_renderer_profile_info_json(const char *profile_root_utf8,
                                          StemTeXErrorCode *error_code, char **error_utf8);
 int stemtex_renderer_validate_config(const StemTeXConfig *config, StemTeXErrorCode *error_code, char **diagnostics_utf8);
+int stemtex_renderer_clear_profile_caches(const StemTeXConfig *config,
+                                          StemTeXErrorCode *error_code,
+                                          char **error_utf8);
 int stemtex_refresh_font_cache(const char *runtime_root_utf8, const char *profile_root_utf8,
                                StemTeXErrorCode *error_code, char **error_utf8);
 ```
@@ -360,6 +413,16 @@ rules for what is inside a valid profile. The returned string is JSON:
 
 The GUI scans profile candidate folders, then calls this library API for each
 candidate instead of reimplementing profile validation.
+
+`stemtex_renderer_clear_profile_caches` removes both the derived XDV and the
+corresponding persistent Fontconfig cache for the exact runtime/tree/profile
+tuple. The next renderer creation is forced to compile `warmup.tex` and rebuild
+font discovery state, even if the profile directory contains a packaged XDV.
+The call does not modify the profile, runtime, or selected TeX Live tree. A host
+should destroy the active renderer before calling it, then create a new one;
+the Qt GUI's `清空 XDV` button performs that sequence on its background queue.
+When `state_root_utf8` is set, the API clears the Fontconfig cache owned by that
+custom state root; otherwise it clears the normal keyed per-user cache.
 
 `stemtex_renderer_render_async` returns a monotonically increasing `job_id`.
 The callback receives the same id, so hosts can associate a completion with the
