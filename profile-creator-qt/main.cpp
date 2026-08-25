@@ -28,6 +28,7 @@
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QStringList>
+#include <QTabWidget>
 #include <QTextCursor>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -90,7 +91,7 @@ class CreatorWindow : public QMainWindow {
       : texmf_root_(std::move(texmfRoot)),
         profiles_root_(std::move(profilesRoot)) {
     setWindowTitle(QStringLiteral("StemTeX Profile Creator"));
-    resize(940, 860);
+    resize(980, 720);
 
     auto *central = new QWidget(this);
     auto *root = new QVBoxLayout(central);
@@ -129,7 +130,13 @@ class CreatorWindow : public QMainWindow {
     environmentForm->addRow(QStringLiteral("Profile 名称"), nameEdit_);
     root->addWidget(environmentBox);
 
-    auto *fontBox = new QGroupBox(QStringLiteral("字体组合"), central);
+    auto *tabs = new QTabWidget(central);
+    tabs->setDocumentMode(true);
+
+    auto *fontPage = new QWidget(tabs);
+    auto *fontPageLayout = new QVBoxLayout(fontPage);
+    fontPageLayout->setContentsMargins(12, 12, 12, 12);
+    auto *fontBox = new QGroupBox(QStringLiteral("字体组合"), fontPage);
     auto *fontForm = new QFormLayout(fontBox);
     textCombo_ = new QComboBox(fontBox);
     mathCombo_ = new QComboBox(fontBox);
@@ -141,9 +148,14 @@ class CreatorWindow : public QMainWindow {
     selectionInfo_->setWordWrap(true);
     selectionInfo_->setStyleSheet(QStringLiteral("QLabel { color: #555; padding-top: 4px; }"));
     fontForm->addRow(QString(), selectionInfo_);
-    root->addWidget(fontBox);
+    fontPageLayout->addWidget(fontBox);
+    fontPageLayout->addStretch(1);
+    tabs->addTab(fontPage, QStringLiteral("字体"));
 
-    auto *packageBox = new QGroupBox(QStringLiteral("常用宏包（StemTeX 白名单）"), central);
+    auto *packagePage = new QWidget(tabs);
+    auto *packagePageLayout = new QVBoxLayout(packagePage);
+    packagePageLayout->setContentsMargins(12, 12, 12, 12);
+    auto *packageBox = new QGroupBox(QStringLiteral("常用宏包（StemTeX 白名单）"), packagePage);
     auto *packageLayout = new QVBoxLayout(packageBox);
     auto *packageHint = new QLabel(
         QStringLiteral("勾选需要的功能；依赖项会自动加入。字体配置和 preview 由 StemTeX 管理，不在此重复显示。"),
@@ -161,15 +173,26 @@ class CreatorWindow : public QMainWindow {
     packageTree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     packageTree_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     packageTree_->header()->setSectionResizeMode(3, QHeaderView::Stretch);
-    packageTree_->setMinimumHeight(150);
+    packageTree_->setMinimumHeight(260);
     packagePlanLabel_ = new QLabel(packageBox);
     packagePlanLabel_->setWordWrap(true);
     packagePlanLabel_->setStyleSheet(QStringLiteral("QLabel { color: #555; padding-top: 3px; }"));
-    packageLayout->addWidget(packageTree_);
+    packageNoticeLabel_ = new QLabel(packageBox);
+    packageNoticeLabel_->setWordWrap(true);
+    packageNoticeLabel_->setStyleSheet(QStringLiteral(
+        "QLabel { color: #6b4b00; background: #fff4cc; border: 1px solid #e0bd55; "
+        "border-radius: 3px; padding: 6px; }"));
+    packageNoticeLabel_->hide();
+    packageLayout->addWidget(packageTree_, 1);
     packageLayout->addWidget(packagePlanLabel_);
-    root->addWidget(packageBox);
+    packageLayout->addWidget(packageNoticeLabel_);
+    packagePageLayout->addWidget(packageBox, 1);
+    tabs->addTab(packagePage, QStringLiteral("宏包"));
 
-    auto *preambleBox = new QGroupBox(QStringLiteral("生成的 preamble.tex"), central);
+    auto *preamblePage = new QWidget(tabs);
+    auto *preamblePageLayout = new QVBoxLayout(preamblePage);
+    preamblePageLayout->setContentsMargins(12, 12, 12, 12);
+    auto *preambleBox = new QGroupBox(QStringLiteral("生成的 preamble.tex"), preamblePage);
     auto *preambleLayout = new QVBoxLayout(preambleBox);
     preambleEdit_ = new QPlainTextEdit(preambleBox);
     preambleEdit_->setReadOnly(true);
@@ -177,7 +200,9 @@ class CreatorWindow : public QMainWindow {
     preambleEdit_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     preambleEdit_->setPlaceholderText(QStringLiteral("选择有效字体后将在这里生成 preamble.tex"));
     preambleLayout->addWidget(preambleEdit_);
-    root->addWidget(preambleBox, 1);
+    preamblePageLayout->addWidget(preambleBox, 1);
+    tabs->addTab(preamblePage, QStringLiteral("Preamble"));
+    root->addWidget(tabs, 1);
 
     auto *buttons = new QHBoxLayout();
     auto *openProfiles = new QPushButton(QStringLiteral("打开 Profile 目录"), central);
@@ -290,7 +315,12 @@ class CreatorWindow : public QMainWindow {
     if (category == "math") return QStringLiteral("数学");
     if (category == "chemistry") return QStringLiteral("化学");
     if (category == "physics") return QStringLiteral("物理");
+    if (category == "units") return QStringLiteral("数值与单位");
     if (category == "text") return QStringLiteral("文字/颜色");
+    if (category == "images") return QStringLiteral("图片");
+    if (category == "tables") return QStringLiteral("表格");
+    if (category == "layout") return QStringLiteral("版面工具");
+    if (category == "lists") return QStringLiteral("列表");
     if (category == "graphics") return QStringLiteral("绘图基础");
     if (category == "plots") return QStringLiteral("函数图");
     if (category == "diagrams") return QStringLiteral("专业图表");
@@ -319,6 +349,7 @@ class CreatorWindow : public QMainWindow {
       QString message = profileErrorText(error);
       packageTree_->clear();
       packagePlanLabel_->setText(message);
+      packageNoticeLabel_->hide();
       package_plan_valid_ = false;
       QMessageBox::critical(this, QStringLiteral("无法读取宏包白名单"), message);
       return false;
@@ -330,6 +361,7 @@ class CreatorWindow : public QMainWindow {
     if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
       packageTree_->clear();
       packagePlanLabel_->setText(parseError.errorString());
+      packageNoticeLabel_->hide();
       package_plan_valid_ = false;
       QMessageBox::critical(this, QStringLiteral("宏包白名单错误"), parseError.errorString());
       return false;
@@ -402,6 +434,7 @@ class CreatorWindow : public QMainWindow {
     if (!json) {
       const QString message = profileErrorText(error);
       packagePlanLabel_->setText(QStringLiteral("无法解析宏包顺序：%1").arg(message));
+      packageNoticeLabel_->hide();
       package_plan_valid_ = false;
       return false;
     }
@@ -411,6 +444,7 @@ class CreatorWindow : public QMainWindow {
     stemtex_profile_free_string(error);
     if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
       packagePlanLabel_->setText(QStringLiteral("宏包顺序数据错误：%1").arg(parseError.errorString()));
+      packageNoticeLabel_->hide();
       package_plan_valid_ = false;
       return false;
     }
@@ -453,6 +487,19 @@ class CreatorWindow : public QMainWindow {
     QString text = QStringLiteral("实际加载顺序：%1").arg(order.join(QStringLiteral("  →  ")));
     if (!dependencyNotes.isEmpty()) text += QStringLiteral("\n依赖：%1").arg(dependencyNotes.join(QStringLiteral("；")));
     packagePlanLabel_->setText(text);
+    QStringList notices;
+    for (const QJsonValue &value : document.object().value("notices").toArray()) {
+      const QJsonObject notice = value.toObject();
+      if (notice.value("id").toString() == "physics-siunitx-qty") {
+        notices.push_back(QStringLiteral(
+            "同时使用 physics 与 siunitx：依照 siunitx 的兼容策略，\\qty 仍由 physics 提供；"
+            "请用 \\SI、\\num 或 \\unit 输入 siunitx 内容。StemTeX 不会重定义这些命令。"));
+      } else {
+        notices.push_back(notice.value("message").toString());
+      }
+    }
+    packageNoticeLabel_->setText(QStringLiteral("兼容提示：%1").arg(notices.join(QStringLiteral("\n"))));
+    packageNoticeLabel_->setVisible(!notices.isEmpty());
     package_plan_valid_ = true;
     return true;
   }
@@ -479,6 +526,7 @@ class CreatorWindow : public QMainWindow {
       for (QComboBox *combo : {textCombo_, mathCombo_, cjkCombo_}) combo->clear();
       packageTree_->clear();
       packagePlanLabel_->clear();
+      packageNoticeLabel_->hide();
       package_plan_valid_ = false;
       selectionChanged();
       return;
@@ -608,6 +656,7 @@ class CreatorWindow : public QMainWindow {
   QLabel *selectionInfo_ = nullptr;
   QTreeWidget *packageTree_ = nullptr;
   QLabel *packagePlanLabel_ = nullptr;
+  QLabel *packageNoticeLabel_ = nullptr;
   QHash<QString, QTreeWidgetItem *> package_items_;
   QStringList package_catalog_order_;
   QSet<QString> explicit_package_ids_;

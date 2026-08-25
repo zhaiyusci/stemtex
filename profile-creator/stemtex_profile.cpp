@@ -86,12 +86,67 @@ const std::vector<PackageRecipe> &package_recipes() {
        {RequirementRoot::TexmfDist, "tex/latex/physics/physics.sty"}, true,
        PackagePhase::AfterFonts, 300, "", "", "Physics: $\\dv{x}{t}$ and $\\qty(1+x)$.\n",
        {"mathtools"}, {}},
+      {"siunitx", "siunitx", "units", "Consistent typesetting of numbers, SI units, and physical quantities",
+       {RequirementRoot::TexmfDist, "tex/latex/siunitx/siunitx.sty"}, false,
+       PackagePhase::AfterFonts, 350, "", "", "Units: \\SI{9.81}{\\metre\\per\\second\\squared}.\n",
+       {}, {"physics"}},
       {"xcolor", "xcolor", "text", "Named colors and color-aware text and mathematics",
        {RequirementRoot::TexmfDist, "tex/latex/xcolor/xcolor.sty"}, true,
        PackagePhase::AfterFonts, 400, "", "", "\\textcolor{blue}{StemTeX color probe}.\n", {}, {}},
       {"cancel", "cancel", "math", "Cancellation strokes for mathematical expressions",
        {RequirementRoot::TexmfDist, "tex/latex/cancel/cancel.sty"}, true,
        PackagePhase::AfterFonts, 500, "", "", "Cancel: $\\cancel{x}+y$.\n", {}, {"xcolor"}},
+      {"graphicx", "graphicx", "images", "Include, scale, rotate, and resize graphics or boxed content",
+       {RequirementRoot::TexmfDist, "tex/latex/graphics/graphicx.sty"}, false,
+       PackagePhase::AfterFonts, 510, "", "", "\\resizebox{2.5cm}{!}{graphicx probe}\n", {}, {}},
+      {"array", "array", "tables", "Extended column definitions for tabular and mathematical arrays",
+       {RequirementRoot::TexmfDist, "tex/latex/tools/array.sty"}, false,
+       PackagePhase::AfterFonts, 520, "", "",
+       R"TEX(\begin{tabular}{>{\bfseries}l r}
+A & 1 \\
+B & 2
+\end{tabular}
+)TEX",
+       {}, {}},
+      {"booktabs", "booktabs", "tables", "Publication-quality rules for tables",
+       {RequirementRoot::TexmfDist, "tex/latex/booktabs/booktabs.sty"}, false,
+       PackagePhase::AfterFonts, 530, "", "",
+       R"TEX(\begin{tabular}{lr}
+\toprule
+A & 1 \\
+\bottomrule
+\end{tabular}
+)TEX",
+       {}, {}},
+      {"tabularx", "tabularx", "tables", "Tables with columns that expand to a requested width",
+       {RequirementRoot::TexmfDist, "tex/latex/tools/tabularx.sty"}, false,
+       PackagePhase::AfterFonts, 540, "", "",
+       R"TEX(\begin{tabularx}{.8\linewidth}{lX}
+A & flexible-width cell
+\end{tabularx}
+)TEX",
+       {"array"}, {}},
+      {"multirow", "multirow", "tables", "Table cells spanning multiple rows",
+       {RequirementRoot::TexmfDist, "tex/latex/multirow/multirow.sty"}, false,
+       PackagePhase::AfterFonts, 550, "", "",
+       R"TEX(\begin{tabular}{lc}
+\multirow{2}{*}{A} & 1 \\
+ & 2
+\end{tabular}
+)TEX",
+       {}, {}},
+      {"adjustbox", "adjustbox", "layout", "Resize, constrain, trim, frame, and align boxed content",
+       {RequirementRoot::TexmfDist, "tex/latex/adjustbox/adjustbox.sty"}, false,
+       PackagePhase::AfterFonts, 560, "", "", "\\adjustbox{frame,max width=.8\\linewidth}{adjustbox probe}\n",
+       {"graphicx"}, {}},
+      {"enumitem", "enumitem", "lists", "Control list labels, spacing, indentation, and inline layouts",
+       {RequirementRoot::TexmfDist, "tex/latex/enumitem/enumitem.sty"}, false,
+       PackagePhase::AfterFonts, 570, "", "",
+       R"TEX(\begin{enumerate}[label=(\alph*),nosep]
+\item enumitem probe
+\end{enumerate}
+)TEX",
+       {}, {}},
       {"tikz", "TikZ", "graphics", "General-purpose native TeX vector graphics",
        {RequirementRoot::TexmfDist, "tex/latex/pgf/frontendlayer/tikz.sty"}, false,
        PackagePhase::AfterFonts, 600, "", "",
@@ -625,6 +680,13 @@ struct ResolvedPackages {
   std::set<std::string> explicit_ids;
   std::vector<const PackageRecipe *> ordered;
   std::map<std::string, std::vector<std::string>> required_by;
+  struct Notice {
+    std::string id;
+    std::string severity;
+    std::vector<std::string> package_ids;
+    std::string message;
+  };
+  std::vector<Notice> notices;
 };
 
 ResolvedPackages resolve_packages(const fs::path &texmf_root, const std::vector<std::string> &explicit_ids) {
@@ -697,6 +759,12 @@ ResolvedPackages resolve_packages(const fs::path &texmf_root, const std::vector<
     }
     result.ordered.push_back(candidate);
     emitted.insert(candidate->id);
+  }
+  if (selected.count("physics") && selected.count("siunitx")) {
+    result.notices.push_back({
+        "physics-siunitx-qty", "notice", {"physics", "siunitx"},
+        "physics keeps ownership of \\qty under siunitx's compatibility policy; "
+        "use \\SI, \\num, or \\unit for siunitx input. StemTeX does not redefine these commands."});
   }
   return result;
 }
@@ -954,6 +1022,18 @@ std::string package_plan_json(const ResolvedPackages &packages) {
     if (recipe->phase == PackagePhase::AfterFonts) append_load_item("package", recipe->id, recipe->display_name);
   }
   append_load_item("managed", "preview", "StemTeX preview");
+  json << "],\"notices\":[";
+  for (size_t index = 0; index < packages.notices.size(); ++index) {
+    const ResolvedPackages::Notice &notice = packages.notices[index];
+    if (index) json << ',';
+    json << "{\"id\":\"" << json_escape(notice.id) << "\",\"severity\":\""
+         << json_escape(notice.severity) << "\",\"packageIds\":[";
+    for (size_t package_index = 0; package_index < notice.package_ids.size(); ++package_index) {
+      if (package_index) json << ',';
+      json << "\"" << json_escape(notice.package_ids[package_index]) << "\"";
+    }
+    json << "],\"message\":\"" << json_escape(notice.message) << "\"}";
+  }
   json << "]}";
   return json.str();
 }

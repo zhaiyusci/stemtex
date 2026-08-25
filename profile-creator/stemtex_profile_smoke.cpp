@@ -60,8 +60,9 @@ int main(int argc, char **argv) {
   stemtex_profile_free_string(package_catalog);
   stemtex_profile_free_string(error);
   const std::vector<const char *> known_packages = {
-      "mathtools", "mhchem", "physics", "xcolor", "cancel", "tikz", "pgfplots",
-      "tikz-cd", "circuitikz", "forest", "chemfig", "quantikz"};
+      "mathtools", "mhchem", "physics", "siunitx", "xcolor", "cancel", "tikz", "pgfplots",
+      "tikz-cd", "circuitikz", "forest", "chemfig", "quantikz", "graphicx", "array",
+      "booktabs", "tabularx", "multirow", "adjustbox", "enumitem"};
   for (const char *id : known_packages) {
     if (package_catalog_text.find(std::string("\"id\":\"") + id + "\"") == std::string::npos) {
       std::cerr << "package catalog missing " << id << '\n';
@@ -69,8 +70,8 @@ int main(int argc, char **argv) {
     }
   }
 
-  const char *plan_ids[] = {"physics", "cancel", "xcolor"};
-  char *package_plan = stemtex_profile_package_plan_json(&context, plan_ids, 3, &code, &error);
+  const char *plan_ids[] = {"physics", "siunitx", "cancel", "xcolor"};
+  char *package_plan = stemtex_profile_package_plan_json(&context, plan_ids, 4, &code, &error);
   if (!package_plan) {
     std::cerr << (error ? error : "package plan failed") << '\n';
     stemtex_profile_free_string(error);
@@ -82,12 +83,17 @@ int main(int argc, char **argv) {
   stemtex_profile_free_string(error);
   size_t mathtools_position = package_plan_text.find("\"id\":\"mathtools\"");
   size_t physics_position = package_plan_text.find("\"id\":\"physics\"");
+  size_t siunitx_position = package_plan_text.find("\"id\":\"siunitx\"");
   size_t xcolor_position = package_plan_text.find("\"id\":\"xcolor\"");
   size_t cancel_position = package_plan_text.find("\"id\":\"cancel\"");
   if (mathtools_position == std::string::npos || physics_position == std::string::npos ||
+      siunitx_position == std::string::npos ||
       xcolor_position == std::string::npos || cancel_position == std::string::npos ||
-      !(mathtools_position < physics_position && xcolor_position < cancel_position) ||
+      !(mathtools_position < physics_position && physics_position < siunitx_position &&
+        xcolor_position < cancel_position) ||
       package_plan_text.find("\"id\":\"mathtools\",\"displayName\":\"mathtools\",\"explicit\":false") ==
+          std::string::npos ||
+      package_plan_text.find("\"id\":\"physics-siunitx-qty\",\"severity\":\"notice\"") ==
           std::string::npos) {
     std::cerr << "package plan did not resolve dependencies/order as expected\n";
     return 1;
@@ -118,6 +124,39 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  const char *table_plan_ids[] = {"booktabs", "tabularx", "multirow", "adjustbox", "enumitem"};
+  package_plan = stemtex_profile_package_plan_json(&context, table_plan_ids, 5, &code, &error);
+  if (!package_plan) {
+    std::cerr << (error ? error : "table/layout package plan failed") << '\n';
+    stemtex_profile_free_string(error);
+    return 1;
+  }
+  package_plan_text = package_plan;
+  std::cout << package_plan << '\n';
+  stemtex_profile_free_string(package_plan);
+  stemtex_profile_free_string(error);
+  size_t graphicx_position = package_plan_text.find("\"id\":\"graphicx\"");
+  size_t array_position = package_plan_text.find("\"id\":\"array\"");
+  size_t booktabs_position = package_plan_text.find("\"id\":\"booktabs\"");
+  size_t tabularx_position = package_plan_text.find("\"id\":\"tabularx\"");
+  size_t multirow_position = package_plan_text.find("\"id\":\"multirow\"");
+  size_t adjustbox_position = package_plan_text.find("\"id\":\"adjustbox\"");
+  size_t enumitem_position = package_plan_text.find("\"id\":\"enumitem\"");
+  if (graphicx_position == std::string::npos || array_position == std::string::npos ||
+      booktabs_position == std::string::npos || tabularx_position == std::string::npos ||
+      multirow_position == std::string::npos || adjustbox_position == std::string::npos ||
+      enumitem_position == std::string::npos ||
+      !(graphicx_position < array_position && array_position < booktabs_position &&
+        booktabs_position < tabularx_position && tabularx_position < multirow_position &&
+        multirow_position < adjustbox_position && adjustbox_position < enumitem_position) ||
+      package_plan_text.find("\"id\":\"graphicx\",\"displayName\":\"graphicx\",\"explicit\":false") ==
+          std::string::npos ||
+      package_plan_text.find("\"id\":\"array\",\"displayName\":\"array\",\"explicit\":false") ==
+          std::string::npos) {
+    std::cerr << "table/layout package plan did not resolve dependencies/order as expected\n";
+    return 1;
+  }
+
   fs::path root = fs::temp_directory_path() / "stemtex-profile-smoke";
   std::error_code ignored;
   fs::remove_all(root, ignored);
@@ -133,8 +172,11 @@ int main(int argc, char **argv) {
   const std::vector<SmokeSpec> cases = {
       {"package-selection", "latin-modern", "latin-modern-math", "none", {"mhchem", "xcolor", "cancel"}, true},
       {"package-none", "latin-modern", "latin-modern-math", "none", {}, true},
+      {"physics-siunitx", "latin-modern", "latin-modern-math", "none", {"physics", "siunitx"}, true},
       {"drawing-packages", "latin-modern", "latin-modern-math", "none",
        {"pgfplots", "tikz-cd", "circuitikz", "forest", "chemfig", "quantikz"}, true},
+      {"table-layout-packages", "latin-modern", "latin-modern-math", "none",
+       {"booktabs", "tabularx", "multirow", "adjustbox", "enumitem"}, true},
       {"math-arsenal", "latin-modern", "arsenal-math", "none"},
       {"math-asana", "latin-modern", "asana-math", "none"},
       {"math-concrete", "latin-modern", "concrete-math", "none"},
@@ -255,6 +297,20 @@ int main(int argc, char **argv) {
         return 1;
       }
     }
+    if (std::string(item.name) == "physics-siunitx") {
+      const std::string preamble = read_text(profile / "preamble.tex");
+      const std::string warmup = read_text(profile / "warmup.tex");
+      const size_t physics = preamble.find("\\usepackage{physics}");
+      const size_t siunitx = preamble.find("\\usepackage{siunitx}");
+      if (physics == std::string::npos || siunitx == std::string::npos || !(physics < siunitx) ||
+          preamble.find("RenewCommandCopy") != std::string::npos ||
+          preamble.find("RenewDocumentCommand") != std::string::npos ||
+          warmup.find("\\SI{9.81}{\\metre\\per\\second\\squared}") == std::string::npos) {
+        std::cerr << "physics/siunitx compatibility output is incorrect\n";
+        fs::remove_all(root, ignored);
+        return 1;
+      }
+    }
     if (std::string(item.name) == "drawing-packages") {
       const std::string preamble = read_text(profile / "preamble.tex");
       const std::string warmup = read_text(profile / "warmup.tex");
@@ -282,6 +338,34 @@ int main(int argc, char **argv) {
           warmup.find("\\chemfig") == std::string::npos ||
           warmup.find("\\begin{quantikz}") == std::string::npos) {
         std::cerr << "drawing package profile output is incorrect\n";
+        fs::remove_all(root, ignored);
+        return 1;
+      }
+    }
+    if (std::string(item.name) == "table-layout-packages") {
+      const std::string preamble = read_text(profile / "preamble.tex");
+      const std::string warmup = read_text(profile / "warmup.tex");
+      const size_t graphicx = preamble.find("\\usepackage{graphicx}");
+      const size_t array = preamble.find("\\usepackage{array}");
+      const size_t booktabs = preamble.find("\\usepackage{booktabs}");
+      const size_t tabularx = preamble.find("\\usepackage{tabularx}");
+      const size_t multirow = preamble.find("\\usepackage{multirow}");
+      const size_t adjustbox = preamble.find("\\usepackage{adjustbox}");
+      const size_t enumitem = preamble.find("\\usepackage{enumitem}");
+      const size_t preview = preamble.find("\\usepackage[active,tightpage]{preview}");
+      if (graphicx == std::string::npos || array == std::string::npos || booktabs == std::string::npos ||
+          tabularx == std::string::npos || multirow == std::string::npos || adjustbox == std::string::npos ||
+          enumitem == std::string::npos || preview == std::string::npos ||
+          !(graphicx < array && array < booktabs && booktabs < tabularx && tabularx < multirow &&
+            multirow < adjustbox && adjustbox < enumitem && enumitem < preview) ||
+          warmup.find("\\resizebox{2.5cm}") == std::string::npos ||
+          warmup.find(">{\\bfseries}l r") == std::string::npos ||
+          warmup.find("\\toprule") == std::string::npos ||
+          warmup.find("\\begin{tabularx}") == std::string::npos ||
+          warmup.find("\\multirow") == std::string::npos ||
+          warmup.find("\\adjustbox") == std::string::npos ||
+          warmup.find("\\begin{enumerate}") == std::string::npos) {
+        std::cerr << "table/layout package profile output is incorrect\n";
         fs::remove_all(root, ignored);
         return 1;
       }
@@ -331,6 +415,24 @@ int main(int argc, char **argv) {
   \addlegendentry{$\cos x$}
 \end{axis}
 \end{tikzpicture})TEX";
+      } else if (std::string(item.name) == "table-layout-packages") {
+        snippet = R"TEX(\rotatebox{2}{Table tools}
+
+\adjustbox{frame,max width=.95\linewidth}{%
+\begin{tabularx}{300pt}{>{\bfseries}lXc}
+\toprule
+Item & Description & Value \\
+\midrule
+\multirow{2}{*}{A} & First row & 1 \\
+ & Second row & 2 \\
+\bottomrule
+\end{tabularx}%
+}
+
+\begin{enumerate}[label=(\alph*),nosep]
+\item compact list
+\item controlled labels
+\end{enumerate})TEX";
       } else {
         snippet = std::string(item.cjk) == "none"
                       ? "StemTeX font profile: $E=mc^2$ and $\\int_0^1x^2\\,dx=\\frac13$."

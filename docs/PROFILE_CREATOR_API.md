@@ -66,8 +66,16 @@ StemTeX profiles and an opt-in XeTeX-native drawing group:
 | `mathtools` | mathematics | on | pre-font math foundation |
 | `mhchem` | chemistry | on | requires `mathtools`; uses `version=4` |
 | `physics` | physics | on | requires `mathtools` |
+| `siunitx` | numbers/units | off | ordered after `physics` when both are selected; emits a compatibility notice |
 | `xcolor` | text/color | on | normal post-font package |
 | `cancel` | mathematics | on | ordered after `xcolor` when both are selected |
+| `graphicx` | images | off | graphics inclusion and box transforms; required by `adjustbox` |
+| `array` | tables | off | extended table and mathematical-array columns; required by `tabularx` |
+| `booktabs` | tables | off | publication-quality table rules |
+| `tabularx` | tables | off | requires `array`; flexible-width columns |
+| `multirow` | tables | off | cells spanning multiple rows |
+| `adjustbox` | layout | off | requires `graphicx`; constrains and transforms boxed content |
+| `enumitem` | lists | off | configurable labels, spacing, and indentation |
 | `tikz` | graphics | off | requires `xcolor`; drawing foundation |
 | `pgfplots` | plots | off | requires `tikz`; emits `compat=newest` after loading |
 | `tikz-cd` | diagrams | off | requires `tikz` |
@@ -80,8 +88,16 @@ Each recipe owns its TeX Live `texmf-dist` relative path, default options,
 post-load setup, warmup probe, phase, stable order, hard requirements, and
 conditional `after` relationships. Package availability uses the same
 deterministic regular-file check as font recipes. It does not guess a package
-directory from its ID. The drawing group deliberately excludes recipes that
-need shell escape or an external conversion/layout executable.
+directory from its ID. The current recipes deliberately exclude packages that
+need shell escape or an external conversion/layout executable. `graphicx`
+readiness is tested with an in-memory box transform, so creating a profile does
+not require an external image file.
+
+Selecting both `physics` and `siunitx` follows `siunitx`'s own compatibility
+policy: `physics` is loaded first and retains `\qty`; users can use `\SI`,
+`\num`, and `\unit` for `siunitx` input. The resolver reports this as a
+non-blocking notice in the package plan. StemTeX neither rejects the combination
+nor silently redefines either package's commands.
 
 The resolver first expands hard requirements, then performs a stable
 topological ordering. The current generated preamble is arranged as:
@@ -102,7 +118,9 @@ than selectable whitelist entries.
 `warmup.tex` probes only commands belonging to the resolved package set. For
 example, disabling `mhchem` removes both its `\usepackage` line and the `\ce`
 readiness probe; selecting `pgfplots` adds the `xcolor`/`tikz` dependency chain,
-its managed compatibility setting, and lightweight TikZ/axis probes.
+its managed compatibility setting, and lightweight TikZ/axis probes. Selecting
+`tabularx` adds `array`, and selecting `adjustbox` adds `graphicx`; their probes
+use only short generated text and tables.
 
 ## Public C ABI
 
@@ -152,7 +170,10 @@ including `relativePath`, `available`, `defaultEnabled`, `phase`, `order`,
 `stemtex_profile_package_plan_json` accepts the package IDs explicitly selected
 by a host and returns their dependency closure plus an ordered `loadOrder`
 containing the managed font and preview boundaries. A package added only as a
-dependency has `explicit: false` and reports its `requiredBy` parents.
+dependency has `explicit: false` and reports its `requiredBy` parents. Its
+`notices` array contains non-blocking, selection-dependent compatibility advice
+with stable `id`, `severity`, `packageIds`, and fallback English `message`
+fields; hosts may localize known notice IDs.
 
 The original `StemTeXProfileSpec`, `stemtex_profile_preamble_utf8`, and
 `stemtex_profile_materialize` entry points remain available and select all five
@@ -211,7 +232,10 @@ as `StemTeXConfig.profile_root_utf8`, while passing the same TeX Live root as
 --smoke          Construct and validate the UI/catalog, then exit
 ```
 
-The Qt application presents available whitelist packages as checkable rows.
+The Qt application keeps the TeX Live root, destination, and profile name above
+three tabs: fonts, whitelist packages, and the generated preamble. Package rows
+therefore have a full page for selection, dependency/load-order details, and
+compatibility notices, while the preamble remains readable at full size.
 Unavailable rows remain visible but disabled. A partially checked row denotes
 a package brought in only by another selection. The UI displays the actual
 resolved sequence, including the managed font and preview boundaries; it does

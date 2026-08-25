@@ -93,11 +93,12 @@ font-loading TeX commands. Text, math, and CJK fonts are selected independently.
 It also offers a curated common-package whitelist whose availability,
 dependencies, options, and load order are owned by the Qt-free creator library.
 The current whitelist contains the original `mathtools`, `mhchem`, `physics`,
-`xcolor`, and `cancel` set plus opt-in TikZ drawing recipes for `tikz`,
-`pgfplots`, `tikz-cd`, `circuitikz`, `forest`, `chemfig`, and `quantikz`.
-Only the original five remain enabled by default for compatibility. The library
-generates `preamble.tex` and a selection-aware `warmup.tex` from the resulting
-plan.
+`xcolor`, and `cancel` set; opt-in `siunitx`; opt-in document building blocks
+`graphicx`, `array`, `booktabs`, `tabularx`, `multirow`, `adjustbox`, and
+`enumitem`; plus opt-in TikZ drawing recipes for `tikz`, `pgfplots`, `tikz-cd`,
+`circuitikz`, `forest`, `chemfig`, and `quantikz`. Only the original five remain
+enabled by default for compatibility. The library generates `preamble.tex` and
+a selection-aware `warmup.tex` from the resulting plan.
 
 The bundled small tree enables its maintained Latin Modern, XITS, and Lete Sans
 Math recipes. Pointing the creator at a full TeX Live root additionally exposes
