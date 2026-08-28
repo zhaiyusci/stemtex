@@ -494,6 +494,9 @@ int main(int argc, char **argv) {
         {"sparse-register-then-error",
          "\\count32767=12345 \\toks32767={polluted}\\errmessage{STEMTEX forced after sparse register}",
          "\\ifnum\\count32767=12345 \\errmessage{STEMTEX sparse register leaked}\\fi sparse ok"},
+        {"eqtb-level-then-error", "\\begingroup\\fam=5\\errmessage{STEMTEX forced after local fam assignment}",
+         "\\count255=\\fam \\begingroup\\fam=5\\endgroup "
+         "\\ifnum\\fam=\\count255 eqtb level ok\\else\\errmessage{STEMTEX eqtb level leaked}\\fi"},
         {"open-textbf", "This is \\textbf{unfinished"},
         {"open-group", "\\begingroup unfinished"},
         {"input-missing-file", "\\input{definitely-not-existing-file}"},

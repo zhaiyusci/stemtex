@@ -74,6 +74,9 @@ XeTeX's `storefmtfile()`/`loadfmtfile()` path, but keeps the snapshot in memory
 instead of writing a real `.fmt` file. This layer saves and restores:
 
 - main memory, eqtb, and hash table;
+- XeTeX's `xeqlevel` side table, which records the TeX grouping level of
+  word-valued eqtb entries and therefore must be restored together with eqtb
+  and the save stack even though ordinary format files reinitialize it;
 - string pool and string-start table;
 - allocator/hash/string scalar state such as `lomemmax`, `himemmin`,
   `hashused`, `poolptr`, and `strptr`;
@@ -168,7 +171,7 @@ relevant cases are:
 - `checkpoint-critical` with `SPARES=0`: the smaller set of errors most likely
   to poison checkpoint restore, including math alphabet commands used outside
   math mode, font-dimension mutation, native font loading, e-TeX sparse
-  register mutation, and hyphenation mutation;
+  register mutation, eqtb grouping-level mutation, and hyphenation mutation;
 - `bad-output-corpus` with `SPARES=0`: PDF and SVG output recovery after bad
   snippets;
 - `list-state` with `SPARES=0`: repeated `itemize`/`enumerate` snippets and a
@@ -197,7 +200,7 @@ Expected result:
 
 ```text
 badCorpus passed=36 failed=0 total=36
-badCorpus passed=13 failed=0 total=13
+badCorpus passed=14 failed=0 total=14
 badOutput passed=28 failed=0 total=28
 listState failed=0
 ```

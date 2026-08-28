@@ -6,6 +6,9 @@
 
 #define STEMTEX_SNAPSHOT_FILL 1
 #define STEMTEX_SNAPSHOT_RAW 2
+#define STEMTEX_XEQLEVEL_FIRST 7892264L
+#define STEMTEX_XEQLEVEL_LAST 9006997L
+#define STEMTEX_XEQLEVEL_COUNT (STEMTEX_XEQLEVEL_LAST - STEMTEX_XEQLEVEL_FIRST + 1)
 
 typedef struct {
   unsigned char mode;
@@ -25,6 +28,7 @@ typedef struct {
   boolean valid;
   stemtexsnapshot yzmem_copy;
   stemtexsnapshot zeqtb_copy;
+  stemtexsnapshot xeqlevel_copy;
   stemtexsnapshot yhash_copy;
   stemtexsnapshot fontinfo_copy;
   memoryword *savestack_copy;
@@ -74,6 +78,7 @@ typedef struct {
   quarterword *trietrc_copy;
   integer yzmem_count;
   integer zeqtb_count;
+  integer xeqlevel_count;
   integer yhash_count;
   integer strpool_count;
   integer strstart_count;
@@ -447,6 +452,7 @@ static void stemtex_checkpoint_alloc(void)
 {
   integer yzmem_count = memmax - memmin + 1;
   integer zeqtb_count = eqtbtop + 1;
+  integer xeqlevel_count = STEMTEX_XEQLEVEL_COUNT;
   integer yhash_count = 1 + hashtop - hashoffset;
   integer strpool_count = poolptr > 1 ? poolptr : 1;
   integer strstart_count = strptr >= 65536L ? strptr - 65536L + 1 : 1;
@@ -455,6 +461,7 @@ static void stemtex_checkpoint_alloc(void)
   integer trie_array_count = triemax + 1;
   stemtex_checkpoint.yzmem_count = yzmem_count;
   stemtex_checkpoint.zeqtb_count = zeqtb_count;
+  stemtex_checkpoint.xeqlevel_count = xeqlevel_count;
   stemtex_checkpoint.yhash_count = yhash_count;
   if (stemtex_checkpoint.savestack_copy == NULL) stemtex_checkpoint.savestack_copy = xmallocarray(memoryword, savesize);
   if (stemtex_checkpoint.nest_copy == NULL) stemtex_checkpoint.nest_copy = xmallocarray(liststaterecord, nestsize);
@@ -567,6 +574,9 @@ static void stemtex_save_tex_user_state(void)
                         sizeof(memoryword) * (size_t)stemtex_checkpoint.yzmem_count, sizeof(memoryword));
   stemtex_snapshot_save(&stemtex_checkpoint.zeqtb_copy, zeqtb,
                         sizeof(memoryword) * (size_t)stemtex_checkpoint.zeqtb_count, sizeof(memoryword));
+  stemtex_snapshot_save(&stemtex_checkpoint.xeqlevel_copy, xeqlevel + STEMTEX_XEQLEVEL_FIRST,
+                        sizeof(quarterword) * (size_t)stemtex_checkpoint.xeqlevel_count,
+                        sizeof(quarterword));
   stemtex_snapshot_save(&stemtex_checkpoint.yhash_copy, yhash,
                         sizeof(twohalves) * (size_t)stemtex_checkpoint.yhash_count, sizeof(twohalves));
   stemtex_snapshot_save(&stemtex_checkpoint.fontinfo_copy, fontinfo, sizeof(fmemoryword) * (size_t)fmemptr,
@@ -657,6 +667,9 @@ static void stemtex_restore_tex_user_state(void)
                            sizeof(memoryword) * (size_t)stemtex_checkpoint.yzmem_count, sizeof(memoryword));
   stemtex_snapshot_restore(&stemtex_checkpoint.zeqtb_copy, zeqtb,
                            sizeof(memoryword) * (size_t)stemtex_checkpoint.zeqtb_count, sizeof(memoryword));
+  stemtex_snapshot_restore(&stemtex_checkpoint.xeqlevel_copy, xeqlevel + STEMTEX_XEQLEVEL_FIRST,
+                           sizeof(quarterword) * (size_t)stemtex_checkpoint.xeqlevel_count,
+                           sizeof(quarterword));
   stemtex_snapshot_restore(&stemtex_checkpoint.yhash_copy, yhash,
                            sizeof(twohalves) * (size_t)stemtex_checkpoint.yhash_count, sizeof(twohalves));
   stemtex_snapshot_restore(&stemtex_checkpoint.fontinfo_copy, fontinfo,

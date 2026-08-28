@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Audit the StemTeX in-process XeTeX checkpoint mapping.
 
-This is a guardrail, not the checkpoint implementation. The canonical inventory
-is still XeTeX's storefmtfile()/loadfmtfile() path; this script checks that the
-format-style user-state arrays and scalars have an intentional in-process
-snapshot mapping or a documented exception.
+This is a guardrail, not the checkpoint implementation. The canonical user-state
+inventory is still XeTeX's storefmtfile()/loadfmtfile() path; this script checks
+that the format-style arrays and scalars, plus continuation-only grouping state,
+have an intentional in-process snapshot mapping or a documented exception.
 """
 
 from __future__ import annotations
@@ -92,6 +92,17 @@ CHECKS: tuple[MappingCheck, ...] = (
         (r"dumpthings\s*\(\s*eqtb\s*\[",),
         (r"stemtex_snapshot_save\s*\(\s*&stemtex_checkpoint\.zeqtb_copy",),
         (r"stemtex_snapshot_restore\s*\(\s*&stemtex_checkpoint\.zeqtb_copy",),
+    ),
+    MappingCheck(
+        "eqtb grouping levels",
+        (),
+        (
+            r"xeqlevel_count",
+            r"stemtex_snapshot_save\s*\(\s*&stemtex_checkpoint\.xeqlevel_copy",
+        ),
+        (
+            r"stemtex_snapshot_restore\s*\(\s*&stemtex_checkpoint\.xeqlevel_copy",
+        ),
     ),
     MappingCheck(
         "hash table",
