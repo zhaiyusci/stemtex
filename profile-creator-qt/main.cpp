@@ -1,4 +1,6 @@
 #include "stemtex_profile.h"
+#include "i18n.h"
+#include "catalog-translations.h"
 
 #include <QApplication>
 #include <QComboBox>
@@ -74,7 +76,7 @@ QString argumentValue(const QStringList &args, const QString &name, const QStrin
 }
 
 QString profileErrorText(char *error) {
-  QString text = error ? QString::fromUtf8(error) : QStringLiteral("Unknown Profile Creator error");
+  QString text = error ? QString::fromUtf8(error) : QCoreApplication::translate("ProfileCreator", "Unknown Profile Creator error");
   stemtex_profile_free_string(error);
   return text;
 }
@@ -90,7 +92,7 @@ class CreatorWindow : public QMainWindow {
   CreatorWindow(QString texmfRoot, QString profilesRoot)
       : texmf_root_(std::move(texmfRoot)),
         profiles_root_(std::move(profilesRoot)) {
-    setWindowTitle(QStringLiteral("StemTeX Profile Creator"));
+    setWindowTitle(QCoreApplication::translate("ProfileCreator", "StemTeX Profile Creator"));
     resize(980, 720);
 
     auto *central = new QWidget(this);
@@ -98,36 +100,36 @@ class CreatorWindow : public QMainWindow {
     root->setContentsMargins(14, 14, 14, 14);
     root->setSpacing(12);
 
-    auto *title = new QLabel(QStringLiteral("StemTeX Profile Creator"), central);
+    auto *title = new QLabel(QCoreApplication::translate("ProfileCreator", "StemTeX Profile Creator"), central);
     QFont titleFont = title->font();
     titleFont.setPointSize(titleFont.pointSize() + 5);
     titleFont.setBold(true);
     title->setFont(titleFont);
     root->addWidget(title);
     auto *intro = new QLabel(
-        QStringLiteral("选择字体和受支持的常用宏包。StemTeX 负责解析依赖，并生成顺序确定的 preamble.tex。"),
+        QCoreApplication::translate("ProfileCreator", "Choose fonts and supported packages. StemTeX resolves dependencies and generates preamble.tex in a deterministic order."),
         central);
     intro->setWordWrap(true);
     root->addWidget(intro);
 
-    auto *environmentBox = new QGroupBox(QStringLiteral("环境"), central);
+    auto *environmentBox = new QGroupBox(QCoreApplication::translate("ProfileCreator", "Environment"), central);
     auto *environmentForm = new QFormLayout(environmentBox);
     auto *texmfRow = new QWidget(environmentBox);
     auto *texmfLayout = new QHBoxLayout(texmfRow);
     texmfLayout->setContentsMargins(0, 0, 0, 0);
     texmfEdit_ = new QLineEdit(texmf_root_, texmfRow);
     texmfEdit_->setReadOnly(true);
-    auto *chooseTexmf = new QPushButton(QStringLiteral("选择 TeX Live..."), texmfRow);
+    auto *chooseTexmf = new QPushButton(QCoreApplication::translate("ProfileCreator", "Choose TeX Live..."), texmfRow);
     texmfLayout->addWidget(texmfEdit_, 1);
     texmfLayout->addWidget(chooseTexmf);
-    environmentForm->addRow(QStringLiteral("TeX Live 树"), texmfRow);
+    environmentForm->addRow(QCoreApplication::translate("ProfileCreator", "TeX Live tree"), texmfRow);
 
     profilesEdit_ = new QLineEdit(profiles_root_, environmentBox);
     profilesEdit_->setReadOnly(true);
-    profilesEdit_->setToolTip(QStringLiteral("Renderer GUI 会自动扫描这个用户 Profile 目录"));
-    environmentForm->addRow(QStringLiteral("保存到"), profilesEdit_);
+    profilesEdit_->setToolTip(QCoreApplication::translate("ProfileCreator", "Renderer GUI automatically scans this user profile directory"));
+    environmentForm->addRow(QCoreApplication::translate("ProfileCreator", "Save to"), profilesEdit_);
     nameEdit_ = new QLineEdit(environmentBox);
-    environmentForm->addRow(QStringLiteral("Profile 名称"), nameEdit_);
+    environmentForm->addRow(QCoreApplication::translate("ProfileCreator", "Profile name"), nameEdit_);
     root->addWidget(environmentBox);
 
     auto *tabs = new QTabWidget(central);
@@ -136,36 +138,36 @@ class CreatorWindow : public QMainWindow {
     auto *fontPage = new QWidget(tabs);
     auto *fontPageLayout = new QVBoxLayout(fontPage);
     fontPageLayout->setContentsMargins(12, 12, 12, 12);
-    auto *fontBox = new QGroupBox(QStringLiteral("字体组合"), fontPage);
+    auto *fontBox = new QGroupBox(QCoreApplication::translate("ProfileCreator", "Font combination"), fontPage);
     auto *fontForm = new QFormLayout(fontBox);
     textCombo_ = new QComboBox(fontBox);
     mathCombo_ = new QComboBox(fontBox);
     cjkCombo_ = new QComboBox(fontBox);
-    fontForm->addRow(QStringLiteral("正文字体"), textCombo_);
-    fontForm->addRow(QStringLiteral("数学字体"), mathCombo_);
-    fontForm->addRow(QStringLiteral("CJK 字体"), cjkCombo_);
+    fontForm->addRow(QCoreApplication::translate("ProfileCreator", "Text font"), textCombo_);
+    fontForm->addRow(QCoreApplication::translate("ProfileCreator", "Math font"), mathCombo_);
+    fontForm->addRow(QCoreApplication::translate("ProfileCreator", "CJK font"), cjkCombo_);
     selectionInfo_ = new QLabel(fontBox);
     selectionInfo_->setWordWrap(true);
     selectionInfo_->setStyleSheet(QStringLiteral("QLabel { color: #555; padding-top: 4px; }"));
     fontForm->addRow(QString(), selectionInfo_);
     fontPageLayout->addWidget(fontBox);
     fontPageLayout->addStretch(1);
-    tabs->addTab(fontPage, QStringLiteral("字体"));
+    tabs->addTab(fontPage, QCoreApplication::translate("ProfileCreator", "Fonts"));
 
     auto *packagePage = new QWidget(tabs);
     auto *packagePageLayout = new QVBoxLayout(packagePage);
     packagePageLayout->setContentsMargins(12, 12, 12, 12);
-    auto *packageBox = new QGroupBox(QStringLiteral("常用宏包（StemTeX 白名单）"), packagePage);
+    auto *packageBox = new QGroupBox(QCoreApplication::translate("ProfileCreator", "Common packages (StemTeX allowlist)"), packagePage);
     auto *packageLayout = new QVBoxLayout(packageBox);
     auto *packageHint = new QLabel(
-        QStringLiteral("勾选需要的功能；依赖项会自动加入。字体配置和 preview 由 StemTeX 管理，不在此重复显示。"),
+        QCoreApplication::translate("ProfileCreator", "Select the features you need; dependencies are added automatically. Font configuration and preview are managed by StemTeX and are not listed here."),
         packageBox);
     packageHint->setWordWrap(true);
     packageLayout->addWidget(packageHint);
     packageTree_ = new QTreeWidget(packageBox);
     packageTree_->setColumnCount(4);
-    packageTree_->setHeaderLabels({QStringLiteral("宏包"), QStringLiteral("类别"),
-                                   QStringLiteral("加载位置"), QStringLiteral("用途")});
+    packageTree_->setHeaderLabels({QCoreApplication::translate("ProfileCreator", "Package"), QCoreApplication::translate("ProfileCreator", "Category"),
+                                   QCoreApplication::translate("ProfileCreator", "Load phase"), QCoreApplication::translate("ProfileCreator", "Purpose")});
     packageTree_->setRootIsDecorated(false);
     packageTree_->setAlternatingRowColors(true);
     packageTree_->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -187,46 +189,45 @@ class CreatorWindow : public QMainWindow {
     packageLayout->addWidget(packagePlanLabel_);
     packageLayout->addWidget(packageNoticeLabel_);
     packagePageLayout->addWidget(packageBox, 1);
-    tabs->addTab(packagePage, QStringLiteral("宏包"));
+    tabs->addTab(packagePage, QCoreApplication::translate("ProfileCreator", "Packages"));
 
     auto *customPage = new QWidget(tabs);
     auto *customPageLayout = new QVBoxLayout(customPage);
     customPageLayout->setContentsMargins(12, 12, 12, 12);
-    auto *customBox = new QGroupBox(QStringLiteral("用户 preamble"), customPage);
+    auto *customBox = new QGroupBox(QCoreApplication::translate("ProfileCreator", "User preamble"), customPage);
     auto *customLayout = new QVBoxLayout(customBox);
     auto *customHint = new QLabel(
-        QStringLiteral("这里的内容会原样追加在 StemTeX 管理部分之后。可以直接写 \\usepackage、"
-                       "\\newcommand 和其他 preamble 命令；不要写 \\documentclass 或 document 环境。"),
+        QCoreApplication::translate("ProfileCreator", "This content is appended unchanged after the StemTeX-managed section. You can use \\usepackage, \\newcommand, and other preamble commands; do not include \\documentclass or the document environment."),
         customBox);
     customHint->setWordWrap(true);
     userPreambleEdit_ = new QPlainTextEdit(customBox);
     userPreambleEdit_->setLineWrapMode(QPlainTextEdit::NoWrap);
     userPreambleEdit_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     userPreambleEdit_->setPlaceholderText(
-        QStringLiteral("% 例如：\n\\usepackage{hyperref}\n\\newcommand{\\R}{\\mathbb{R}}"));
+        QCoreApplication::translate("ProfileCreator", "% Example:\n\\usepackage{hyperref}\n\\newcommand{\\R}{\\mathbb{R}}"));
     customLayout->addWidget(customHint);
     customLayout->addWidget(userPreambleEdit_, 1);
     customPageLayout->addWidget(customBox, 1);
-    tabs->addTab(customPage, QStringLiteral("自定义"));
+    tabs->addTab(customPage, QCoreApplication::translate("ProfileCreator", "Custom"));
 
     auto *preamblePage = new QWidget(tabs);
     auto *preamblePageLayout = new QVBoxLayout(preamblePage);
     preamblePageLayout->setContentsMargins(12, 12, 12, 12);
-    auto *preambleBox = new QGroupBox(QStringLiteral("生成的 preamble.tex"), preamblePage);
+    auto *preambleBox = new QGroupBox(QCoreApplication::translate("ProfileCreator", "Generated preamble.tex"), preamblePage);
     auto *preambleLayout = new QVBoxLayout(preambleBox);
     preambleEdit_ = new QPlainTextEdit(preambleBox);
     preambleEdit_->setReadOnly(true);
     preambleEdit_->setLineWrapMode(QPlainTextEdit::NoWrap);
     preambleEdit_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    preambleEdit_->setPlaceholderText(QStringLiteral("选择有效字体后将在这里生成 preamble.tex"));
+    preambleEdit_->setPlaceholderText(QCoreApplication::translate("ProfileCreator", "Select valid fonts to generate preamble.tex here"));
     preambleLayout->addWidget(preambleEdit_);
     preamblePageLayout->addWidget(preambleBox, 1);
-    tabs->addTab(preamblePage, QStringLiteral("Preamble"));
+    tabs->addTab(preamblePage, QCoreApplication::translate("ProfileCreator", "Preamble"));
     root->addWidget(tabs, 1);
 
     auto *buttons = new QHBoxLayout();
-    auto *openProfiles = new QPushButton(QStringLiteral("打开 Profile 目录"), central);
-    createButton_ = new QPushButton(QStringLiteral("创建 Profile"), central);
+    auto *openProfiles = new QPushButton(QCoreApplication::translate("ProfileCreator", "Open Profile directory"), central);
+    createButton_ = new QPushButton(QCoreApplication::translate("ProfileCreator", "Create Profile"), central);
     createButton_->setDefault(true);
     buttons->addWidget(openProfiles);
     buttons->addStretch(1);
@@ -294,7 +295,7 @@ class CreatorWindow : public QMainWindow {
   }
 
   void chooseTexmfRoot() {
-    QString selected = QFileDialog::getExistingDirectory(this, QStringLiteral("选择 TeX Live 根目录"), texmf_root_);
+    QString selected = QFileDialog::getExistingDirectory(this, QCoreApplication::translate("ProfileCreator", "Choose the TeX Live root directory"), texmf_root_);
     if (selected.isEmpty()) return;
     QString normalized = cleanAbsolutePath(selected);
     if (normalized == texmf_root_) return;
@@ -319,12 +320,12 @@ class CreatorWindow : public QMainWindow {
       bool available = font.value("available").toBool();
       QString sourceLabel = source == "system" ? QStringLiteral("Windows")
                             : source == "texlive" ? QStringLiteral("TeX Live")
-                            : QStringLiteral("关闭");
-      QString label = QStringLiteral("%1  ·  %2").arg(font.value("displayName").toString(), sourceLabel);
-      if (!available) label += QStringLiteral("  （当前树缺失）");
+                            : QCoreApplication::translate("ProfileCreator", "Disabled");
+      QString label = QStringLiteral("%1  ·  %2").arg(CreatorI18n::catalogText(font.value("displayName").toString()), sourceLabel);
+      if (!available) label += QCoreApplication::translate("ProfileCreator", "  (missing from current tree)");
       combo->addItem(label, id);
       int index = combo->count() - 1;
-      combo->setItemData(index, font.value("description").toString(), Qt::ToolTipRole);
+      combo->setItemData(index, CreatorI18n::catalogText(font.value("description").toString()), Qt::ToolTipRole);
       combo->setItemData(index, font, Qt::UserRole + 1);
       if (auto *model = qobject_cast<QStandardItemModel *>(combo->model())) {
         if (QStandardItem *item = model->item(index)) item->setEnabled(available);
@@ -337,23 +338,23 @@ class CreatorWindow : public QMainWindow {
   }
 
   QString packageCategoryLabel(const QString &category) const {
-    if (category == "math") return QStringLiteral("数学");
-    if (category == "chemistry") return QStringLiteral("化学");
-    if (category == "physics") return QStringLiteral("物理");
-    if (category == "units") return QStringLiteral("数值与单位");
-    if (category == "text") return QStringLiteral("文字/颜色");
-    if (category == "images") return QStringLiteral("图片");
-    if (category == "tables") return QStringLiteral("表格");
-    if (category == "layout") return QStringLiteral("版面工具");
-    if (category == "lists") return QStringLiteral("列表");
-    if (category == "graphics") return QStringLiteral("绘图基础");
-    if (category == "plots") return QStringLiteral("函数图");
-    if (category == "diagrams") return QStringLiteral("专业图表");
+    if (category == "math") return QCoreApplication::translate("ProfileCreator", "Mathematics");
+    if (category == "chemistry") return QCoreApplication::translate("ProfileCreator", "Chemistry");
+    if (category == "physics") return QCoreApplication::translate("ProfileCreator", "Physics");
+    if (category == "units") return QCoreApplication::translate("ProfileCreator", "Numbers and units");
+    if (category == "text") return QCoreApplication::translate("ProfileCreator", "Text / color");
+    if (category == "images") return QCoreApplication::translate("ProfileCreator", "Images");
+    if (category == "tables") return QCoreApplication::translate("ProfileCreator", "Tables");
+    if (category == "layout") return QCoreApplication::translate("ProfileCreator", "Layout tools");
+    if (category == "lists") return QCoreApplication::translate("ProfileCreator", "Lists");
+    if (category == "graphics") return QCoreApplication::translate("ProfileCreator", "Graphics");
+    if (category == "plots") return QCoreApplication::translate("ProfileCreator", "Plots");
+    if (category == "diagrams") return QCoreApplication::translate("ProfileCreator", "Diagrams");
     return category;
   }
 
   QString packagePhaseLabel(const QString &phase) const {
-    return phase == "before-fonts" ? QStringLiteral("字体前") : QStringLiteral("字体后");
+    return phase == "before-fonts" ? QCoreApplication::translate("ProfileCreator", "Before fonts") : QCoreApplication::translate("ProfileCreator", "After fonts");
   }
 
   QStringList explicitPackageIds() const {
@@ -376,7 +377,7 @@ class CreatorWindow : public QMainWindow {
       packagePlanLabel_->setText(message);
       packageNoticeLabel_->hide();
       package_plan_valid_ = false;
-      QMessageBox::critical(this, QStringLiteral("无法读取宏包白名单"), message);
+      QMessageBox::critical(this, QCoreApplication::translate("ProfileCreator", "Cannot read package allowlist"), message);
       return false;
     }
     QJsonParseError parseError{};
@@ -388,7 +389,7 @@ class CreatorWindow : public QMainWindow {
       packagePlanLabel_->setText(parseError.errorString());
       packageNoticeLabel_->hide();
       package_plan_valid_ = false;
-      QMessageBox::critical(this, QStringLiteral("宏包白名单错误"), parseError.errorString());
+      QMessageBox::critical(this, QCoreApplication::translate("ProfileCreator", "Package allowlist error"), parseError.errorString());
       return false;
     }
 
@@ -409,13 +410,13 @@ class CreatorWindow : public QMainWindow {
       item->setText(0, package.value("displayName").toString());
       item->setText(1, packageCategoryLabel(package.value("category").toString()));
       item->setText(2, packagePhaseLabel(package.value("phase").toString()));
-      QString purpose = package.value("description").toString();
+      QString purpose = CreatorI18n::catalogText(package.value("description").toString());
       QStringList requires;
       for (const QJsonValue &dependency : package.value("requires").toArray()) requires.push_back(dependency.toString());
       QStringList after;
       for (const QJsonValue &dependency : package.value("after").toArray()) after.push_back(dependency.toString());
-      if (!requires.isEmpty()) purpose += QStringLiteral("；自动依赖：%1").arg(requires.join(QStringLiteral("、")));
-      if (!after.isEmpty()) purpose += QStringLiteral("；若启用则晚于：%1").arg(after.join(QStringLiteral("、")));
+      if (!requires.isEmpty()) purpose += QCoreApplication::translate("ProfileCreator", "; automatic dependencies: %1").arg(requires.join(QCoreApplication::translate("ProfileCreator", ", ")));
+      if (!after.isEmpty()) purpose += QCoreApplication::translate("ProfileCreator", "; load after these packages if enabled: %1").arg(after.join(QCoreApplication::translate("ProfileCreator", ", ")));
       item->setText(3, purpose);
       item->setData(0, Qt::UserRole, id);
       item->setData(0, Qt::UserRole + 1, package);
@@ -427,9 +428,9 @@ class CreatorWindow : public QMainWindow {
       const QString relative = package.value("relativePath").toString();
       if (!relative.isEmpty()) tooltip += QStringLiteral("\nTeX Live: texmf-dist/%1").arg(relative);
       if (!available) {
-        item->setText(0, item->text(0) + QStringLiteral("  （当前树缺失）"));
+        item->setText(0, item->text(0) + QCoreApplication::translate("ProfileCreator", "  (missing from current tree)"));
         const QJsonArray missing = package.value("missing").toArray();
-        if (!missing.isEmpty()) tooltip += QStringLiteral("\n缺失：%1").arg(missing.first().toString());
+        if (!missing.isEmpty()) tooltip += QCoreApplication::translate("ProfileCreator", "\nMissing: %1").arg(missing.first().toString());
       }
       for (int column = 0; column < 4; ++column) item->setToolTip(column, tooltip);
       package_items_.insert(id, item);
@@ -458,7 +459,7 @@ class CreatorWindow : public QMainWindow {
         &context, pointers.empty() ? nullptr : pointers.data(), pointers.size(), &code, &error);
     if (!json) {
       const QString message = profileErrorText(error);
-      packagePlanLabel_->setText(QStringLiteral("无法解析宏包顺序：%1").arg(message));
+      packagePlanLabel_->setText(QCoreApplication::translate("ProfileCreator", "Cannot resolve package order: %1").arg(message));
       packageNoticeLabel_->hide();
       package_plan_valid_ = false;
       return false;
@@ -468,7 +469,7 @@ class CreatorWindow : public QMainWindow {
     stemtex_profile_free_string(json);
     stemtex_profile_free_string(error);
     if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
-      packagePlanLabel_->setText(QStringLiteral("宏包顺序数据错误：%1").arg(parseError.errorString()));
+      packagePlanLabel_->setText(QCoreApplication::translate("ProfileCreator", "Invalid package order data: %1").arg(parseError.errorString()));
       packageNoticeLabel_->hide();
       package_plan_valid_ = false;
       return false;
@@ -483,8 +484,8 @@ class CreatorWindow : public QMainWindow {
       if (!package.value("explicit").toBool()) {
         QStringList parents;
         for (const QJsonValue &parent : package.value("requiredBy").toArray()) parents.push_back(parent.toString());
-        dependencyNotes.push_back(QStringLiteral("%1（由 %2 自动加入）")
-                                      .arg(package.value("displayName").toString(), parents.join(QStringLiteral("、"))));
+        dependencyNotes.push_back(QCoreApplication::translate("ProfileCreator", "%1 (automatically added by %2)")
+                                      .arg(package.value("displayName").toString(), parents.join(QCoreApplication::translate("ProfileCreator", ", "))));
       }
     }
 
@@ -503,27 +504,25 @@ class CreatorWindow : public QMainWindow {
       QJsonObject item = value.toObject();
       if (item.value("kind").toString() == "managed") {
         order.push_back(item.value("id").toString() == "fonts"
-                            ? QStringLiteral("字体配置")
-                            : QStringLiteral("preview（StemTeX）"));
+                            ? QCoreApplication::translate("ProfileCreator", "Font configuration")
+                            : QCoreApplication::translate("ProfileCreator", "preview (StemTeX)"));
       } else {
         order.push_back(item.value("displayName").toString());
       }
     }
-    QString text = QStringLiteral("实际加载顺序：%1").arg(order.join(QStringLiteral("  →  ")));
-    if (!dependencyNotes.isEmpty()) text += QStringLiteral("\n依赖：%1").arg(dependencyNotes.join(QStringLiteral("；")));
+    QString text = QCoreApplication::translate("ProfileCreator", "Resolved load order: %1").arg(order.join(QStringLiteral("  →  ")));
+    if (!dependencyNotes.isEmpty()) text += QCoreApplication::translate("ProfileCreator", "\nDependencies: %1").arg(dependencyNotes.join(QCoreApplication::translate("ProfileCreator", "; ")));
     packagePlanLabel_->setText(text);
     QStringList notices;
     for (const QJsonValue &value : document.object().value("notices").toArray()) {
       const QJsonObject notice = value.toObject();
       if (notice.value("id").toString() == "physics-siunitx-qty") {
-        notices.push_back(QStringLiteral(
-            "同时使用 physics 与 siunitx：依照 siunitx 的兼容策略，\\qty 仍由 physics 提供；"
-            "请用 \\SI、\\num 或 \\unit 输入 siunitx 内容。StemTeX 不会重定义这些命令。"));
+        notices.push_back(QCoreApplication::translate("ProfileCreator", "Using physics with siunitx: following the siunitx compatibility policy, \\qty remains provided by physics. Use \\SI, \\num, or \\unit for siunitx content. StemTeX does not redefine these commands."));
       } else {
         notices.push_back(notice.value("message").toString());
       }
     }
-    packageNoticeLabel_->setText(QStringLiteral("兼容提示：%1").arg(notices.join(QStringLiteral("\n"))));
+    packageNoticeLabel_->setText(QCoreApplication::translate("ProfileCreator", "Compatibility note: %1").arg(notices.join(QStringLiteral("\n"))));
     packageNoticeLabel_->setVisible(!notices.isEmpty());
     package_plan_valid_ = true;
     return true;
@@ -547,7 +546,7 @@ class CreatorWindow : public QMainWindow {
     if (!json) {
       QString message = profileErrorText(error);
       statusBar()->showMessage(message);
-      QMessageBox::critical(this, QStringLiteral("无法读取字体目录"), message);
+      QMessageBox::critical(this, QCoreApplication::translate("ProfileCreator", "Cannot read font catalog"), message);
       for (QComboBox *combo : {textCombo_, mathCombo_, cjkCombo_}) combo->clear();
       packageTree_->clear();
       packagePlanLabel_->clear();
@@ -561,7 +560,7 @@ class CreatorWindow : public QMainWindow {
     stemtex_profile_free_string(json);
     stemtex_profile_free_string(error);
     if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
-      QMessageBox::critical(this, QStringLiteral("字体目录错误"), parseError.errorString());
+      QMessageBox::critical(this, QCoreApplication::translate("ProfileCreator", "Font catalog error"), parseError.errorString());
       return;
     }
     QJsonArray fonts = document.object().value("fonts").toArray();
@@ -569,7 +568,7 @@ class CreatorWindow : public QMainWindow {
     addCatalogItems(mathCombo_, fonts, "math", wantedMath);
     addCatalogItems(cjkCombo_, fonts, "cjk", wantedCjk);
     reloadPackageCatalog();
-    statusBar()->showMessage(QStringLiteral("已读取当前 TeX Live 字体与宏包目录"), 4000);
+    statusBar()->showMessage(QCoreApplication::translate("ProfileCreator", "Loaded the current TeX Live font and package catalogs"), 4000);
     selectionChanged();
   }
 
@@ -639,7 +638,7 @@ class CreatorWindow : public QMainWindow {
     char *preamble = stemtex_profile_preamble_v3_utf8(&context, &storage.spec, &code, &error);
     if (!preamble) {
       QString message = profileErrorText(error);
-      preambleEdit_->setPlainText(QStringLiteral("% 无法生成 preamble.tex\n% %1").arg(message));
+      preambleEdit_->setPlainText(QCoreApplication::translate("ProfileCreator", "% Cannot generate preamble.tex\n% %1").arg(message));
       statusBar()->showMessage(message);
       return;
     }
@@ -647,7 +646,7 @@ class CreatorWindow : public QMainWindow {
     stemtex_profile_free_string(preamble);
     stemtex_profile_free_string(error);
     preambleEdit_->moveCursor(QTextCursor::Start);
-    statusBar()->showMessage(QStringLiteral("preamble.tex 已按当前字体与宏包组合更新"), 3000);
+    statusBar()->showMessage(QCoreApplication::translate("ProfileCreator", "preamble.tex updated for the current font and package combination"), 3000);
   }
 
   void createProfile() {
@@ -660,13 +659,13 @@ class CreatorWindow : public QMainWindow {
     QString path;
     QString error;
     if (!generateTemporaryProfile(profiles_root_, storage, &path, &error)) {
-      QMessageBox::critical(this, QStringLiteral("创建失败"), error);
+      QMessageBox::critical(this, QCoreApplication::translate("ProfileCreator", "Creation failed"), error);
       statusBar()->showMessage(error);
       return;
     }
     QMessageBox::information(
-        this, QStringLiteral("Profile 已创建"),
-        QStringLiteral("已创建：\n%1\n\nRenderer GUI 将把它作为普通 Profile 使用。").arg(path));
+        this, QCoreApplication::translate("ProfileCreator", "Profile created"),
+        QCoreApplication::translate("ProfileCreator", "Created:\n%1\n\nRenderer GUI will use this as a regular profile.").arg(path));
     QApplication::exit(0);
   }
 
@@ -697,12 +696,17 @@ class CreatorWindow : public QMainWindow {
 }  // namespace
 
 int main(int argc, char **argv) {
-  qputenv("QT_QPA_PLATFORM", "windows");
+  if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) qputenv("QT_QPA_PLATFORM", "windows");
   QApplication app(argc, argv);
   QCoreApplication::setApplicationName("StemTeX");
   QApplication::setWindowIcon(QIcon(":/icons/stemtex-renderer-gui.png"));
   QStringList args = app.arguments();
+  // Translators must outlive the window and be installed before creating widgets.
+  CreatorI18n::Translations translations;
+  if (!translations.initialize(args)) return 2;
+  if (args.contains("--smoke-i18n")) return translations.smokeCheck() ? 0 : 3;
   bool smoke = args.contains("--smoke");
+  if (smoke && !translations.smokeCheck()) return 3;
   QString runtimeRoot = argumentValue(args, "--runtime", defaultRuntimeRoot());
   QString texmfRoot = argumentValue(args, "--texmf", runtimeRoot);
   QString profilesRoot = argumentValue(args, "--profiles", defaultProfilesRoot());

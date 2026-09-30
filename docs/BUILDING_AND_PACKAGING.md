@@ -8,7 +8,8 @@ generated-C XeTeX daemon or its static third-party dependencies.
 
 - Visual Studio 2022 with the x64 C++ toolchain;
 - CMake 3.20 or newer;
-- Qt 6 with `Core`, `Gui`, `Widgets`, `Pdf`, and `Svg`;
+- Qt 6.11 or newer with `Core`, `Gui`, `Widgets`, `Pdf`, `Svg`, and
+  `LinguistTools`, including `qtbase_zh_CN.qm` for the Profile Creator;
 - Python 3 for the checkpoint state audit;
 - Inno Setup 6 when building the installer.
 

@@ -307,11 +307,34 @@ int main(int argc, char **argv) {
       return 1;
     }
 
+    const std::string unicode_math = R"TEX(\usepackage[
+  mathrm=sym,
+  mathit=sym,
+  mathbf=sym,
+  mathsf=sym,
+  mathtt=sym
+]{unicode-math}
+)TEX";
+    const std::string generated_preamble = read_text(profile / "preamble.tex");
+    const size_t unicode_math_position = generated_preamble.find(unicode_math);
+    const size_t math_setup = generated_preamble.find(
+        std::string(item.math) == "lete-sans-math"
+            ? "\\usepackage[textrm,textit,textbf,textsf]{lete-sans-math}"
+            : "\\setmathfont{");
+    if (unicode_math_position == std::string::npos || math_setup == std::string::npos ||
+        unicode_math_position >= math_setup ||
+        generated_preamble.find("{unicode-math}",
+            unicode_math_position + unicode_math.size()) != std::string::npos) {
+      std::cerr << "unicode-math options/order incorrect for " << item.name << '\n';
+      fs::remove_all(root, ignored);
+      return 1;
+    }
+
     if (std::string(item.name) == "package-selection") {
       const std::string preamble = read_text(profile / "preamble.tex");
       const std::string manifest = read_text(profile / "profile.json");
       const size_t mathtools = preamble.find("\\usepackage{mathtools}");
-      const size_t fonts = preamble.find("\\usepackage{unicode-math}");
+      const size_t fonts = preamble.find(unicode_math);
       const size_t mhchem = preamble.find("\\usepackage[version=4]{mhchem}");
       const size_t xcolor = preamble.find("\\usepackage{xcolor}");
       const size_t cancel = preamble.find("\\usepackage{cancel}");

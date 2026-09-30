@@ -197,7 +197,10 @@ no optional whitelist packages, and a null `user_preamble_utf8` appends nothing.
 V3 manifests use schema version 3 and retain the user text in `userPreamble`.
 
 All preamble entry points validate one combination and return the exact generated
-preamble without writing files.
+preamble without writing files. Every math recipe loads `unicode-math` once,
+before selecting its math font, with `mathrm=sym`, `mathit=sym`, `mathbf=sym`,
+`mathsf=sym`, and `mathtt=sym`. This also applies to Lete Sans Math. Existing
+user profiles are not rewritten; newly generated profiles use these options.
 
 `stemtex_profile_materialize` creates `<profiles_root>/<name>` through a
 temporary sibling directory and rename. It never overwrites an existing
@@ -246,8 +249,28 @@ as `StemTeXConfig.profile_root_utf8`, while passing the same TeX Live root as
 --runtime PATH   StemTeX runtime used to locate the profile SDK
 --texmf PATH     TeX Live tree used for discovery and generation
 --profiles PATH  Destination profile collection
+--language CODE  UI language: system (default), en, or zh_CN
 --smoke          Construct and validate the UI/catalog, then exit
+--smoke-i18n     Validate translations without loading the SDK/catalog, then exit
 ```
+
+The UI defaults to the system locale: Simplified Chinese locales use
+Simplified Chinese, and other locales fall back to English. For example,
+`stemtex-profile-creator.exe --language en` forces English and
+`stemtex-profile-creator.exe --language zh_CN` forces Simplified Chinese.
+The language is chosen at startup; it does not alter font/package IDs, generated
+TeX, profile names, or the C API. SDK diagnostic details remain in English.
+Application and standard Qt Chinese translations are embedded in the executable,
+so no external translation directory is required after installation.
+
+Translations live in `profile-creator-qt/i18n/stemtex-profile-creator_zh_CN.ts`.
+GUI builds require Qt LinguistTools and Qt's `qtbase_zh_CN.qm`; CMake compiles
+and embeds the catalogs. Use the generated `stemtex-profile-creator_lupdate`
+target when updating source strings, then complete translations in Qt Linguist.
+Run `--smoke-i18n --language en` and `--smoke-i18n --language zh_CN` to check
+the embedded catalogs independently of a TeX Live installation. The build target
+`stemtex-profile-creator-i18n-smoke` runs these checks plus the system-language
+case. Unfinished application translations fail the build.
 
 The Qt application keeps the TeX Live root, destination, and profile name above
 four tabs: fonts, whitelist packages, a large free-form user preamble editor,
