@@ -1,3 +1,4 @@
+#include "stemtex_block_layout.h"
 #include "stemtex_renderer.h"
 
 #include <windows.h>
@@ -3095,6 +3096,31 @@ STEMTEX_API int stemtex_renderer_render_output_with_font_size(
     renderer->set_last_error(STEMTEX_ERROR_INTERNAL, kUnknownInternalException);
     renderer->set_last_outcome(STEMTEX_RENDER_OUTCOME_INTERNAL, 0, kUnknownInternalException);
     renderer->update_status_after_api_exception(STEMTEX_ERROR_INTERNAL);
+    set_unknown_error_outputs(error_code, error_utf8);
+    return 0;
+  }
+}
+
+STEMTEX_API int stemtex_renderer_render_block(
+    StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt, double font_size_pt,
+    StemTeXOutputFormat format, StemTeXRenderOutputResult *result, StemTeXErrorCode *error_code, char **error_utf8) {
+  if (!renderer || !snippet_utf8 || !result) {
+    if (renderer) renderer->set_last_outcome(STEMTEX_RENDER_OUTCOME_INVALID_ARGUMENT, 0, "Invalid argument");
+    set_error_outputs(STEMTEX_ERROR_INVALID_ARGUMENT, "Invalid argument", error_code, error_utf8);
+    return 0;
+  }
+  try {
+    const std::string prepared = stemtex::prepare_block_source(snippet_utf8);
+    return stemtex_renderer_render_output_with_font_size(renderer, prepared.c_str(), width_pt, font_size_pt,
+                                                          format, result, error_code, error_utf8);
+  } catch (const std::exception &e) {
+    renderer->set_last_error(STEMTEX_ERROR_INTERNAL, e.what());
+    renderer->set_last_outcome(STEMTEX_RENDER_OUTCOME_INTERNAL, 0, e.what());
+    set_error_outputs(STEMTEX_ERROR_INTERNAL, e.what(), error_code, error_utf8);
+    return 0;
+  } catch (...) {
+    renderer->set_last_error(STEMTEX_ERROR_INTERNAL, kUnknownInternalException);
+    renderer->set_last_outcome(STEMTEX_RENDER_OUTCOME_INTERNAL, 0, kUnknownInternalException);
     set_unknown_error_outputs(error_code, error_utf8);
     return 0;
   }

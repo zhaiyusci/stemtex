@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
   const std::vector<const char *> known_packages = {
       "mathtools", "mhchem", "physics", "siunitx", "xcolor", "cancel", "tikz", "pgfplots",
       "tikz-cd", "circuitikz", "forest", "chemfig", "quantikz", "graphicx", "array",
-      "booktabs", "tabularx", "multirow", "adjustbox", "enumitem"};
+      "booktabs", "tabularx", "multirow", "adjustbox", "enumitem", "qrcode"};
   for (const char *id : known_packages) {
     const size_t item = package_catalog_text.find(std::string("\"id\":\"") + id + "\"");
     if (item == std::string::npos) {
@@ -213,6 +213,7 @@ int main(int argc, char **argv) {
   const std::vector<SmokeSpec> cases = {
       {"package-selection", "latin-modern", "latin-modern-math", "none", {"mhchem", "xcolor", "cancel"}, true},
       {"package-none", "latin-modern", "latin-modern-math", "none", {}, true},
+      {"qrcode", "latin-modern", "latin-modern-math", "none", {"qrcode"}, true},
       {"physics-siunitx", "latin-modern", "latin-modern-math", "none", {"physics", "siunitx"}, true},
       {"drawing-packages", "latin-modern", "latin-modern-math", "none",
        {"pgfplots", "tikz-cd", "circuitikz", "forest", "chemfig", "quantikz"}, true},
@@ -414,6 +415,20 @@ int main(int argc, char **argv) {
         return 1;
       }
     }
+    if (std::string(item.name) == "qrcode") {
+      const std::string preamble = read_text(profile / "preamble.tex");
+      const std::string warmup = read_text(profile / "warmup.tex");
+      const size_t xcolor = preamble.find("\\usepackage{xcolor}");
+      const size_t qrcode = preamble.find("\\usepackage{qrcode}");
+      const size_t preview = preamble.find("\\usepackage[active,tightpage]{preview}");
+      if (xcolor == std::string::npos || qrcode == std::string::npos || preview == std::string::npos ||
+          !(xcolor < qrcode && qrcode < preview) ||
+          warmup.find("\\qrcode[height=1cm]{StemTeX}") == std::string::npos) {
+        std::cerr << "QR code package profile output is incorrect\n";
+        fs::remove_all(root, ignored);
+        return 1;
+      }
+    }
     if (std::string(item.name) == "table-layout-packages") {
       const std::string preamble = read_text(profile / "preamble.tex");
       const std::string warmup = read_text(profile / "warmup.tex");
@@ -522,6 +537,8 @@ Item & Description & Value \\
 \item compact list
 \item controlled labels
 \end{enumerate})TEX";
+      } else if (std::string(item.name) == "qrcode") {
+        snippet = "\\qrcode[height=2cm]{https://www.ctan.org/pkg/qrcode}";
       } else if (std::string(item.name) == "user-preamble") {
         snippet = R"TEX(\StemTeXCustom{User preamble}:
 \href{https://example.com}{custom package and command})TEX";

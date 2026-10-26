@@ -359,6 +359,10 @@ Renderer GUI 将把它作为普通 Profile 使用。</translation>
       <translation>控制列表标签、间距、缩进与行内布局</translation>
     </message>
     <message>
+      <source>Generate QR codes from text or URLs</source>
+      <translation>将文本或网址生成为二维码</translation>
+    </message>
+    <message>
       <source>General-purpose native TeX vector graphics</source>
       <translation>通用原生 TeX 矢量绘图</translation>
     </message>

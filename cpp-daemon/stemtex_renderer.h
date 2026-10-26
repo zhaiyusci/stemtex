@@ -175,6 +175,14 @@ STEMTEX_API int stemtex_renderer_render_output(StemTeXRenderer *renderer, const 
 STEMTEX_API int stemtex_renderer_render_output_with_font_size(
     StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt, double font_size_pt,
     StemTeXOutputFormat format, StemTeXRenderOutputResult *result, StemTeXErrorCode *error_code, char **error_utf8);
+/* Fixed-width block with automatic content height and minimum first/last text
+ * line metrics from the selected font's strut. Display math keeps natural
+ * spacing. Retains the profile's preview border. Old render APIs are unchanged.
+ * Free result with stemtex_renderer_free_output_result, as for render_output.
+ */
+STEMTEX_API int stemtex_renderer_render_block(
+    StemTeXRenderer *renderer, const char *snippet_utf8, double width_pt, double font_size_pt,
+    StemTeXOutputFormat format, StemTeXRenderOutputResult *result, StemTeXErrorCode *error_code, char **error_utf8);
 STEMTEX_API int stemtex_renderer_render_output_bytes(StemTeXRenderer *renderer, const char *snippet_utf8,
                                                      double width_pt, StemTeXOutputFormat format,
                                                      StemTeXOutputBytes *bytes, StemTeXRenderOutputResult *result,

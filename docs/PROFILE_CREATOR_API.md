@@ -76,6 +76,7 @@ StemTeX profiles and an opt-in XeTeX-native drawing group:
 | `multirow` | tables | off | cells spanning multiple rows |
 | `adjustbox` | layout | off | requires `graphicx`; constrains and transforms boxed content |
 | `enumitem` | lists | off | configurable labels, spacing, and indentation |
+| `qrcode` | graphics | off | QR codes from text or URLs; requires `xcolor` |
 | `tikz` | graphics | off | requires `xcolor`; drawing foundation |
 | `pgfplots` | plots | off | requires `tikz`; emits `compat=newest` after loading |
 | `tikz-cd` | diagrams | off | requires `tikz` |

@@ -103,11 +103,67 @@ of this API.
 
 The `preview` package owns the tight page box. PDF output gets that box through
 xdvipdfmx's `pdf:pagesize` handling, and SVG output asks dvisvgm for
-`--bbox=papersize` so it uses the same XDV page-size special. The GUI may still
-crop the rendered bitmap for display convenience, but the emitted PDF and SVG
+`--bbox=papersize` so it uses the same XDV page-size special. The GUI uses the
+automatic-height block entry point and preserves the complete page in its
+preview, adding only the selected preview padding. The emitted PDF and SVG
 page boxes both include the configured preview border.
 
 ## Public API
+
+### Automatic-height blocks
+
+`stemtex_renderer_render_block` is an opt-in synchronous entry point for a
+fixed-width block whose height follows its contents. It accepts the source,
+width in TeX points, font size in TeX points, and PDF/SVG output format:
+
+```cpp
+StemTeXRenderOutputResult result{};
+StemTeXErrorCode code = STEMTEX_OK;
+char *error = nullptr;
+int ok = stemtex_renderer_render_block(
+    renderer, "First line\\\\Second line", 240.0, 12.0,
+    STEMTEX_OUTPUT_PDF, &result, &code, &error);
+// On success, result.output_path_utf8 names the automatically sized artifact.
+stemtex_renderer_free_output_result(&result);
+stemtex_renderer_free_string(error);
+```
+
+There is no height argument and no estimated line count. TeX typesets once at
+the requested width; preview derives the page height from the resulting box.
+For ordinary paragraphs, the first measurable box receives at least the
+selected base font's strut ascent, and the final paragraph line receives at
+least its strut depth. Taller formulas, images and boxes can grow naturally.
+The existing baseline distance and the profile's preview border are preserved.
+PDF and SVG use the same logical page dimensions (TeX points are converted to
+PDF/SVG points by the existing backends).
+
+A literal leading display (`$$`, `\\[`, or a standard display environment,
+after whitespace/comments) is typeset directly in the worker's minipage. An
+invisible width anchor avoids an initial indentation paragraph without adding
+a text-height strut to the formula. If prose follows, only its final text line
+is extended. Author display skips are not reset, and a trailing display does
+not acquire an extra blank paragraph.
+
+This is logical TeX layout, not a painted-bounds PDF repair pass: material
+deliberately drawn outside its TeX box can still exceed the page. Leading
+author glue or specials that hide the first measurable box retain their own
+geometry; macro expansion and custom catcodes are not interpreted by the
+leading-display detector. Host-specific frame padding and clipping remain
+the host's responsibility.
+
+All existing entry points, result structures, worker templates and profile
+files retain their previous behavior. Only this new entry point prepares the
+source with the block wrapper; no profile/global border adjustment is made.
+Ownership, error reporting and cancellation follow `render_output_with_font_size`.
+
+Build and run its geometry/recovery regression checks with:
+
+```powershell
+cmake --build build/stemtex-ninja --target stemtex-block-smoke
+& ./build/stemtex-ninja/cpp-daemon/stemtex-block-smoke.exe ./staging/runtime ./gui/profiles/unicodemath
+```
+
+### Configuration
 
 ```cpp
 typedef struct StemTeXConfig {

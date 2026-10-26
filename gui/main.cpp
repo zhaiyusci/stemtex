@@ -159,7 +159,11 @@ QVector<ProfileEntry> profileRoots(const QString &, QString *errorText) {
           break;
         }
       }
-      if (!duplicate) profiles.push_back(profile);
+      if (!duplicate) {
+        const QString bundledDefault = QDir::cleanPath(appDir.filePath("profiles/unicodemath"));
+        if (profile.path.compare(bundledDefault, Qt::CaseInsensitive) == 0) profiles.prepend(profile);
+        else profiles.push_back(profile);
+      }
     }
   }
   if (profiles.isEmpty() && errorText) {
@@ -240,32 +244,10 @@ QByteArray encodeSnippetForTeX(const QString &text, const QString &encoding) {
   return text.toUtf8();
 }
 
-QRect expandRectRightToWidth(QRect rect, int minWidth, const QRect &limit) {
-  if (rect.width() >= minWidth) return rect.intersected(limit);
-  rect.setRight(rect.left() + minWidth - 1);
-  return rect.intersected(limit);
-}
-
 struct CroppedPreview {
   QImage image;
   QSize displaySize;
 };
-
-QRect contentBounds(const QImage &rgba) {
-  QRect bounds;
-  const int threshold = 245;
-  for (int y = 0; y < rgba.height(); ++y) {
-    const QRgb *line = reinterpret_cast<const QRgb *>(rgba.constScanLine(y));
-    for (int x = 0; x < rgba.width(); ++x) {
-      QRgb pixel = line[x];
-      if (qAlpha(pixel) > 8 && (qRed(pixel) < threshold || qGreen(pixel) < threshold || qBlue(pixel) < threshold)) {
-        QRect pixel(x, y, 1, 1);
-        bounds = bounds.isNull() ? pixel : bounds.united(pixel);
-      }
-    }
-  }
-  return bounds;
-}
 
 QSize displaySizeForRenderedPixels(const QSize &pixels, double pixelsPerPoint) {
   constexpr double screenPixelsPerPoint = 96.0 / 72.0;
@@ -273,25 +255,21 @@ QSize displaySizeForRenderedPixels(const QSize &pixels, double pixelsPerPoint) {
                qMax(1, static_cast<int>(std::ceil(pixels.height() / pixelsPerPoint * screenPixelsPerPoint))));
 }
 
-CroppedPreview cropRenderedPreview(const QImage &source, double minWidthPt, int dpi, double paddingPt) {
+CroppedPreview padRenderedPreview(const QImage &source, int dpi, double paddingPt) {
   if (source.isNull()) return {};
   double pixelsPerPoint = qMax(1.0, static_cast<double>(dpi) / 72.0);
-  QImage rgba = source.convertToFormat(QImage::Format_ARGB32);
-  QRect bounds = contentBounds(rgba);
-  if (bounds.isNull()) return {rgba.convertToFormat(QImage::Format_RGB32), displaySizeForRenderedPixels(rgba.size(), pixelsPerPoint)};
-
+  // The page includes the block's logical first/last line metrics. Ink cropping
+  // would discard those metrics and make the preview shorter than the output.
   int pad = qMax(0, qRound(paddingPt * pixelsPerPoint));
-  bounds = expandRectRightToWidth(bounds, qMax(1, static_cast<int>(std::ceil(minWidthPt * pixelsPerPoint))), rgba.rect());
-  QImage cropped = rgba.copy(bounds);
-  QImage white(cropped.width() + pad * 2, cropped.height() + pad * 2, QImage::Format_RGB32);
+  QImage white(source.width() + pad * 2, source.height() + pad * 2, QImage::Format_RGB32);
   white.fill(Qt::white);
   QPainter painter(&white);
-  painter.drawImage(pad, pad, cropped);
+  painter.drawImage(pad, pad, source);
   painter.end();
   return {white, displaySizeForRenderedPixels(white.size(), pixelsPerPoint)};
 }
 
-CroppedPreview renderCroppedPdfPreview(const QString &pdfPath, double minWidthPt, int dpi, double paddingPt) {
+CroppedPreview renderPdfPreview(const QString &pdfPath, int dpi, double paddingPt) {
   QPdfDocument source;
   QPdfDocument::Error error = source.load(pdfPath);
   if (error != QPdfDocument::Error::None || source.pageCount() <= 0) return {};
@@ -301,7 +279,7 @@ CroppedPreview renderCroppedPdfPreview(const QString &pdfPath, double minWidthPt
   QSize imageSize(qMax(1, static_cast<int>(std::ceil(points.width() * pixelsPerPoint))),
                   qMax(1, static_cast<int>(std::ceil(points.height() * pixelsPerPoint))));
   QImage page = source.render(0, imageSize);
-  return cropRenderedPreview(page, minWidthPt, dpi, paddingPt);
+  return padRenderedPreview(page, dpi, paddingPt);
 }
 
 double svgLengthPt(const QString &svg, const QString &attribute) {
@@ -333,7 +311,7 @@ QSizeF svgPointSize(const QString &svgPath) {
   return widthPt > 0.0 && heightPt > 0.0 ? QSizeF(widthPt, heightPt) : QSizeF();
 }
 
-CroppedPreview renderSvgPreview(const QString &svgPath, double minWidthPt, int dpi, double paddingPt) {
+CroppedPreview renderSvgPreview(const QString &svgPath, int dpi, double paddingPt) {
   QSvgRenderer renderer(svgPath);
   if (!renderer.isValid()) return {};
 
@@ -358,7 +336,7 @@ CroppedPreview renderSvgPreview(const QString &svgPath, double minWidthPt, int d
   renderer.render(&painter, QRectF(0, 0, imageSize.width(), imageSize.height()));
   painter.end();
 
-  return cropRenderedPreview(image, minWidthPt, dpi, paddingPt);
+  return padRenderedPreview(image, dpi, paddingPt);
 }
 
 int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString &profileRoot, const QString &texmfRoot) {
@@ -409,7 +387,7 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
 
   QByteArray snippet = defaultSnippet().toUtf8();
   StemTeXRenderOutputResult pdfResult{};
-  int ok = stemtex_renderer_render_output(renderer, snippet.constData(), 360.5, STEMTEX_OUTPUT_PDF, &pdfResult,
+  int ok = stemtex_renderer_render_block(renderer, snippet.constData(), 360.5, kDefaultFontSizePt, STEMTEX_OUTPUT_PDF, &pdfResult,
                                           &code, &error);
   if (!ok) {
     fprintf(stderr, "PDF render failed code=%d: %s\n", (int)code, error ? error : "");
@@ -425,7 +403,7 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
   QPdfDocument::Error pdfError = pdf.load(pdfPath);
   int pages = pdf.pageCount();
   QSizeF pageSize = pages > 0 ? pdf.pagePointSize(0) : QSizeF();
-  CroppedPreview cropped = renderCroppedPdfPreview(pdfPath, 360.5, 300, 8.0);
+  CroppedPreview cropped = renderPdfPreview(pdfPath, 300, 8.0);
   printf("pdf=%s\nsummary=%s\nqtPdfError=%d pages=%d pagePoints=%.2fx%.2f croppedPixels=%dx%d\n",
          pdfPath.toUtf8().constData(), summary.toUtf8().constData(),
          (int)pdfError, pages, pageSize.width(), pageSize.height(), cropped.image.width(), cropped.image.height());
@@ -449,7 +427,7 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
   }
 
   StemTeXRenderOutputResult svgResult{};
-  ok = stemtex_renderer_render_output(renderer, snippet.constData(), 360.5, STEMTEX_OUTPUT_SVG, &svgResult, &code,
+  ok = stemtex_renderer_render_block(renderer, snippet.constData(), 360.5, kDefaultFontSizePt, STEMTEX_OUTPUT_SVG, &svgResult, &code,
                                       &error);
   if (!ok) {
     fprintf(stderr, "SVG render failed code=%d: %s\n", (int)code, error ? error : "");
@@ -462,7 +440,7 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
   QString svgPath = QString::fromUtf8(svgResult.output_path_utf8);
   QString svgSummary = QString::fromUtf8(svgResult.summary_json_utf8);
   QSizeF svgSize = svgPointSize(svgPath);
-  CroppedPreview svgPreview = renderSvgPreview(svgPath, 360.5, 300, 8.0);
+  CroppedPreview svgPreview = renderSvgPreview(svgPath, 300, 8.0);
   printf("svg=%s\nsummary=%s\nsvgPreviewPixels=%dx%d\n", svgPath.toUtf8().constData(),
          svgSummary.toUtf8().constData(), svgPreview.image.width(), svgPreview.image.height());
   logLine(QString("svg=%1").arg(svgPath));
@@ -490,6 +468,16 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
                 .arg(svgSize.height())
                 .arg(pageSize.width())
                 .arg(pageSize.height()));
+    stemtex_renderer_free_output_result(&svgResult);
+    stemtex_renderer_free_output_result(&pdfResult);
+    stemtex_renderer_destroy(renderer);
+    return 1;
+  }
+  const int expectedPreviewHeight = static_cast<int>(std::ceil(pageSize.height() * 300.0 / 72.0))
+                                    + 2 * qRound(8.0 * 300.0 / 72.0);
+  if (cropped.image.height() != expectedPreviewHeight) {
+    logLine(QString("preview lost logical page height: expected=%1 actual=%2")
+                .arg(expectedPreviewHeight).arg(cropped.image.height()));
     stemtex_renderer_free_output_result(&svgResult);
     stemtex_renderer_free_output_result(&pdfResult);
     stemtex_renderer_destroy(renderer);
@@ -1343,7 +1331,7 @@ class MainWindow : public QMainWindow {
         }
         if (renderer && !shuttingDown_.load() && generation == rendererGeneration_.load() &&
             uiRequestId == latestUiRequestId_.load()) {
-          ok = stemtex_renderer_render_output_with_font_size(renderer, text.constData(), width, fontSize, outputFormat,
+          ok = stemtex_renderer_render_block(renderer, text.constData(), width, fontSize, outputFormat,
                                                              &result, &code, &error);
         } else {
           code = STEMTEX_ERROR_CANCELLED;
@@ -1396,7 +1384,7 @@ class MainWindow : public QMainWindow {
   }
 
   void showCroppedPreview(const QString &pdfPath, double widthPt) {
-    CroppedPreview cropped = renderCroppedPdfPreview(pdfPath, widthPt, dpiSpin_->value(), paddingSpin_->value());
+    CroppedPreview cropped = renderPdfPreview(pdfPath, dpiSpin_->value(), paddingSpin_->value());
     if (cropped.image.isNull()) {
       lastPreview_ = QImage();
       lastPreviewDisplaySize_ = QSize();
@@ -1410,7 +1398,7 @@ class MainWindow : public QMainWindow {
   }
 
   void showSvgPreview(const QString &svgPath, double widthPt) {
-    CroppedPreview preview = renderSvgPreview(svgPath, widthPt, dpiSpin_->value(), paddingSpin_->value());
+    CroppedPreview preview = renderSvgPreview(svgPath, dpiSpin_->value(), paddingSpin_->value());
     if (preview.image.isNull()) {
       lastPreview_ = QImage();
       lastPreviewDisplaySize_ = QSize();
@@ -1493,7 +1481,7 @@ class MainWindow : public QMainWindow {
   void updateDetailsText() {
     if (!details_ || lastPreview_.isNull()) return;
     QString previewLabel = lastOutputFormat_.compare("svg", Qt::CaseInsensitive) == 0 ? "SVG preview raster"
-                                                                                      : "cropped PDF preview";
+                                                                                      : "PDF preview";
     QString outcomeText;
     if (lastOutcomeCode_ != STEMTEX_RENDER_OUTCOME_OK || lastIssueFlags_ != 0) {
       outcomeText = QString("outcome: %1, issue flags: %2, %3\n")

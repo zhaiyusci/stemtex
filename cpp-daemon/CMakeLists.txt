@@ -10,7 +10,8 @@ if(NOT STEMTEX_VERSION)
   message(FATAL_ERROR "VERSION is empty")
 endif()
 
-add_library(stemtex-renderer SHARED stemtex_renderer.cpp stemtex_renderer.h)
+add_library(stemtex-renderer SHARED stemtex_renderer.cpp stemtex_renderer.h
+  stemtex_block_layout.cpp stemtex_block_layout.h)
 target_compile_features(stemtex-renderer PRIVATE cxx_std_17)
 target_compile_definitions(stemtex-renderer PRIVATE
   WIN32_LEAN_AND_MEAN
@@ -30,8 +31,13 @@ add_executable(stemtex-renderer-smoke stemtex_renderer_smoke.cpp)
 target_compile_features(stemtex-renderer-smoke PRIVATE cxx_std_17)
 target_link_libraries(stemtex-renderer-smoke PRIVATE stemtex-renderer)
 
+add_executable(stemtex-block-smoke stemtex_block_smoke.cpp)
+target_compile_features(stemtex-block-smoke PRIVATE cxx_std_17)
+target_link_libraries(stemtex-block-smoke PRIVATE stemtex-renderer)
+
 if(MSVC)
   target_compile_options(stemtex-renderer PRIVATE /EHsc)
   target_compile_options(stemtex-worker-host PRIVATE /EHsc)
   target_compile_options(stemtex-renderer-smoke PRIVATE /EHsc)
+  target_compile_options(stemtex-block-smoke PRIVATE /EHsc)
 endif()

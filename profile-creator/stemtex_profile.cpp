@@ -147,6 +147,9 @@ A & flexible-width cell
 \end{enumerate}
 )TEX",
        {}, {}},
+      {"qrcode", "qrcode", "graphics", "Generate QR codes from text or URLs",
+       {RequirementRoot::TexmfDist, "tex/latex/qrcode/qrcode.sty"}, false,
+       PackagePhase::AfterFonts, 580, "", "", "\\qrcode[height=1cm]{StemTeX}\n", {"xcolor"}, {}},
       {"tikz", "TikZ", "graphics", "General-purpose native TeX vector graphics",
        {RequirementRoot::TexmfDist, "tex/latex/pgf/frontendlayer/tikz.sty"}, false,
        PackagePhase::AfterFonts, 600, "", "",

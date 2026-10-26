@@ -93,7 +93,7 @@ dependencies, options, and load order are owned by the Qt-free creator library.
 The current whitelist contains the original `mathtools`, `mhchem`, `physics`,
 `xcolor`, and `cancel` set; opt-in `siunitx`; opt-in document building blocks
 `graphicx`, `array`, `booktabs`, `tabularx`, `multirow`, `adjustbox`, and
-`enumitem`; plus opt-in TikZ drawing recipes for `tikz`, `pgfplots`, `tikz-cd`,
+`enumitem`; opt-in QR code generation with `qrcode`; plus opt-in TikZ drawing recipes for `tikz`, `pgfplots`, `tikz-cd`,
 `circuitikz`, `forest`, `chemfig`, and `quantikz`. All whitelist packages are
 off by default and must be selected by the user. The library generates `preamble.tex` and
 a selection-aware `warmup.tex` from the resulting plan. A separate Custom tab

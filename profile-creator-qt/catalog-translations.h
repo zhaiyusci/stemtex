@@ -17,6 +17,7 @@ namespace CreatorI18n {
     QT_TRANSLATE_NOOP("ProfileCatalog", "Table cells spanning multiple rows"),
     QT_TRANSLATE_NOOP("ProfileCatalog", "Resize, constrain, trim, frame, and align boxed content"),
     QT_TRANSLATE_NOOP("ProfileCatalog", "Control list labels, spacing, indentation, and inline layouts"),
+    QT_TRANSLATE_NOOP("ProfileCatalog", "Generate QR codes from text or URLs"),
     QT_TRANSLATE_NOOP("ProfileCatalog", "General-purpose native TeX vector graphics"),
     QT_TRANSLATE_NOOP("ProfileCatalog", "Two- and three-dimensional data and function plots"),
     QT_TRANSLATE_NOOP("ProfileCatalog", "Commutative diagrams with TikZ"),
