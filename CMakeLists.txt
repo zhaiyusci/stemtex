@@ -134,6 +134,8 @@ if(STEMTEX_INSTALL_TEXMF)
 
   set(STEMTEX_TEXMF_DIRS
     fonts/tfm/public/cm
+    fonts/tfm/public/amsfonts/cmextra
+    fonts/type1/public/amsfonts/cmextra
     fonts/tfm/public/latex-fonts
     tex/latex/amsmath
     tex/latex/base

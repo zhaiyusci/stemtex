@@ -51,8 +51,8 @@ Size render(StemTeXRenderer *renderer, const char *source, bool block = true,
 bool near(double a, double b) { return std::abs(a - b) < 0.03; }
 
 int main(int argc, char **argv) {
-  if (argc < 3 || argc > 4) {
-    std::cerr << "usage: stemtex-block-smoke RUNTIME PROFILE [TEXMF]\n";
+  if (argc < 3 || argc > 5 || (argc == 5 && std::string(argv[4]) != "--color")) {
+    std::cerr << "usage: stemtex-block-smoke RUNTIME PROFILE [TEXMF [--color]]\n";
     return 2;
   }
   try {
@@ -61,7 +61,7 @@ int main(int argc, char **argv) {
     config.repo_root_utf8 = repo.c_str();
     config.runtime_root_utf8 = argv[1];
     config.profile_root_utf8 = argv[2];
-    config.texmf_root_utf8 = argc == 4 ? argv[3] : argv[1];
+    config.texmf_root_utf8 = argc >= 4 ? argv[3] : argv[1];
     config.request_timeout_ms = 90000;
     config.xdvipdfmx_timeout_ms = 90000;
     StemTeXErrorCode code{};
@@ -75,6 +75,8 @@ int main(int argc, char **argv) {
     const auto legacy = render(renderer.get(), "a", false);
     const auto a = render(renderer.get(), "a");
     require(a.height > legacy.height, "lowercase text did not acquire full line metrics");
+    require(near(a.height, render(renderer.get(), "\\strut a\\strut", false).height),
+            "text bounds disagree with an actual strut-supported line");
     for (const char *source : {"A", "g", "$\\alpha$", "a% trailing comment", "a\r\n", "a\n\n"}) {
       require(near(render(renderer.get(), source).height, a.height), "first/last line metrics vary with glyphs or terminal whitespace");
     }
@@ -91,8 +93,12 @@ int main(int argc, char **argv) {
     require(render(renderer.get(), prose, true, 10, 90).height > render(renderer.get(), prose, true, 10, 300).height,
             "height did not grow when text wrapped");
     const auto display = render(renderer.get(), "\\[\\alpha\\]");
-    const auto natural = render(renderer.get(), "\\hrule width\\hsize height0pt depth0pt\\relax\\noindent%\n\\[\\alpha\\]", false);
+    // Compare with an ordinary TeX box, retaining native display skips.
+    const auto natural = render(renderer.get(), "\\vbox{\\noindent\\[\\alpha\\]\\par}", false);
     require(near(display.height, natural.height), "display acquired a synthetic full text line");
+    require(near(display.width, a.width), "a display did not retain the requested block width");
+    require(near(render(renderer.get(), "\\def\\MyDisplay{\\[\\alpha\\]}\\MyDisplay").height, display.height),
+            "macro-defined display differs from literal display");
     require(near(render(renderer.get(), "% comment\n\\[\\alpha\\]").height, display.height), "leading comments changed display detection");
     require(near(render(renderer.get(), "$$\\alpha$$").height, display.height), "dollar display acquired extra space");
     require(near(render(renderer.get(), "\\begin% comment\n{equation*}\\alpha\\end{equation*}").height, display.height),
@@ -101,6 +107,33 @@ int main(int argc, char **argv) {
                  render(renderer.get(), "\\[\\alpha\\]g").height), "prose after display has incomplete final depth");
     const auto displayPdf = render(renderer.get(), "\\[\\alpha\\]", true, 10, 180, STEMTEX_OUTPUT_PDF);
     require(near(displayPdf.height, display.height), "display PDF and SVG heights disagree");
+    require(near(render(renderer.get(), "\\[\\alpha\\]\n\n").height, display.height),
+            "terminal blank lines hid the display glue");
+    const std::string reportedFormula = R"TEX($$
+\sum_{A} \boldsymbol{X}_{A} \times \frac{\partial E_{P S}}{\partial \boldsymbol{X}_{A}}+\sum_{A} \boldsymbol{P}_{A} \times \frac{\partial E_{P S}}{\partial \boldsymbol{P}_{A}}=0 . %{\color{red}s}
+$$)TEX";
+    const auto formula = render(renderer.get(), reportedFormula.c_str(), true, 10, 360);
+    require(near(render(renderer.get(), reportedFormula.c_str(), true, 10, 360, STEMTEX_OUTPUT_PDF).height, formula.height),
+            "reported formula PDF/SVG heights disagree");
+    const auto explicitSpace = render(renderer.get(), (reportedFormula + "\\par\\vspace{20pt}").c_str(), true, 10, 360);
+    require(explicitSpace.height > formula.height + 19, "explicit terminal vertical space was removed");
+    if (argc == 5) {
+      for (const char *source : {"\\color{red}a", "{\\color{red}g}", "\\textcolor{red}{a}"}) {
+        require(near(render(renderer.get(), source).height, a.height), "colored text lost full line metrics");
+      }
+      const std::string prefix = "f\n\nStemTeX Renderer GUI: inline mathematics $E=mc^2$.\n\n"
+          "\\[\\int_0^1 x^2\\,dx=\\frac{1}{3},\\quad\\langle\\psi,\\phi ";
+      const std::string openColor = prefix + "\\color{red}\\rangle\\]\n\nf";
+      const std::string groupedColor = prefix + "{\\color{red}\\rangle}\\]\n\nf";
+      const auto nativeOpen = render(renderer.get(), openColor.c_str(), false);
+      const auto nativeGrouped = render(renderer.get(), groupedColor.c_str(), false);
+      const auto blockOpen = render(renderer.get(), openColor.c_str());
+      const auto blockGrouped = render(renderer.get(), groupedColor.c_str());
+      require(near(blockOpen.height - blockGrouped.height, nativeOpen.height - nativeGrouped.height),
+              "block altered native color-group spacing");
+      require(near(render(renderer.get(), openColor.c_str(), true, 10, 180, STEMTEX_OUTPUT_PDF).height,
+                   blockOpen.height), "colored block PDF/SVG heights disagree");
+    }
     render(renderer.get(), "Text before display.\\[\\alpha\\]");
     render(renderer.get(), "\\begin{itemize}\\item First\\item Last\\end{itemize}");
     render(renderer.get(), "\\begin{tabular}{ll}a&b\\\\c&d\\end{tabular}");

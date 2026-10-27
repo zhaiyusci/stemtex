@@ -137,18 +137,20 @@ The existing baseline distance and the profile's preview border are preserved.
 PDF and SVG use the same logical page dimensions (TeX points are converted to
 PDF/SVG points by the existing backends).
 
-A literal leading display (`$$`, `\\[`, or a standard display environment,
-after whitespace/comments) is typeset directly in the worker's minipage. An
-invisible width anchor avoids an initial indentation paragraph without adding
-a text-height strut to the formula. If prose follows, only its final text line
-is extended. Author display skips are not reset, and a trailing display does
-not acquire an extra blank paragraph.
+All content uses one box wrapper, with the requested width and an initially
+unindented paragraph. No display environment names or source macros are parsed.
+Strut dimensions support measurable boundary lines without inserting additional
+text paragraphs before or after a display. Native display skips and explicit
+vertical space are retained, including terminal display spacing inside the box.
+Color declarations and their grouping retain native LaTeX behavior: the wrapper
+does not intercept color restoration or remove the empty paragraph that an
+ungrouped display color declaration can produce.
 
 This is logical TeX layout, not a painted-bounds PDF repair pass: material
 deliberately drawn outside its TeX box can still exceed the page. Leading
 author glue or specials that hide the first measurable box retain their own
-geometry; macro expansion and custom catcodes are not interpreted by the
-leading-display detector. Host-specific frame padding and clipping remain
+geometry. Macro expansion and custom catcodes are left to TeX.
+Host-specific frame padding and clipping remain
 the host's responsibility.
 
 All existing entry points, result structures, worker templates and profile
@@ -162,6 +164,10 @@ Build and run its geometry/recovery regression checks with:
 cmake --build build/stemtex-ninja --target stemtex-block-smoke
 & ./build/stemtex-ninja/cpp-daemon/stemtex-block-smoke.exe ./staging/runtime ./gui/profiles/unicodemath
 ```
+
+For a profile that loads `xcolor`, pass the external TeX tree as the third
+argument and `--color` as the fourth to additionally check colored line metrics
+and preservation of native color-group spacing.
 
 ### Configuration
 
