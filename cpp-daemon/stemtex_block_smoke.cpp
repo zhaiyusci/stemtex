@@ -50,6 +50,13 @@ Size render(StemTeXRenderer *renderer, const char *source, bool block = true,
 
 bool near(double a, double b) { return std::abs(a - b) < 0.03; }
 
+// An uncropped reference with actual standalone support lines, rendered through
+// the unchanged legacy API. At 10 pt each support line occupies 12 TeX points.
+std::string supported_source(const std::string &source) {
+  return "\\vbox{\\noindent\\strut\\par\\begingroup\\noindent%\n" + source +
+         "%\n\\par\\endgroup\\noindent\\strut\\par}";
+}
+
 int main(int argc, char **argv) {
   if (argc < 3 || argc > 5 || (argc == 5 && std::string(argv[4]) != "--color")) {
     std::cerr << "usage: stemtex-block-smoke RUNTIME PROFILE [TEXMF [--color]]\n";
@@ -93,9 +100,9 @@ int main(int argc, char **argv) {
     require(render(renderer.get(), prose, true, 10, 90).height > render(renderer.get(), prose, true, 10, 300).height,
             "height did not grow when text wrapped");
     const auto display = render(renderer.get(), "\\[\\alpha\\]");
-    // Compare with an ordinary TeX box, retaining native display skips.
-    const auto natural = render(renderer.get(), "\\vbox{\\noindent\\[\\alpha\\]\\par}", false);
-    require(near(display.height, natural.height), "display acquired a synthetic full text line");
+    const double supportPairHeight = 24 * 72 / 72.27;
+    const auto natural = render(renderer.get(), supported_source("\\[\\alpha\\]").c_str(), false);
+    require(near(display.height, natural.height - supportPairHeight), "support lines were not cropped by their exact heights");
     require(near(display.width, a.width), "a display did not retain the requested block width");
     require(near(render(renderer.get(), "\\def\\MyDisplay{\\[\\alpha\\]}\\MyDisplay").height, display.height),
             "macro-defined display differs from literal display");
@@ -117,6 +124,19 @@ $$)TEX";
             "reported formula PDF/SVG heights disagree");
     const auto explicitSpace = render(renderer.get(), (reportedFormula + "\\par\\vspace{20pt}").c_str(), true, 10, 360);
     require(explicitSpace.height > formula.height + 19, "explicit terminal vertical space was removed");
+    const std::string zeroSkips = "\\abovedisplayskip=0pt\\belowdisplayskip=0pt"
+        "\\abovedisplayshortskip=0pt\\belowdisplayshortskip=0pt ";
+    const std::string splitFormula = R"TEX(\begin{equation*}\begin{split}
+\sum_A X_A &= \frac{\partial E}{\partial X_A}\\
+&=\left\langle\Psi\right|\frac{\partial\hat H}{\partial X_A}\left|\Psi\right\rangle
+\end{split}\end{equation*})TEX";
+    const auto supportedSplit = render(renderer.get(), (zeroSkips + splitFormula).c_str());
+    require(near(supportedSplit.height,
+                 render(renderer.get(), supported_source(zeroSkips + splitFormula).c_str(), false).height - supportPairHeight),
+            "split crop differs from exactly two support lines");
+    require(near(supportedSplit.height,
+                 render(renderer.get(), (zeroSkips + splitFormula).c_str(), true, 10, 180, STEMTEX_OUTPUT_PDF).height),
+            "supported split PDF/SVG heights disagree");
     if (argc == 5) {
       for (const char *source : {"\\color{red}a", "{\\color{red}g}", "\\textcolor{red}{a}"}) {
         require(near(render(renderer.get(), source).height, a.height), "colored text lost full line metrics");
@@ -125,8 +145,8 @@ $$)TEX";
           "\\[\\int_0^1 x^2\\,dx=\\frac{1}{3},\\quad\\langle\\psi,\\phi ";
       const std::string openColor = prefix + "\\color{red}\\rangle\\]\n\nf";
       const std::string groupedColor = prefix + "{\\color{red}\\rangle}\\]\n\nf";
-      const auto nativeOpen = render(renderer.get(), openColor.c_str(), false);
-      const auto nativeGrouped = render(renderer.get(), groupedColor.c_str(), false);
+      const auto nativeOpen = render(renderer.get(), supported_source(openColor).c_str(), false);
+      const auto nativeGrouped = render(renderer.get(), supported_source(groupedColor).c_str(), false);
       const auto blockOpen = render(renderer.get(), openColor.c_str());
       const auto blockGrouped = render(renderer.get(), groupedColor.c_str());
       require(near(blockOpen.height - blockGrouped.height, nativeOpen.height - nativeGrouped.height),

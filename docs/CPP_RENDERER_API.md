@@ -130,26 +130,27 @@ stemtex_renderer_free_string(error);
 
 There is no height argument and no estimated line count. TeX typesets once at
 the requested width; preview derives the page height from the resulting box.
-For ordinary paragraphs, the first measurable box receives at least the
-selected base font's strut ascent, and the final paragraph line receives at
-least its strut depth. Taller formulas, images and boxes can grow naturally.
+Two real, separate `\strut`-only lines are inserted before and after the content.
+They participate in paragraph and display layout. After typesetting, exactly
+one strut height plus depth is removed at each edge. Taller content can grow
+naturally. No painted-bounds analysis or extra crop margin is applied.
 The existing baseline distance and the profile's preview border are preserved.
 PDF and SVG use the same logical page dimensions (TeX points are converted to
 PDF/SVG points by the existing backends).
 
 All content uses one box wrapper, with the requested width and an initially
 unindented paragraph. No display environment names or source macros are parsed.
-Strut dimensions support measurable boundary lines without inserting additional
-text paragraphs before or after a display. Native display skips and explicit
-vertical space are retained, including terminal display spacing inside the box.
+The support lines use the selected base font. Content is locally grouped so
+font changes in the source do not change the final support line's dimensions.
+The source is preserved, including terminal whitespace and explicit commands.
+Native display skips and explicit vertical space are retained.
 Color declarations and their grouping retain native LaTeX behavior: the wrapper
 does not intercept color restoration or remove the empty paragraph that an
 ungrouped display color declaration can produce.
 
 This is logical TeX layout, not a painted-bounds PDF repair pass: material
-deliberately drawn outside its TeX box can still exceed the page. Leading
-author glue or specials that hide the first measurable box retain their own
-geometry. Macro expansion and custom catcodes are left to TeX.
+deliberately drawn far outside its TeX box can still exceed the page.
+Macro expansion and custom catcodes are left to TeX.
 Host-specific frame padding and clipping remain
 the host's responsibility.
 
