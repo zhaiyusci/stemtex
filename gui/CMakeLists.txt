@@ -7,9 +7,39 @@ set(CMAKE_AUTOUIC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Pdf Svg LinguistTools)
 
+# The experimental Lua backend is local to the GUI; the public XeTeX C ABI is
+# unchanged. It uses patched LuaHBTeX and the same resident converter DLLs as
+# XeTeX, with packages and fonts from a full TeX Live tree.
+add_library(stemtex-luatex-gui-backend STATIC luatex_backend.cpp luatex_backend.h)
+target_compile_features(stemtex-luatex-gui-backend PUBLIC cxx_std_17)
+target_link_libraries(stemtex-luatex-gui-backend PUBLIC Qt6::Core)
+target_include_directories(stemtex-luatex-gui-backend PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_executable(stemtex-luatex-gui-smoke EXCLUDE_FROM_ALL luatex_backend_smoke.cpp)
+target_link_libraries(stemtex-luatex-gui-smoke PRIVATE
+  stemtex-luatex-gui-backend Qt6::Gui Qt6::Pdf Qt6::Svg)
+set_target_properties(stemtex-luatex-gui-smoke PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+if(MSVC)
+  target_compile_options(stemtex-luatex-gui-backend PRIVATE /utf-8)
+  target_compile_options(stemtex-luatex-gui-smoke PRIVATE /utf-8)
+endif()
+
 if(NOT TARGET stemtex-renderer)
   add_subdirectory(../cpp-daemon cpp-daemon-build)
 endif()
+
+target_link_libraries(stemtex-luatex-gui-smoke PRIVATE stemtex-renderer)
+add_custom_target(stemtex-luatex-gui-smoke-copy-renderer
+  COMMAND ${CMAKE_COMMAND} -E make_directory
+          $<TARGET_FILE_DIR:stemtex-luatex-gui-smoke>
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          $<TARGET_FILE:stemtex-renderer>
+          $<TARGET_FILE_DIR:stemtex-luatex-gui-smoke>
+  DEPENDS stemtex-renderer
+  VERBATIM
+)
+add_dependencies(stemtex-luatex-gui-smoke stemtex-luatex-gui-smoke-copy-renderer)
 
 set(QSCINTILLA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../third_party")
 set(QSCINTILLA_INCLUDE_DIR "${QSCINTILLA_ROOT}/qscintilla-src/src")
@@ -25,9 +55,10 @@ add_executable(stemtex-renderer-gui WIN32
   stemtex-renderer-gui.rc
 )
 target_compile_features(stemtex-renderer-gui PRIVATE cxx_std_17)
-target_link_libraries(stemtex-renderer-gui PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Pdf Qt6::Svg stemtex-renderer "${QSCINTILLA_LIBRARY}")
+target_link_libraries(stemtex-renderer-gui PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Pdf Qt6::Svg stemtex-renderer stemtex-luatex-gui-backend "${QSCINTILLA_LIBRARY}")
 target_include_directories(stemtex-renderer-gui PRIVATE ../cpp-daemon "${QSCINTILLA_INCLUDE_DIR}")
 if(MSVC)
+  target_compile_options(stemtex-renderer-gui PRIVATE /utf-8)
   target_link_libraries(stemtex-renderer-gui PRIVATE delayimp)
   target_link_options(stemtex-renderer-gui PRIVATE "/DELAYLOAD:stemtex-renderer.dll")
 endif()

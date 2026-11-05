@@ -1,0 +1,120 @@
+--- a/texk/web2c/luatexdir/dvi/dvigen.c
++++ b/texk/web2c/luatexdir/dvi/dvigen.c
+@@ -22,6 +22,7 @@
+ */
+ 
+ #include "ptexlib.h"
++#include <limits.h>
+ 
+ #undef write_dvi
+ 
+@@ -702,11 +703,12 @@
+ */
+ 
+ int dvi_buf_size = 800;     /* size of the output buffer; must be a multiple of 8 */
++int dvi_flush_on_shipout = 0; /* opt-in visibility of complete pages to a live reader */
+ eight_bits *dvi_buf;        /* buffer for \.{DVI} output */
+ static int half_buf = 0;    /* half of |dvi_buf_size| */
+ static int dvi_limit = 0;   /* end of the current half buffer */
+ static int dvi_ptr = 0;     /* the next available buffer address */
+-static int dvi_offset = 0;  /* |dvi_buf_size| times the number of times the output buffer has been fully emptied */
++static int dvi_offset = 0;  /* absolute offset of dvi_buf[0], also advanced by page flushes */
+ static int dvi_gone = 0;    /* the number of bytes already output to |dvi_file| */
+ static int dvi_write_gid = 0; /* indicate writing \.{GID} codes for |OpenType| fonts */
+ 
+@@ -830,10 +832,8 @@
+ The actual output of |dvi_buf[a..b]| to |dvi_file| is performed by calling
+ |write_dvi(a,b)|. For best results, this procedure should be optimized to run as
+ fast as possible on each particular system, since it is part of \TeX's inner
+-loop. It is safe to assume that |a| and |b+1| will both be multiples of 4 when
+-|write_dvi(a,b)| is called; therefore it is possible on many machines to use
+-efficient methods to pack four bytes per word and to output an array of words
+-with one system call.
++loop. A page flush may end on any byte, so |a| and |b+1| need not be multiples
++of 4. The byte-oriented implementation also handles those partial buffers.
+ 
+ */
+ 
+@@ -1501,12 +1501,30 @@
+ 
+ void dvi_end_page(PDF pdf)
+ {
+-    (void) pdf;
+     if (check_dvi_total_pages && total_pages>=65536){
+       print_err(" ==> Fatal error occurred: total_pages>=65536, bad output DVI file produced!");
+       jump_out();
+     }
+     dvi_out(eop);
++    if (dvi_flush_on_shipout) {
++        int end;
++        if (dvi_offset > INT_MAX - dvi_ptr)
++            normal_error("dvi backend", "DVI page offset exceeds the signed 32-bit limit");
++        end = dvi_offset + dvi_ptr;
++        /* The second half is older when the first half has wrapped around. */
++        if (dvi_limit == half_buf)
++            write_dvi(half_buf, dvi_buf_size - 1);
++        if (dvi_ptr > 0)
++            write_dvi(0, dvi_ptr - 1);
++        /* Preserve absolute offsets, but start the next page in an empty buffer.
++           All page-list movement records have been pruned before this callback. */
++        dvi_offset = end;
++        dvi_gone = end;
++        dvi_ptr = 0;
++        dvi_limit = dvi_buf_size;
++        if (fflush(pdf->file) != 0 || ferror(pdf->file))
++            normal_error("dvi backend", "failed to flush DVI output");
++    }
+ }
+ 
+ /*tex
+@@ -1576,18 +1594,16 @@
+         dvi_four(last_bop);
+         dvi_out(id_byte);
+         /*tex the number of 223's */
+-#ifndef IPC
+-        k = 4 + ((dvi_buf_size - dvi_ptr) % 4);
+-#else
+-        k = 7 - ((3 + dvi_offset + dvi_ptr) % 4);
+-#endif
++        /* Page flushes can leave dvi_offset unaligned. Pad the whole file,
++           with at least four signature bytes, rather than the current buffer. */
++        k = 4 + ((4 - ((dvi_offset + dvi_ptr) & 3)) & 3);
+         while (k > 0) {
+             dvi_out(223);
+             decr(k);
+         }
+         /*tex
+             Here is how we clean out the buffer when \TeX\ is all through;
+-            |dvi_ptr| will be a multiple of~4.
++            The complete file length, not necessarily |dvi_ptr|, is a multiple of~4.
+         */
+         if (dvi_limit == half_buf)
+             write_dvi(half_buf, dvi_buf_size - 1);
+--- a/texk/web2c/luatexdir/dvi/dvigen.h
++++ b/texk/web2c/luatexdir/dvi/dvigen.h
+@@ -24,6 +24,7 @@
+ /* todo: move initialization from mainbody to ensure_open */
+ 
+ extern int dvi_buf_size;
++extern int dvi_flush_on_shipout;
+ extern eight_bits *dvi_buf;     /* 0 is unused */
+ 
+ /*tex Housekeeping.  */
+--- a/texk/web2c/luatexdir/lua/luainit.c
++++ b/texk/web2c/luatexdir/lua/luainit.c
+@@ -92,6 +92,7 @@
+     "   --output-comment=STRING       use STRING for DVI file comment instead of date (no effect for PDF)",
+     "   --output-directory=DIR        use existing DIR as the directory to write files in",
+     "   --output-format=FORMAT        use FORMAT for job output; FORMAT is 'dvi' or 'pdf'",
++    "   --flush-output-on-shipout     flush complete DVI pages after each shipout",
+     "   --progname=STRING             set the program name to STRING",
+     "   --recorder                    enable filename recorder",
+     "   --safer                       disable easily exploitable lua commands",
+@@ -288,6 +289,7 @@
+     {"output-directory", 1, 0, 0},
+     {"draftmode", 0, 0, 0},
+     {"output-format", 1, 0, 0},
++    {"flush-output-on-shipout", 0, &dvi_flush_on_shipout, 1},
+     {"shell-escape", 0, &shellenabledp, 1},
+     {"no-shell-escape", 0, &shellenabledp, -1},
+     {"enable-write18", 0, &shellenabledp, 1},

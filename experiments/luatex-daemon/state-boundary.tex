@@ -1,0 +1,10 @@
+% Run from the repository root with stock LuaTeX or LuaHBTeX.
+% This probe intentionally ships no pages and never dereferences a freed node.
+\directlua{dofile('experiments/luatex-daemon/state-boundary.lua')}
+\count100=7
+\begingroup
+  \count100=9
+  \directlua{stemtex_probe.mutate()}
+\endgroup
+\directlua{stemtex_probe.check()}
+\end

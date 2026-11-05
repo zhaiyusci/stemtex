@@ -1,5 +1,24 @@
 # Patches
 
+## LuaTeX / LuaHBTeX DVI page flushing
+
+`luatex-dvi-flush-on-shipout.patch` targets the TeX Live source layout and was
+developed against LuaTeX 1.26.2, development revision 7748. It adds the opt-in
+`--flush-output-on-shipout` switch. In DVI mode, each completed shipout drains
+both the engine's DVI buffer and the C file stream. The stream stays open and
+keeps its absolute offsets; the host can copy complete pages and add a DVI
+postamble to the copy. The patch also fixes final-file padding for the now
+possibly unaligned buffer base. It does not add checkpoints or change the
+native PDF backend.
+
+The native Windows experimental build is separate from the released XeTeX
+runtime. Use `scripts/build-luahbtex-mingw.ps1` to prepare and build a patched
+copy of a TeX Live source tree, then `scripts/test-luatex-dvi-flush.ps1` to
+generate compatible local formats and run live-output regression checks.
+The source tree and installed TeX Live are not modified.
+
+## XeTeX generated-C runtime switches
+
 For the runtime behavior implemented around this generated-C patch, see
 [`docs/WINDOWS_XETEX_BUILD_NOTES.md`](../docs/WINDOWS_XETEX_BUILD_NOTES.md) and
 [`docs/XETEX_CHECKPOINT_RECOVERY.md`](../docs/XETEX_CHECKPOINT_RECOVERY.md).

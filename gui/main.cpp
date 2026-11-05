@@ -1,4 +1,5 @@
 #include "stemtex_renderer.h"
+#include "luatex_backend.h"
 
 #include <QApplication>
 #include <QByteArray>
@@ -19,6 +20,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QMainWindow>
+#include <QMessageBox>
 #include <QMetaObject>
 #include <QPdfDocument>
 #include <QProcess>
@@ -99,6 +101,40 @@ QString normalizeTexmfRoot(const QString &path) {
 
 QString defaultTexmfRoot(const QString &runtimeRoot) {
   return normalizeTexmfRoot(runtimeRoot);
+}
+
+bool hasLuaLatexTree(const QString &root) {
+  return QFileInfo::exists(QDir(root).filePath("texmf-dist/tex/latex/tex-ini-files/lualatex.ini")) &&
+         QFileInfo::exists(QDir(root).filePath("texmf-dist/web2c/texmf.cnf"));
+}
+
+QString findLuaTexmfRoot(const QString &preferred) {
+  if (hasLuaLatexTree(preferred)) return preferred;
+  QStringList candidates{qEnvironmentVariable("TEXMFROOT")};
+  const QString lualatex = QStandardPaths::findExecutable("lualatex.exe");
+  if (!lualatex.isEmpty()) candidates << QDir(QFileInfo(lualatex).absolutePath()).filePath("../..");
+  QDir texlive("C:/texlive");
+  for (const QFileInfo &entry : texlive.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name | QDir::Reversed))
+    candidates << entry.absoluteFilePath();
+  for (const QString &candidate : candidates)
+    if (!candidate.isEmpty() && hasLuaLatexTree(candidate)) return normalizeTexmfRoot(candidate);
+  return preferred;
+}
+
+QString findLuaEngine(const QString &repoRoot, const QString &runtimeRoot, const QString &explicitPath) {
+  if (!explicitPath.isEmpty()) return QFileInfo(explicitPath).absoluteFilePath();
+  const QStringList candidates{
+      QDir(runtimeRoot).filePath("bin/luatex/luahbtex.exe"),
+      QDir(repoRoot).filePath("build/luahbtex-mingw/bin/luahbtex.exe")};
+  for (const QString &candidate : candidates)
+    if (QFileInfo::exists(candidate)) return QDir::cleanPath(candidate);
+  return QDir::cleanPath(candidates.first());
+}
+
+QString luaProfileRoot(const QString &repoRoot) {
+  const QString bundled = QDir(QCoreApplication::applicationDirPath()).filePath("profiles/unicodemath");
+  if (QFileInfo::exists(QDir(bundled).filePath("preamble.tex"))) return QDir::cleanPath(bundled);
+  return QDir(repoRoot).filePath("gui/profiles/unicodemath");
 }
 
 QString userProfilesRoot() {
@@ -197,31 +233,35 @@ QString oneLineJsonMetric(const QString &summaryJson) {
   QJsonObject obj = doc.object();
   QString format = obj.value("outputFormat").toString("pdf").toUpper();
   QString backend = obj.value("backend").toString(format == "SVG" ? "dvisvgmdaemon" : "xdvipdfmxdaemon");
-  int totalMs = obj.value("requestToOutputMs").toInt(obj.value("requestToPdfMs").toInt());
+  int totalMs = obj.value("requestToOutputMs").toInt(
+      obj.value(format == "SVG" ? "requestToSvgMs" : "requestToPdfMs").toInt());
   int convertMs = format == "SVG" ? obj.value("dvisvgmMs").toInt(obj.value("convertMs").toInt())
                                   : obj.value("xdvipdfmxMs").toInt(obj.value("convertMs").toInt());
-  int finalizeXdvMs = obj.value("finalizeXdvMs").toInt();
+  int finalizeMs = obj.value("finalizeDviMs").toInt(obj.value("finalizeXdvMs").toInt());
   int outputBytes = obj.value("outputBytes").toInt(format == "SVG" ? obj.value("svgBytes").toInt()
                                                                     : obj.value("pdfBytes").toInt());
-  int xetexNoPdfMs = qMax(0, totalMs - finalizeXdvMs - convertMs);
+  int typesetMs = obj.value("typesetMs").toInt(qMax(0, totalMs - finalizeMs - convertMs));
+  QString typesetLabel = obj.value("engine").toString() == "LuaHBTeX"
+                            ? "LuaHBTeX --output-format=dvi" : "XeTeX --no-pdf";
   double widthPt = obj.value("widthPt").toDouble();
   double fontSizePt = obj.value("fontSizePt").toDouble(kDefaultFontSizePt);
   return QString("Output: %1 via %2\n"
-                 "XeTeX --no-pdf time: %3 ms\n"
+                 "%11 time: %3 ms\n"
                  "conversion time: %4 ms\n"
                  "Total time until %1 complete: %5 ms\n"
                  "Layout: %6 pt width, %7 pt font\n"
                  "%1: %8 bytes, spare: %9/%10")
       .arg(format)
       .arg(backend)
-      .arg(xetexNoPdfMs)
+      .arg(typesetMs)
       .arg(convertMs)
       .arg(totalMs)
       .arg(widthPt, 0, 'f', 1)
       .arg(fontSizePt, 0, 'f', 1)
       .arg(outputBytes)
       .arg(obj.value("spareReady").toInt())
-      .arg(obj.value("spareTarget").toInt());
+      .arg(obj.value("spareTarget").toInt())
+      .arg(typesetLabel);
 }
 
 QByteArray encodeWithCodePage(const QString &text, UINT codePage) {
@@ -508,10 +548,14 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
 
 class MainWindow : public QMainWindow {
  public:
-  MainWindow(QString repoRoot, QString runtimeRoot, QString texmfRoot)
+  MainWindow(QString repoRoot, QString runtimeRoot, QString texmfRoot,
+             bool startWithLua = false, QString luaEnginePath = QString())
       : repo_root_(std::move(repoRoot)),
         runtime_root_(normalizeRuntimeRoot(runtimeRoot)),
-        texmf_root_(texmfRoot.isEmpty() ? defaultTexmfRoot(runtime_root_) : normalizeTexmfRoot(texmfRoot)) {
+        texmf_root_(texmfRoot.isEmpty() ? defaultTexmfRoot(runtime_root_) : normalizeTexmfRoot(texmfRoot)),
+        lua_engine_path_(findLuaEngine(repo_root_, runtime_root_, luaEnginePath)) {
+    xetex_texmf_root_ = texmf_root_;
+    if (startWithLua) texmf_root_ = findLuaTexmfRoot(texmf_root_);
     setWindowTitle("StemTeX Renderer GUI");
     resize(1180, 760);
 
@@ -526,6 +570,13 @@ class MainWindow : public QMainWindow {
     layoutRow->setSpacing(8);
     auto *runtimeRow = new QHBoxLayout();
     runtimeRow->setSpacing(8);
+    auto *actionRow = new QHBoxLayout();
+    actionRow->setSpacing(8);
+    engineCombo_ = new QComboBox(central);
+    engineCombo_->addItem("XeTeX", false);
+    engineCombo_->addItem(QStringLiteral("LuaHBTeX（实验）"), true);
+    engineCombo_->setCurrentIndex(startWithLua ? 1 : 0);
+    engineCombo_->setToolTip(QStringLiteral("LuaHBTeX 使用逐页 DVI 输出；TeX 错误后重启进程恢复。"));
     auto *widthLabel = new QLabel("版心宽度", central);
     widthSlider_ = new QSlider(Qt::Horizontal, central);
     widthSlider_->setRange(widthToSliderValue(30.0), widthToSliderValue(450.0));
@@ -588,6 +639,8 @@ class MainWindow : public QMainWindow {
     layoutRow->addWidget(paddingSpin_);
     toolbar->addLayout(layoutRow);
 
+    runtimeRow->addWidget(new QLabel(QStringLiteral("引擎"), central));
+    runtimeRow->addWidget(engineCombo_);
     runtimeRow->addWidget(new QLabel("TeXLive", central));
     runtimeRow->addWidget(texmfLabel_);
     runtimeRow->addWidget(texmfButton_);
@@ -595,16 +648,18 @@ class MainWindow : public QMainWindow {
     runtimeRow->addWidget(profileCombo_);
     runtimeRow->addWidget(profileCreatorButton_);
     runtimeRow->addWidget(clearXdvButton_);
-    runtimeRow->addWidget(new QLabel("输入编码", central));
-    runtimeRow->addWidget(encodingCombo_);
-    runtimeRow->addWidget(new QLabel("Output", central));
-    runtimeRow->addWidget(outputCombo_);
     runtimeRow->addStretch(1);
-    runtimeRow->addWidget(renderButton_);
-    runtimeRow->addWidget(copyImageButton_);
-    runtimeRow->addWidget(saveImageButton_);
-    runtimeRow->addWidget(openButton_);
     toolbar->addLayout(runtimeRow);
+    actionRow->addWidget(new QLabel("输入编码", central));
+    actionRow->addWidget(encodingCombo_);
+    actionRow->addWidget(new QLabel("Output", central));
+    actionRow->addWidget(outputCombo_);
+    actionRow->addStretch(1);
+    actionRow->addWidget(renderButton_);
+    actionRow->addWidget(copyImageButton_);
+    actionRow->addWidget(saveImageButton_);
+    actionRow->addWidget(openButton_);
+    toolbar->addLayout(actionRow);
     rootLayout->addLayout(toolbar);
 
     auto *splitter = new QSplitter(Qt::Horizontal, central);
@@ -716,6 +771,7 @@ class MainWindow : public QMainWindow {
       scheduleAutoRender();
     });
     connect(texmfButton_, &QPushButton::clicked, this, [this]() { chooseTexmfRoot(); });
+    connect(engineCombo_, &QComboBox::currentIndexChanged, this, [this](int) { switchEngine(); });
     connect(profileCombo_, &QComboBox::currentIndexChanged, this, [this](int) { switchProfile(); });
     connect(profileCreatorButton_, &QPushButton::clicked, this, [this]() { openProfileCreator(); });
     connect(clearXdvButton_, &QPushButton::clicked, this, [this]() { clearProfileXdvCache(); });
@@ -779,7 +835,7 @@ class MainWindow : public QMainWindow {
       case STEMTEX_STARTUP_LOADING_PROFILE:
         return QStringLiteral("Profile/转换器");
       case STEMTEX_STARTUP_STARTING_WORKER:
-        return QStringLiteral("XeTeX worker");
+        return usingLua() ? QStringLiteral("LuaHBTeX worker") : QStringLiteral("XeTeX worker");
       case STEMTEX_STARTUP_READY:
       default:
         return QStringLiteral("完成");
@@ -927,10 +983,16 @@ class MainWindow : public QMainWindow {
   }
 
   void setUiReady(bool ready) {
-    bool hasProfile = profileCombo_ && profileCombo_->currentIndex() >= 0;
+    bool lua = usingLua();
+    bool hasProfile = lua || (profileCombo_ && profileCombo_->currentIndex() >= 0);
     renderButton_->setEnabled(hasProfile);
-    if (clearXdvButton_) clearXdvButton_->setEnabled(ready && hasProfile);
-    if (profileCombo_) profileCombo_->setEnabled(profileCombo_->count() > 0);
+    if (clearXdvButton_) clearXdvButton_->setEnabled(!lua && ready && hasProfile);
+    if (profileCombo_) profileCombo_->setEnabled(!lua && profileCombo_->count() > 0);
+    if (profileCreatorButton_) profileCreatorButton_->setEnabled(!lua && !profileCreatorProcess_);
+    if (encodingCombo_) {
+      if (lua) encodingCombo_->setCurrentText("UTF-8");
+      encodingCombo_->setEnabled(!lua);
+    }
     if (outputCombo_) outputCombo_->setEnabled(true);
   }
 
@@ -941,7 +1003,7 @@ class MainWindow : public QMainWindow {
 
   void scheduleAutoRender() {
     if (shuttingDown_.load() || !autoRenderTimer_) return;
-    if (!profileCombo_ || profileCombo_->currentIndex() < 0) return;
+    if (!usingLua() && (!profileCombo_ || profileCombo_->currentIndex() < 0)) return;
     if (!hasRenderer()) {
       pendingStartupRender_ = true;
       return;
@@ -972,9 +1034,11 @@ class MainWindow : public QMainWindow {
     spareReady_ = qMax(0, spareReady);
     spareTarget_ = qMax(0, spareTarget);
     QString engineText = primaryOk ? "primary ready" : (startupTimingActive_ ? "renderer initializing" : "primary unavailable");
+    if (usingLua() && luaRendering_.load()) engineText = "rendering";
+    engineText.prepend(usingLua() ? "LuaHBTeX · " : "XeTeX · ");
     QString text = lightHtml(primaryOk);
     text += QString(" <span style=\"color:#333;\">%1</span>").arg(engineText);
-    text += QString(" <span style=\"color:#777;\">spares %1/%2</span>").arg(spareReady_).arg(spareTarget_);
+    if (!usingLua()) text += QString(" <span style=\"color:#777;\">spares %1/%2</span>").arg(spareReady_).arg(spareTarget_);
     text += " ";
     for (int i = 0; i < spareTarget_; ++i) {
       text += lightHtml(i < spareReady_);
@@ -1015,6 +1079,16 @@ class MainWindow : public QMainWindow {
 
   void refreshEngineStatus(const QString &overrideNote = QString()) {
     std::lock_guard<std::mutex> lock(rendererMutex_);
+    if (usingLua()) {
+      const bool ready = luaRenderer_ && luaRenderer_->ready();
+      QString note = overrideNote;
+      if (note.isEmpty() && luaRenderer_)
+        note = QString("PID %1 · %2").arg(luaRenderer_->workerPid())
+                   .arg(luaRendering_.load() ? QStringLiteral("正在排版/转换")
+                                            : (ready ? QStringLiteral("等待输入") : QStringLiteral("下次排版将重启")));
+      updateEngineStatus(ready, 0, 0, note);
+      return;
+    }
     if (!renderer_) return;
     StemTeXEngineSnapshot snapshot{};
     if (!stemtex_renderer_engine_snapshot(renderer_, &snapshot)) return;
@@ -1023,25 +1097,37 @@ class MainWindow : public QMainWindow {
   }
 
   QString selectedProfileRoot() const {
+    if (usingLua()) return luaProfileRoot(repo_root_);
     return profileCombo_ && profileCombo_->currentIndex() >= 0 ? profileCombo_->currentData().toString() : QString();
   }
 
+  bool usingLua() const {
+    return engineCombo_ && engineCombo_->currentData().toBool();
+  }
+
   void reloadProfiles() {
-    QString oldProfile = selectedProfileRoot();
+    QString oldProfile = profileCombo_->currentData().toString();
     QString profileError;
     bool oldSignals = profileCombo_->blockSignals(true);
     profileCombo_->clear();
     for (const ProfileEntry &profile : profileRoots(repo_root_, &profileError)) {
       profileCombo_->addItem(profile.name, profile.path);
     }
-    int oldIndex = profileCombo_->findData(oldProfile);
+    int oldIndex = profileCombo_->findData(usingLua() ? luaProfileRoot(repo_root_) : oldProfile);
+    if (usingLua() && oldIndex < 0) {
+      profileCombo_->addItem("unicode-math (LuaHBTeX)", luaProfileRoot(repo_root_));
+      oldIndex = profileCombo_->count() - 1;
+    }
     if (oldIndex >= 0) profileCombo_->setCurrentIndex(oldIndex);
     profileCombo_->blockSignals(oldSignals);
-    profileCombo_->setToolTip(profileCombo_->count() == 0 ? profileError : QString());
+    profileCombo_->setToolTip(usingLua()
+        ? QStringLiteral("LuaHBTeX 实验模式固定使用内置 unicode-math Profile")
+        : (profileCombo_->count() == 0 ? profileError : QString()));
     QString shown = QFileInfo(texmf_root_).fileName();
     if (shown.isEmpty()) shown = texmf_root_;
     texmfLabel_->setText(shown);
-    texmfLabel_->setToolTip(QString("TeXLive package/font tree: %1\nDaemon runtime: %2").arg(texmf_root_, runtime_root_));
+    texmfLabel_->setToolTip(QString("TeXLive package/font tree: %1\nDaemon runtime: %2").arg(texmf_root_, runtime_root_) +
+        (usingLua() ? QString("\nLuaHBTeX: %1").arg(lua_engine_path_) : QString()));
   }
 
   void openProfileCreator() {
@@ -1056,14 +1142,14 @@ class MainWindow : public QMainWindow {
     profileCreatorProcess_ = new QProcess(this);
     profileCreatorButton_->setEnabled(false);
     connect(profileCreatorProcess_, &QProcess::finished, this, [this](int, QProcess::ExitStatus) {
-      profileCreatorButton_->setEnabled(true);
+      profileCreatorButton_->setEnabled(!usingLua());
       reloadProfiles();
       updateEngineStatus(hasRenderer(), spareReady_, spareTarget_, QString("Profile list refreshed"));
       profileCreatorProcess_->deleteLater();
       profileCreatorProcess_ = nullptr;
     });
     connect(profileCreatorProcess_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
-      profileCreatorButton_->setEnabled(true);
+      profileCreatorButton_->setEnabled(!usingLua());
       updateEngineStatus(hasRenderer(), spareReady_, spareTarget_,
                          QString("Cannot start Profile Creator: %1").arg(profileCreatorProcess_->errorString()));
     });
@@ -1136,10 +1222,21 @@ class MainWindow : public QMainWindow {
     cancelStartupProgress();
     pendingStartupRender_ = false;
     StemTeXRenderer *renderer = nullptr;
+    std::shared_ptr<stemtex::LuaBackend> lua;
     {
       std::lock_guard<std::mutex> lock(rendererMutex_);
       renderer = renderer_;
       renderer_ = nullptr;
+      lua = std::move(luaRenderer_);
+      luaInstalled_.store(false);
+    }
+    if (lua) {
+      lua->cancel();
+      // QProcess and its owner are always destroyed on the background thread.
+      postBackground([lua = std::move(lua)]() mutable {
+        std::lock_guard<std::mutex> lifecycleLock(gRendererLifecycleMutex);
+        lua.reset();
+      });
     }
     if (asyncDestroy) {
       destroyRendererLater(renderer);
@@ -1169,7 +1266,7 @@ class MainWindow : public QMainWindow {
 
   bool hasRenderer() const {
     std::lock_guard<std::mutex> lock(rendererMutex_);
-    return renderer_ != nullptr;
+    return usingLua() ? luaInstalled_.load() && luaRenderer_ != nullptr : renderer_ != nullptr;
   }
 
   StemTeXRenderer *currentRenderer() const {
@@ -1194,9 +1291,32 @@ class MainWindow : public QMainWindow {
     stopRenderer();
     clearProfileOutput();
     texmf_root_ = normalized;
+    if (usingLua()) lua_texmf_root_ = normalized;
+    else xetex_texmf_root_ = normalized;
     reloadProfiles();
     setUiReady(true);
     updateEngineStatus(false, 0, spareTarget_, QString("texmf: %1").arg(texmf_root_));
+    initializeRenderer(true);
+  }
+
+  void switchEngine() {
+    stopRenderer(true);
+    clearProfileOutput();
+    if (usingLua()) {
+      xetex_texmf_root_ = texmf_root_;
+      xetex_profile_root_ = profileCombo_->currentData().toString();
+      texmf_root_ = lua_texmf_root_.isEmpty() ? findLuaTexmfRoot(texmf_root_) : lua_texmf_root_;
+    } else {
+      lua_texmf_root_ = texmf_root_;
+      texmf_root_ = xetex_texmf_root_;
+    }
+    reloadProfiles();
+    if (!usingLua() && !xetex_profile_root_.isEmpty()) {
+      QSignalBlocker blocker(profileCombo_);
+      const int index = profileCombo_->findData(xetex_profile_root_);
+      if (index >= 0) profileCombo_->setCurrentIndex(index);
+    }
+    setUiReady(false);
     initializeRenderer(true);
   }
 
@@ -1213,6 +1333,10 @@ class MainWindow : public QMainWindow {
   }
 
   void initializeRenderer(bool renderAfterInit) {
+    if (usingLua()) {
+      initializeLuaRenderer(renderAfterInit);
+      return;
+    }
     QString profileRoot = selectedProfileRoot();
     if (profileRoot.isEmpty()) {
       updateEngineStatus(false, 0, spareTarget_, "choose a profile");
@@ -1252,7 +1376,10 @@ class MainWindow : public QMainWindow {
         stale = shuttingDown_.load() || generation != rendererGeneration_.load();
         if (renderer && !stale) {
           std::lock_guard<std::mutex> rendererLock(rendererMutex_);
-          if (!renderer_) {
+          // Switching engines can happen between the first generation check
+          // and this lock. Never install a worker for the previous selection.
+          stale = shuttingDown_.load() || generation != rendererGeneration_.load();
+          if (!stale && !renderer_) {
             renderer_ = renderer;
             renderer = nullptr;
             installed = true;
@@ -1295,14 +1422,83 @@ class MainWindow : public QMainWindow {
     });
   }
 
+  void initializeLuaRenderer(bool renderAfterInit) {
+    setUiReady(false);
+    beginStartupProgress();
+    luaInstalled_.store(false);
+    const uint64_t generation = ++rendererGeneration_;
+    stemtex::LuaBackendConfig config;
+    config.repoRoot = repo_root_;
+    config.runtimeRoot = runtime_root_;
+    config.texmfRoot = texmf_root_;
+    config.enginePath = lua_engine_path_;
+    config.profileRoot = luaProfileRoot(repo_root_);
+    config.stateRoot = QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation))
+                           .filePath("StemTeX/lua-gui");
+    postBackground([this, config, generation, renderAfterInit]() {
+      if (shuttingDown_.load() || generation != rendererGeneration_.load()) return;
+      std::lock_guard<std::mutex> lifecycleLock(gRendererLifecycleMutex);
+      auto renderer = std::make_shared<stemtex::LuaBackend>(config);
+      {
+        std::lock_guard<std::mutex> lock(rendererMutex_);
+        if (shuttingDown_.load() || generation != rendererGeneration_.load()) return;
+        luaRenderer_ = renderer;
+      }
+      QString error;
+      const bool initialized = renderer->initialize([this, generation](const QString &message) {
+        QMetaObject::invokeMethod(this, [this, generation, message]() {
+          if (shuttingDown_.load() || generation != rendererGeneration_.load()) return;
+          showStartupProgress(STEMTEX_STARTUP_STARTING_WORKER, message);
+          details_->setPlainText(message);
+        }, Qt::QueuedConnection);
+      }, &error);
+      bool stale = false;
+      {
+        std::lock_guard<std::mutex> lock(rendererMutex_);
+        stale = shuttingDown_.load() || generation != rendererGeneration_.load();
+        if (!initialized || stale) {
+          if (luaRenderer_ == renderer) luaRenderer_.reset();
+        } else {
+          luaInstalled_.store(true);
+        }
+      }
+      if (stale) return;
+      QMetaObject::invokeMethod(this, [this, initialized, error, generation, renderAfterInit]() {
+        if (shuttingDown_.load() || generation != rendererGeneration_.load()) return;
+        finishStartupProgress();
+        setUiReady(true);
+        if (!initialized) {
+          pendingStartupRender_ = false;
+          updateEngineStatus(false, 0, 0, QStringLiteral("LuaHBTeX 启动失败"));
+          details_->setPlainText(error + QStringLiteral("\n实验模式需要完整 TeX Live；可通过 TeXLive... 选择目录。"));
+          return;
+        }
+        refreshEngineStatus();
+        enginePollTimer_->start();
+        if (pendingStartupRender_ || renderAfterInit) {
+          pendingStartupRender_ = false;
+          scheduleAutoRender();
+        }
+      }, Qt::QueuedConnection);
+    });
+  }
+
   void renderSnippet() {
     if (autoRenderTimer_) autoRenderTimer_->stop();
     uint64_t generation = rendererGeneration_.load();
     if (!hasRenderer()) {
+      if (usingLua() && !startupTimingActive_) {
+        initializeLuaRenderer(true);
+        return;
+      }
       pendingStartupRender_ = true;
       updateEngineStatus(false, spareReady_, spareTarget_, "renderer is still starting; this request will run after init");
       setPreviewImageReady(false);
       details_->clear();
+      return;
+    }
+    if (usingLua()) {
+      renderLuaSnippet();
       return;
     }
     QString snippet = editor_->text();
@@ -1381,6 +1577,56 @@ class MainWindow : public QMainWindow {
         updateDetailsText();
       }, Qt::QueuedConnection);
     })) {}
+  }
+
+  void renderLuaSnippet() {
+    const uint64_t generation = rendererGeneration_.load();
+    const uint64_t requestId = ++latestUiRequestId_;
+    const QByteArray snippet = editor_->text().toUtf8();
+    const double width = widthSpin_->value();
+    const double fontSize = fontSizeSpin_->value();
+    const bool svg = selectedOutputFormat() == STEMTEX_OUTPUT_SVG;
+    setPreviewImageReady(false);
+    details_->clear();
+    refreshEngineStatus(QStringLiteral("正在提交排版"));
+    postBackground([this, generation, requestId, snippet, width, fontSize, svg]() {
+      if (shuttingDown_.load() || generation != rendererGeneration_.load() ||
+          requestId != latestUiRequestId_.load()) return;
+      std::lock_guard<std::mutex> lifecycleLock(gRendererLifecycleMutex);
+      std::shared_ptr<stemtex::LuaBackend> renderer;
+      {
+        std::lock_guard<std::mutex> lock(rendererMutex_);
+        renderer = luaRenderer_;
+      }
+      if (!renderer) return;
+      luaRendering_.store(true);
+      const stemtex::LuaRenderResult result = renderer->render(snippet, width, fontSize, svg);
+      luaRendering_.store(false);
+      QMetaObject::invokeMethod(this, [this, generation, requestId, result, width]() {
+        if (shuttingDown_.load() || generation != rendererGeneration_.load() ||
+            requestId != latestUiRequestId_.load()) return;
+        if (!result.ok) {
+          setPreviewWarning(STEMTEX_RENDER_OUTCOME_TEX_SNIPPET, 0, result.error);
+          refreshEngineStatus(QStringLiteral("排版失败；可修正后继续"));
+          details_->setPlainText(result.error);
+          return;
+        }
+        refreshEngineStatus();
+        lastOutputPath_ = result.outputPath;
+        lastOutputFormat_ = result.outputFormat;
+        updateOpenButtonText();
+        openButton_->setEnabled(!lastOutputPath_.isEmpty());
+        showOutputPreview(result.outputPath, result.outputFormat, width);
+        setPreviewImageReady(!lastPreview_.isNull());
+        lastOutcomeCode_ = result.recoverable ? STEMTEX_RENDER_OUTCOME_RECOVERABLE : STEMTEX_RENDER_OUTCOME_OK;
+        lastIssueFlags_ = result.issueFlags;
+        lastOutcomeMessage_ = result.outcomeMessage;
+        setPreviewWarning(lastOutcomeCode_, lastIssueFlags_, lastOutcomeMessage_);
+        lastSummaryText_ = QString("renderer request: %1\n").arg(requestId) + oneLineJsonMetric(result.summary) +
+                           "\n\n" + result.summary;
+        updateDetailsText();
+      }, Qt::QueuedConnection);
+    });
   }
 
   void showCroppedPreview(const QString &pdfPath, double widthPt) {
@@ -1514,7 +1760,14 @@ class MainWindow : public QMainWindow {
   QString repo_root_;
   QString runtime_root_;
   QString texmf_root_;
+  QString xetex_texmf_root_;
+  QString lua_texmf_root_;
+  QString xetex_profile_root_;
+  QString lua_engine_path_;
   StemTeXRenderer *renderer_ = nullptr;
+  std::shared_ptr<stemtex::LuaBackend> luaRenderer_;
+  std::atomic<bool> luaInstalled_{false};
+  std::atomic<bool> luaRendering_{false};
   mutable std::mutex rendererMutex_;
   std::atomic<bool> shuttingDown_{false};
   std::atomic<uint64_t> rendererGeneration_{0};
@@ -1529,6 +1782,7 @@ class MainWindow : public QMainWindow {
   QLabel *texmfLabel_ = nullptr;
   QPushButton *texmfButton_ = nullptr;
   QComboBox *profileCombo_ = nullptr;
+  QComboBox *engineCombo_ = nullptr;
   QPushButton *profileCreatorButton_ = nullptr;
   QPushButton *clearXdvButton_ = nullptr;
   QProcess *profileCreatorProcess_ = nullptr;
@@ -1582,6 +1836,29 @@ int main(int argc, char **argv) {
   QStringList args = app.arguments();
   bool smoke = args.contains("--smoke");
   args.removeAll("--smoke");
+  QString optionError;
+  auto takeOption = [&args, &optionError](const QString &name) {
+    const int index = args.indexOf(name);
+    if (index < 0) return QString();
+    if (index + 1 >= args.size() || args.at(index + 1).startsWith("--")) {
+      optionError = QString("Missing value for %1").arg(name);
+      return QString();
+    }
+    const QString value = args.at(index + 1);
+    args.removeAt(index + 1);
+    args.removeAt(index);
+    return value;
+  };
+  const QString engine = takeOption("--engine").toLower();
+  const QString luaEnginePath = takeOption("--luatex-engine");
+  const bool useLua = engine == "luatex" || engine == "luahbtex";
+  if (!engine.isEmpty() && engine != "xetex" && !useLua)
+    optionError = "--engine expects xetex or luatex";
+  if (smoke && useLua) optionError = "--smoke exercises XeTeX. Use stemtex-luatex-gui-smoke for LuaHBTeX.";
+  if (!optionError.isEmpty()) {
+    QMessageBox::critical(nullptr, "StemTeX", optionError);
+    return 2;
+  }
   QString repoRoot = args.size() > 1 ? args.at(1) : appResourceRoot();
   QString runtimeRoot = args.size() > 2 ? args.at(2) : defaultRuntimeRoot();
   configureRendererDllSearch(runtimeRoot);
@@ -1590,7 +1867,7 @@ int main(int argc, char **argv) {
   QString profileRoot = args.size() > 3 ? args.at(3) : (profiles.isEmpty() ? QString() : profiles.first().path);
   QString texmfRoot = args.size() > 4 ? args.at(4) : defaultTexmfRoot(runtimeRoot);
   if (smoke) return runSmoke(repoRoot, runtimeRoot, profileRoot, texmfRoot);
-  MainWindow w(repoRoot, runtimeRoot, texmfRoot);
+  MainWindow w(repoRoot, runtimeRoot, texmfRoot, useLua, luaEnginePath);
   w.show();
   return app.exec();
 }

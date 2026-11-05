@@ -54,6 +54,59 @@ cmake --build --preset renderer-ninja-release
 
 These are CMake-driven application builds and do not require bash.
 
+## Experimental LuaHBTeX GUI
+
+The GUI also offers `LuaHBTeX (experimental)`. This backend requires the patched
+engine from `scripts/build-luahbtex-mingw.ps1` and a **full** TeX Live tree with
+LuaLaTeX packages and fonts. It uses StemTeX's resident `dvipdfmxdaemon.dll`
+and `dvisvgmdaemon.dll`, shared with the XeTeX path. The trimmed bundled tree is insufficient.
+It currently uses the bundled Latin Modern / `unicode-math` profile and UTF-8.
+The public renderer C ABI continues to use XeTeX.
+
+After building the patched engine, configure and stage the GUI in an x64
+Visual Studio environment:
+
+```powershell
+cmake --preset ninja-msvc -DSTEMTEX_INSTALL_EXPERIMENTAL_LUATEX=ON
+cmake --build build/stemtex-ninja --target stage stemtex-luatex-gui-smoke
+.\scripts\start-luatex-gui.ps1 -TexLiveRoot C:\texlive\2026
+```
+
+The staging option defaults to OFF, so normal packages do not acquire an
+experimental engine implicitly. When enabled, it copies `luahbtex.exe` and its
+DLLs from `STEMTEX_LUAHBTEX_DIR` to `runtime/bin/luatex`. The launch script can
+also find the local build without staging that engine. Use `-EnginePath` or
+`-StageRoot` to override those paths.
+
+Alternatively, select the engine in the GUI toolbar, or launch with
+`--engine luatex --luatex-engine C:/path/to/luahbtex.exe` before the existing
+positional arguments (`repo runtime profile texmf`). The GUI initializes a
+matching LuaLaTeX format and font cache outside the TeX Live installation;
+first startup takes longer than subsequent starts.
+
+Successful edits share one LuaHBTeX process. Each shipout flushes DVI; the GUI
+finalizes a copy and converts the newest page to PDF or SVG. Both converter DLLs
+are initialized once and reused until the backend is closed; requests do not
+start converter processes. The GUI displays typesetting, conversion, and total
+time in the same format as XeTeX. Malformed TeX causes worker replacement;
+there is no Lua/TeX checkpoint recovery. Custom profiles and CJK recipes are
+outside this experiment.
+
+The optional backend smoke target checks actual PDF/SVG output, continued
+same-process rendering, recovery after malformed input, cancellation, and
+XeTeX/LuaHBTeX transitions in one host process, including environment restoration.
+An optional sixth path argument selects a runtime other than `staging/runtime`.
+Run it with the Qt `bin` directory on `PATH`:
+
+```powershell
+$repo = (Get-Location).Path
+$env:PATH = "C:\Qt\6.11.1\msvc2022_64\bin;$env:PATH"
+& .\build\stemtex-ninja\tests\stemtex-luatex-gui-smoke.exe `
+  $repo C:\texlive\2026 `
+  "$repo\build\luahbtex-mingw\bin\luahbtex.exe" `
+  "$repo\gui\profiles\unicodemath" "$repo\build\luatex-gui-smoke"
+```
+
 ## Create A Staging Tree
 
 For the repository's normal developer stage:

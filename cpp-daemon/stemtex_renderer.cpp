@@ -2229,8 +2229,10 @@ struct StemTeXRenderer {
       for (auto &slot : spares) {
         if (slot) slot->child.stop();
       }
-      converter.reset();
+      // SVG was initialized after PDF and holds the inner environment scope.
+      // Unwind in reverse order so switching backends restores the host values.
       svg_converter.reset();
+      converter.reset();
       std::error_code ec;
       fs::remove_all(cfg.state_root, ec);
     } catch (...) {

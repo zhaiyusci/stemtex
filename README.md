@@ -65,6 +65,13 @@ tree. Rebuilding those lower-level engine inputs is a separate maintainer task.
 The complete prerequisites, staging validation, and installer procedure are in
 [Building and packaging](docs/BUILDING_AND_PACKAGING.md).
 
+The GUI also has an experimental LuaHBTeX selector for testing live DVI output.
+After building the patched Lua engine and staging the updated GUI, run
+`scripts/start-luatex-gui.ps1`. It requires a full TeX Live installation and
+currently supports the bundled Latin Modern text/math profile. See the
+[experimental GUI setup](docs/BUILDING_AND_PACKAGING.md#experimental-luahbtex-gui)
+for build commands and the separate error-recovery behavior.
+
 ## Bundled Profiles
 
 A profile directory contains `preamble.tex` and `warmup.tex`. The host or GUI

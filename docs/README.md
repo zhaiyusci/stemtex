@@ -14,6 +14,7 @@ contracts, distribution policy, and engine internals.
 | Check implemented and pending behavior | [Renderer status](CPP_RENDERER_API_STATUS.md) | Current contract and remaining product work. |
 | Understand the installed tree or external TeX Live support | [Distribution options](DISTRIBUTION_OPTIONS.md) | Components, paths, writable data, cache policy, and compatibility boundary. |
 | Understand bad-snippet recovery | [XeTeX checkpoint recovery](XETEX_CHECKPOINT_RECOVERY.md) | In-process snapshot model, protocol, limits, and regression tests. |
+| Evaluate a LuaTeX/LuaHBTeX worker | [LuaTeX daemon feasibility](LUATEX_DAEMON_FEASIBILITY.md) | Research findings, DVI flush implementation, experimental GUI, and recovery limits; not the public renderer backend. |
 | Rebuild patched engine binaries | [Windows engine rebuild notes](WINDOWS_XETEX_BUILD_NOTES.md) | Generated-C XeTeX, converters, and static dependency maintenance. |
 
 ## Sources Of Truth

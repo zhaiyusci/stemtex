@@ -10,6 +10,9 @@ endif()
 
 option(STEMTEX_BUILD_GUI "Build the Qt StemTeX Renderer GUI" ON)
 option(STEMTEX_INSTALL_TEXMF "Install the bundled trimmed texmf-dist tree" ON)
+option(STEMTEX_INSTALL_EXPERIMENTAL_LUATEX "Stage the locally built experimental LuaHBTeX engine" OFF)
+set(STEMTEX_LUAHBTEX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/luahbtex-mingw/bin"
+    CACHE PATH "Directory containing patched luahbtex.exe and its runtime DLLs")
 
 find_package(Python3 COMPONENTS Interpreter)
 
@@ -42,6 +45,13 @@ install(FILES
   DESTINATION runtime/sdk/include
 )
 install(FILES VERSION DESTINATION runtime)
+if(STEMTEX_INSTALL_EXPERIMENTAL_LUATEX)
+  if(NOT EXISTS "${STEMTEX_LUAHBTEX_DIR}/luahbtex.exe")
+    message(FATAL_ERROR "Build the patched LuaHBTeX first: scripts/build-luahbtex-mingw.ps1")
+  endif()
+  install(DIRECTORY "${STEMTEX_LUAHBTEX_DIR}/" DESTINATION runtime/bin/luatex
+    FILES_MATCHING PATTERN "luahbtex.exe" PATTERN "*.dll" PATTERN "build-manifest.json")
+endif()
 install(FILES gui/assets/stemtex-renderer-gui.ico DESTINATION runtime RENAME StemTeX.ico)
 install(FILES
   "${STEMTEX_STANDALONE_DIR}/xetexdaemon.exe"

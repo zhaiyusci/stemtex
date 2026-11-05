@@ -1,0 +1,42 @@
+% Stock LuaLaTeX/LuaHBTeX probe: one preamble, repeated in-memory math layout.
+% This does not implement error recovery or per-request output publication.
+\documentclass{article}
+\usepackage[
+  mathrm=sym,
+  mathit=sym,
+  mathbf=sym,
+  mathsf=sym,
+  mathtt=sym
+]{unicode-math}
+\setmainfont{lmroman10-regular.otf}
+\setmathfont{latinmodern-math.otf}
+\directlua{stemtex_preamble_loads = (stemtex_preamble_loads or 0) + 1}
+\newbox\probebox
+\newdimen\probewidth
+\newdimen\probeheight
+\newdimen\probedepth
+\def\layoutprobe{%
+  \setbox\probebox=\hbox{$\displaystyle
+    \mathrm{ABC}+\mathit{xyz}+\mathbf{v}+\mathsf{T}+\mathtt{M}
+    +\frac{1}{1+x^2}+\sum_{k=1}^{n}k^2$}%
+}
+\begin{document}
+\layoutprobe
+\probewidth=\wd\probebox
+\probeheight=\ht\probebox
+\probedepth=\dp\probebox
+\typeout{STEMTEX_WARM_BASELINE: \the\probewidth,\the\probeheight,\the\probedepth}
+\newcount\probeiteration
+\probeiteration=0
+\loop
+  \advance\probeiteration by 1
+  \begingroup
+    \layoutprobe
+    \ifdim\wd\probebox=\probewidth\else\errmessage{Width drift}\fi
+    \ifdim\ht\probebox=\probeheight\else\errmessage{Height drift}\fi
+    \ifdim\dp\probebox=\probedepth\else\errmessage{Depth drift}\fi
+  \endgroup
+\ifnum\probeiteration<20\repeat
+\directlua{assert(stemtex_preamble_loads == 1)}
+\typeout{STEMTEX_WARM_PASS: 20 repeated layouts; one preamble; no pages shipped}
+\end{document}
