@@ -613,6 +613,10 @@ void vf_close_all_fonts(void)
   }
   if (vf_fonts != NULL)
     RELEASE (vf_fonts);
+  /* A subsequent daemon document must start with an empty VF cache. */
+  vf_fonts = NULL;
+  num_vf_fonts = 0;
+  max_vf_fonts = 0;
   return;
 }
 #if defined(LIBDPX)

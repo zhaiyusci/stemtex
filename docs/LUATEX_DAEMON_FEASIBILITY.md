@@ -344,7 +344,7 @@ LuaLaTeX 需要可写的正常 luaotfload 缓存；`--no-shell-escape` 不是完
 | `--flush-output-on-shipout` 与 `finalize_xdv_body()` | XeTeX 输出 XDV 后由宿主补 postamble；Lua 原生 PDF 的字体资源、页面树、对象表和 xref 需要自己的完成机制。 |
 | 热 `xdvipdfmx` / `dvisvgm` | 进程或库常驻的思路可保留；输入格式和资源契约要重新验证，不能把 LuaTeX DVI 当成 XDV。 |
 | `--no-font-cache-refresh` | 这是 XeTeX/Fontconfig 的优化；Lua 路线应分别管理 luaotfload 字体数据库、磁盘缓存和进程内字体对象。 |
-| profile creator 的 `xeCJK` 配方 | 需要 LuaLaTeX 专用配方，例如经过验证的 LuaTeX-ja/CTEX 组合；字体选择 UI 可复用，生成的 TeX 配置不能原样照用。 |
+| profile creator 的 `xeCJK` 配方 | Lua DVI 改用 `luatexko` 简体中文模式；CTEX 的 LuaTeX-ja 后端明确拒绝 DVI。字体选择 UI 可复用，生成的 TeX 配置需分支。 |
 | renderer C ABI、worker supervisor、超时/取消机制 | 可作为外层架构复用；输出实现和恢复能力必须如实区分，不能把进程重建报告为 checkpoint 恢复。 |
 
 上游 `pdf/pdfgen.c` 的 `pdf_end_page()` 在页面流结束时触发
@@ -453,17 +453,54 @@ GUI 工具栏增加 `LuaHBTeX (experimental)`，也可用
 `scripts/start-luatex-gui.ps1` 直接启动。构建、staging 和 smoke 命令统一放在
 [构建文档](BUILDING_AND_PACKAGING.md#experimental-luahbtex-gui)。
 
-这条路径使用原生 Qt/C++ 宿主，无 Python 运行时依赖。每次成功排版保留同一
+这条路径使用原生 Qt/C++ 宿主，无 Python 运行时依赖。同一输出驱动的成功排版复用
 LuaHBTeX PID，从累计 DVI 解析完整页并为副本补尾，再用 StemTeX runtime 中的
 `dvipdfmxdaemon.dll` / `dvisvgmdaemon.dll` 转换最新页。两个转换器与 XeTeX 路径
 使用相同的热启动 ABI，在后端初始化时加载，连续请求复用，不再逐次启动转换进程。
 完整 TeX Live 提供 LuaLaTeX 包和字体；格式与字体缓存单独保存，不修改系统 TeX Live。
 GUI 的编辑、宽度、字号、PDF/SVG 预览和图像复制/保存复用已有界面。
 
-实验固定使用内置 Latin Modern / `unicode-math` profile 和 UTF-8；自定义 Profile、
-`xeCJK` 配方及公共 C ABI 暂未扩展。TeX 错误通过重建 worker 恢复，
+实验使用 UTF-8，支持内置 Latin Modern / `unicode-math` profile，以及 Profile Creator
+选择 LuaHBTeX 后生成的 Profile。Creator 共用字体和宏包目录，在配方层将 CJK 切换为
+`luatexko` 简体中文模式，将图形、颜色和 PGF 按 PDF/SVG 分别切换到 `dvipdfmx`/`dvisvgm`
+驱动。GUI 为两种驱动各保留常驻 worker，SVG 首次使用时启动，转换器仍共用。
+Lua 配方还补齐了 luaotfload 对 leader 和嵌套 discretionary 节点的字体映射，覆盖化学反应箭头。
+生成的清单记录目标引擎和输出驱动，
+GUI 按引擎筛选；没有引擎标记的旧 Profile 仍按 XeTeX 处理，内置共享 Profile 除外。
+渲染器公共 C ABI 暂未扩展。TeX 错误通过重建 worker 恢复，
 因此错误后的 PID 会变化，不属于 checkpoint 恢复。
 
 GUI 的耗时摘要与 XeTeX 使用同一格式，分别显示排版、转换和输出完成总时间。
 Lua 指标单独记录 DVI 读取/补尾/写入的时间，排版计时不包含这段工作；原始 JSON
 沿用 `requestToOutputMs`、`convertMs`、`outputBytes` 等字段，并保留 worker 信息。
+
+错误结果另外记录 `failureDetectedMs`、`restartMs`、`errorTotalMs` 和
+`readyAfterError`，区分发现错误与重建进程的时间。片段边界检查条件和分组深度，
+避免未闭合的真条件仅产生警告、却污染下一请求。重建后的 DVI 从第一页重新开始；
+常驻转换器须在每份文档开始和结束时清除页缓存编号，不能跨文档复用同页号的缓冲。
+
+2026-11-05 的 Windows 实测覆盖内置、Creator Latin、Creator 中文加数学绘图宏包三种
+Profile，分别测试 PDF/SVG：未定义命令、宏参数缺右括号、未闭合分组、缺 `$`、环境
+不匹配、Lua 异常、提前结束文档，各重复两次，共 84 次；未闭合真条件另测 6 次。
+90 次错误均被拒绝，当前 worker 重建后可以继续输出，随后 180 次有效请求全部通过
+文件解析、几何/内容和状态污染检查。Creator Profile 的另一输出 worker 保留原 PID，
+所有测试进程退出检查通过。
+
+普通错误矩阵的后端同步调用耗时如下，单位为毫秒（Profile 和字体缓存已经预热；
+不包含 GUI 编辑检测、防抖和测试结果检查）：
+
+| Profile | 坏输入至重新可用，中位数 | P95 | 范围 | 恢复后首个有效输出，中位数 |
+| --- | ---: | ---: | ---: | ---: |
+| 内置 | 1923 | 2007 | 1824–2012 | 215 |
+| Creator Latin | 1911 | 2095 | 1830–2136 | 218 |
+| Creator 中文/数学/绘图 | 3217 | 3458 | 2981–3649 | 502 |
+
+发现错误的中位数分别为 86、107、230 ms，主要耗时来自重新加载 worker。
+另用内置 Profile/PDF 实测一次无限循环，保留生产默认 90000 ms 超时：
+90057 ms 发现超时，1893 ms 重启，合计 91950 ms 恢复；下一次有效输出耗时 208 ms。
+这是进程重建恢复，未实现 Lua/TeX checkpoint。
+
+这些测试发现并修复了未闭合真条件跨请求泄漏，以及 worker 重建后常驻 PDF 转换器
+复用旧文档页缓存的问题。完整结果保存在 `build/luatex-recovery-tests/` 下的
+`matrix-results.json`、`conditional-results.json`、`default-timeout-results.json`；
+复现命令见构建文档中的 `stemtex-luatex-recovery-smoke`。

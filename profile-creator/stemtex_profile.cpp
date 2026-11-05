@@ -29,7 +29,7 @@ namespace {
 #endif
 
 constexpr const char *kVersion = STEMTEX_PROFILE_VERSION;
-constexpr const char *kAbiVersion = "3";
+constexpr const char *kAbiVersion = "4";
 
 class ProfileException : public std::runtime_error {
  public:
@@ -37,6 +37,14 @@ class ProfileException : public std::runtime_error {
       : std::runtime_error(message), code(code) {}
   StemTeXProfileErrorCode code;
 };
+
+const char *engine_id(StemTeXProfileEngine engine) {
+  switch (engine) {
+    case STEMTEX_PROFILE_ENGINE_XETEX: return "xetex";
+    case STEMTEX_PROFILE_ENGINE_LUAHBTEX: return "luahbtex";
+    default: throw ProfileException(STEMTEX_PROFILE_ERROR_INVALID_ARGUMENT, "Unknown profile engine");
+  }
+}
 
 enum class RequirementRoot { TexmfDist, SystemFonts };
 
@@ -601,6 +609,130 @@ std::vector<std::string> missing_requirements(const PackageRecipe &recipe, const
   return missing_requirements(std::vector<Requirement>{recipe.requirement}, texmf_root);
 }
 
+std::vector<Requirement> engine_base_requirements(StemTeXProfileEngine engine) {
+  (void)engine_id(engine);
+  std::vector<Requirement> result;
+  for (const char *path : {
+      "tex/latex/base/article.cls", "tex/latex/preview/preview.sty", "tex/generic/iftex/iftex.sty",
+      "tex/latex/fontspec/fontspec.sty", "tex/latex/unicode-math/unicode-math.sty",
+      "fonts/opentype/public/lm/lmsans10-regular.otf", "fonts/opentype/public/lm/lmsans10-bold.otf",
+      "fonts/opentype/public/lm/lmsans10-oblique.otf", "fonts/opentype/public/lm/lmsans10-boldoblique.otf",
+      "fonts/opentype/public/lm/lmmono10-regular.otf", "fonts/opentype/public/lm/lmmono10-italic.otf"})
+    result.push_back({RequirementRoot::TexmfDist, path});
+  if (engine == STEMTEX_PROFILE_ENGINE_LUAHBTEX) {
+    for (const char *path : {
+        "tex/latex/tex-ini-files/lualatex.ini", "tex/latex/fontspec/fontspec-luatex.sty",
+        "tex/latex/unicode-math/unicode-math-luatex.sty", "tex/luatex/luaotfload/luaotfload.sty",
+        "tex/luatex/luaotfload/luaotfload-main.lua", "tex/luatex/luaotfload/luaotfload-dvi.lua",
+        "tex/generic/luatex85/luatex85.sty", "tex/latex/l3kernel/expl3.sty",
+        "tex/latex/l3kernel/l3backend-dvipdfmx.def", "tex/latex/l3kernel/l3backend-dvisvgm.def"})
+      result.push_back({RequirementRoot::TexmfDist, path});
+  } else {
+    result.push_back({RequirementRoot::TexmfDist, "tex/latex/fontspec/fontspec-xetex.sty"});
+    result.push_back({RequirementRoot::TexmfDist, "tex/latex/unicode-math/unicode-math-xetex.sty"});
+  }
+  return result;
+}
+
+std::vector<Requirement> engine_requirements(const FontRecipe &recipe, StemTeXProfileEngine engine) {
+  std::vector<Requirement> result = engine_base_requirements(engine);
+  for (const Requirement &item : recipe.requirements) {
+    if (engine == STEMTEX_PROFILE_ENGINE_LUAHBTEX &&
+        std::string(item.relative_path) == "tex/xelatex/xecjk/xeCJK.sty") continue;
+    result.push_back(item);
+  }
+  if (engine == STEMTEX_PROFILE_ENGINE_LUAHBTEX && std::string(recipe.role) == "cjk" &&
+      std::string(recipe.id) != "none") {
+    for (const char *path : {"tex/luatex/luatexko/luatexko.sty", "tex/luatex/luatexko/luatexko.lua",
+                             "tex/latex/cjk-ko/kolabels-utf.sty"})
+      result.push_back({RequirementRoot::TexmfDist, path});
+  }
+  return result;
+}
+
+std::vector<Requirement> engine_requirements(const PackageRecipe &recipe, StemTeXProfileEngine engine) {
+  std::vector<Requirement> result = engine_base_requirements(engine);
+  result.push_back(recipe.requirement);
+  if (engine == STEMTEX_PROFILE_ENGINE_LUAHBTEX) {
+    const std::string id = recipe.id;
+    if (id == "graphicx" || id == "xcolor") {
+      result.push_back({RequirementRoot::TexmfDist, "tex/latex/graphics-def/dvipdfmx.def"});
+      result.push_back({RequirementRoot::TexmfDist, "tex/latex/graphics-def/dvisvgm.def"});
+    }
+    if (id == "tikz") {
+      result.push_back({RequirementRoot::TexmfDist, "tex/generic/pgf/systemlayer/pgfsys-dvipdfmx.def"});
+      result.push_back({RequirementRoot::TexmfDist, "tex/generic/pgf/systemlayer/pgfsys-dvisvgm.def"});
+      result.push_back({RequirementRoot::TexmfDist, "tex/generic/pgf/systemlayer/pgfsys-common-svg.def"});
+    }
+  }
+  return result;
+}
+
+void validate_engine_requirements(const std::vector<Requirement> &requirements, const fs::path &texmf_root,
+                                  StemTeXProfileErrorCode code, const std::string &label) {
+  const auto missing = missing_requirements(requirements, texmf_root);
+  if (missing.empty()) return;
+  std::ostringstream message;
+  message << label << " is unavailable; missing";
+  for (const std::string &path : missing) message << " " << path;
+  throw ProfileException(code, message.str());
+}
+
+std::string engine_font_tex(const FontRecipe &recipe, StemTeXProfileEngine engine) {
+  if (engine == STEMTEX_PROFILE_ENGINE_XETEX) return recipe.tex;
+  const std::string id = recipe.id;
+  const std::string path = system_fonts_root().generic_u8string() + "/";
+  if (id == "arial") {
+    const std::string options = "Path={" + path + "},BoldFont=arialbd.ttf,ItalicFont=ariali.ttf,BoldItalicFont=arialbi.ttf";
+    return "\\setmainfont{arial.ttf}[" + options + "]\n\\setsansfont{arial.ttf}[" + options +
+           "]\n\\setmonofont{lmmono10-regular.otf}[ItalicFont=lmmono10-italic.otf]\n";
+  }
+  if (std::string(recipe.role) != "cjk" || id == "none") return recipe.tex;
+  // LuaTeX-ja explicitly rejects DVI output. luatexko supplies documented
+  // Simplified Chinese spacing and DVI support without changing that guard.
+  std::string result = "\\usepackage{luatexko}\n\\Schinese\n";
+  auto font = [&](const char *command, const char *file, const std::string &options) {
+    const std::string line = "\\" + std::string(command) + "{" + file + "}[Path={" + path + "}," + options + "]\n";
+    result += line;
+    std::string hanja = line;
+    hanja.replace(hanja.find("hangul"), 6, "hanja");
+    result += hanja;
+  };
+  if (id == "simsun") {
+    font("setmainhangulfont", "simsun.ttc", "FontIndex=0,AutoFakeBold=1.5,AutoFakeSlant=0.2");
+    font("setsanshangulfont", "simhei.ttf", "AutoFakeBold=1.5,AutoFakeSlant=0.2");
+    font("setmonohangulfont", "simsun.ttc", "FontIndex=0,AutoFakeBold=1.5,AutoFakeSlant=0.2");
+  } else if (id == "simhei") {
+    for (const char *command : {"setmainhangulfont", "setsanshangulfont", "setmonohangulfont"})
+      font(command, "simhei.ttf", "AutoFakeBold=1.5,AutoFakeSlant=0.2");
+  } else if (id == "microsoft-yahei") {
+    for (const char *command : {"setmainhangulfont", "setsanshangulfont", "setmonohangulfont"})
+      font(command, "msyh.ttc", "FontIndex=0,BoldFont=msyhbd.ttc,BoldFeatures={FontIndex=0},AutoFakeSlant=0.2");
+  } else {
+    std::string shared = recipe.tex;
+    const std::string xecjk = "\\usepackage{xeCJK}\n";
+    const size_t pos = shared.find(xecjk);
+    if (pos != std::string::npos) shared.erase(pos, xecjk.size());
+    for (const char *family : {"main", "sans", "mono"}) {
+      const std::string before = "\\setCJK" + std::string(family) + "font";
+      const std::string after = "\\set" + std::string(family) + "hangulfont";
+      size_t at = 0;
+      while ((at = shared.find(before, at)) != std::string::npos) {
+        shared.replace(at, before.size(), after);
+        at += after.size();
+      }
+    }
+    result += shared;
+    size_t at = 0;
+    while ((at = shared.find("hangulfont", at)) != std::string::npos) {
+      shared.replace(at, 10, "hanjafont");
+      at += 9;
+    }
+    result += shared;
+  }
+  return result;
+}
+
 const FontRecipe &find_recipe(const char *role, const char *id) {
   if (!id || !*id) {
     throw ProfileException(STEMTEX_PROFILE_ERROR_INVALID_ARGUMENT, std::string(role) + " font id is required");
@@ -669,7 +801,9 @@ struct ResolvedPackages {
   std::vector<Notice> notices;
 };
 
-ResolvedPackages resolve_packages(const fs::path &texmf_root, const std::vector<std::string> &explicit_ids) {
+ResolvedPackages resolve_packages(const fs::path &texmf_root, const std::vector<std::string> &explicit_ids,
+                                   StemTeXProfileEngine engine = STEMTEX_PROFILE_ENGINE_XETEX,
+                                   bool engine_aware = false) {
   ResolvedPackages result;
   std::map<std::string, const PackageRecipe *> selected;
   std::map<std::string, int> visit_state;
@@ -704,7 +838,12 @@ ResolvedPackages resolve_packages(const fs::path &texmf_root, const std::vector<
   };
 
   for (const std::string &id : explicit_ids) include_recipe(id, nullptr);
-  for (const auto &entry : selected) validate_recipe_available(*entry.second, texmf_root);
+  for (const auto &entry : selected) {
+    if (engine_aware)
+      validate_engine_requirements(engine_requirements(*entry.second, engine), texmf_root,
+                                   STEMTEX_PROFILE_ERROR_PACKAGE_UNAVAILABLE, entry.second->display_name);
+    else validate_recipe_available(*entry.second, texmf_root);
+  }
 
   std::set<std::string> emitted;
   while (result.ordered.size() < selected.size()) {
@@ -835,6 +974,7 @@ struct InternalProfileSpec {
   std::vector<std::string> package_ids;
   std::string user_preamble;
   int manifest_schema_version = 2;
+  StemTeXProfileEngine engine = STEMTEX_PROFILE_ENGINE_XETEX;
 };
 
 InternalProfileSpec legacy_spec(const StemTeXProfileSpec *spec) {
@@ -859,6 +999,19 @@ InternalProfileSpec user_preamble_spec(const StemTeXProfileSpecV3 *spec) {
   return result;
 }
 
+InternalProfileSpec engine_spec(const StemTeXProfileSpecV4 *spec) {
+  if (!spec) throw ProfileException(STEMTEX_PROFILE_ERROR_INVALID_ARGUMENT, "profile spec is required");
+  (void)engine_id(spec->engine);
+  InternalProfileSpec result{
+      spec->name_utf8, spec->text_font_id_utf8, spec->math_font_id_utf8,
+      spec->cjk_font_id_utf8, package_ids_from_api(spec->package_ids_utf8, spec->package_count)};
+  (void)user_preamble_from_api(spec->user_preamble_utf8);  // Validate the size limit, preserving V4 bytes.
+  result.user_preamble = spec->user_preamble_utf8 ? spec->user_preamble_utf8 : "";
+  result.manifest_schema_version = 4;
+  result.engine = spec->engine;
+  return result;
+}
+
 std::string fingerprint(const std::string &value) {
   uint64_t hash = 1469598103934665603ull;
   for (unsigned char byte : value) {
@@ -875,17 +1028,49 @@ GeneratedProfile generate_profile(const StemTeXProfileContext *context, const In
   const FontRecipe &text = find_recipe("text", spec.text_font_id);
   const FontRecipe &math = find_recipe("math", spec.math_font_id);
   const FontRecipe &cjk = find_recipe("cjk", spec.cjk_font_id);
-  validate_recipe_available(text, texmf_root);
-  validate_recipe_available(math, texmf_root);
-  validate_recipe_available(cjk, texmf_root);
-  validate_base(texmf_root, std::string(cjk.id) != "none");
-  ResolvedPackages packages = resolve_packages(texmf_root, spec.package_ids);
+  const bool engine_aware = spec.manifest_schema_version >= 4;
+  if (engine_aware) {
+    for (const FontRecipe *recipe : {&text, &math, &cjk})
+      validate_engine_requirements(engine_requirements(*recipe, spec.engine), texmf_root,
+                                   STEMTEX_PROFILE_ERROR_FONT_UNAVAILABLE, recipe->display_name);
+  } else {
+    validate_recipe_available(text, texmf_root);
+    validate_recipe_available(math, texmf_root);
+    validate_recipe_available(cjk, texmf_root);
+    validate_base(texmf_root, std::string(cjk.id) != "none");
+  }
+  ResolvedPackages packages = resolve_packages(texmf_root, spec.package_ids, spec.engine, engine_aware);
 
   std::ostringstream preamble;
   preamble << "% Generated by StemTeX Profile Creator.\n"
            << "% Font recipes: text=" << text.id << ", math=" << math.id << ", cjk=" << cjk.id << ".\n"
-           << "% Whitelist packages are dependency-resolved and emitted in managed order.\n"
-           << "\\documentclass{article}\n";
+           << "% Whitelist packages are dependency-resolved and emitted in managed order.\n";
+  if (engine_aware) {
+    preamble << "% StemTeX profile engine: " << engine_id(spec.engine) << ".\n"
+             << "\\RequirePackage{iftex}\n";
+    if (spec.engine == STEMTEX_PROFILE_ENGINE_LUAHBTEX) {
+      preamble << R"TEX(\RequireLuaHBTeX
+\outputmode=0
+\ifdefined\StemTeXOutputSVG
+  \RequirePackage[backend=dvisvgm]{expl3}
+  \PassOptionsToPackage{dvisvgm}{graphicx}
+  \PassOptionsToPackage{dvisvgm}{graphics}
+  \PassOptionsToPackage{dvisvgm}{xcolor}
+  \PassOptionsToPackage{dvisvgm}{color}
+  \def\pgfsysdriver{pgfsys-dvisvgm.def}
+\else
+\RequirePackage[backend=dvipdfmx]{expl3}
+\PassOptionsToPackage{dvipdfmx}{graphicx}
+\PassOptionsToPackage{dvipdfmx}{graphics}
+\PassOptionsToPackage{dvipdfmx}{xcolor}
+\PassOptionsToPackage{dvipdfmx}{color}
+\def\pgfsysdriver{pgfsys-dvipdfmx.def}
+\fi
+\PassOptionsToPackage{xetex}{preview}
+)TEX";
+    } else preamble << "\\RequireXeTeX\n";
+  }
+  preamble << "\\documentclass{article}\n";
   for (const PackageRecipe *recipe : packages.ordered) {
     if (recipe->phase == PackagePhase::BeforeFonts) append_package_tex(preamble, *recipe);
   }
@@ -898,12 +1083,61 @@ GeneratedProfile generate_profile(const StemTeXProfileContext *context, const In
   mathtt=sym
 ]{unicode-math}
 )TEX";
-  preamble << math.tex << text.tex << cjk.tex;
+  preamble << engine_font_tex(math, spec.engine) << engine_font_tex(text, spec.engine)
+           << engine_font_tex(cjk, spec.engine);
   for (const PackageRecipe *recipe : packages.ordered) {
     if (recipe->phase == PackagePhase::AfterFonts) append_package_tex(preamble, *recipe);
   }
   preamble << "\\usepackage[active,tightpage]{preview}\n"
            << "\\PreviewBorder=1pt\n";
+  if (spec.engine == STEMTEX_PROFILE_ENGINE_LUAHBTEX) {
+    // LuaTeX DVI does not synthesize XeTeX's papersize special. Keep the
+    // managed profile usable both in the GUI and as a standalone warmup.
+    preamble << R"TEX(\makeatletter
+\ifdefined\StemTeXLuaPageSizeHook\else
+\global\let\StemTeXLuaPageSizeHook\empty
+\g@addto@macro\pr@ship@end{\setbox\pr@box\hbox{%
+  \special{papersize=\the\pdfpagewidth,\the\pdfpageheight}\box\pr@box}}
+\fi
+\makeatother
+% luaotfload 3.29's DVI remapper omits glyphs inside leaders (for example
+% amsmath/mhchem arrows) and nested discretionary lists. Reuse its backend
+% font mappings for those boxes, without changing font names or glyph IDs
+% that it has already converted.
+\directlua{
+  local direct = node.direct
+  local glyph = node.id("glyph")
+  local hlist = node.id("hlist")
+  local vlist = node.id("vlist")
+  local glue = node.id("glue")
+  local disc = node.id("disc")
+  local function remap(head)
+    if not head then return end
+    for n, id in direct.traverse(head) do
+      if id == glyph then
+        local character, fontid = direct.is_glyph(n)
+        local data = font.getfont(fontid)
+        local mapping = data and data.backend_font
+        local mapped = mapping and mapping[character]
+        if mapped then direct.setfont(n, mapping.font, mapped) end
+      elseif id == hlist or id == vlist then
+        remap(direct.getlist(n))
+      elseif id == glue then
+        remap(direct.getleader(n))
+      elseif id == disc then
+        local pre, post, replace = direct.getdisc(n)
+        remap(pre) remap(post) remap(replace)
+      end
+    end
+  end
+  luatexbase.add_to_callback("pre_shipout_filter", function(head)
+    remap(direct.todirect(head))
+    return true
+  end, "stemtex.dvi.complete")
+  luatexbase.declare_callback_rule("pre_shipout_filter", "stemtex.dvi.complete", "after", "luaotfload.dvi")
+}
+)TEX";
+  }
   if (!spec.user_preamble.empty()) {
     preamble << "% User preamble; emitted verbatim after the managed section.\n"
              << spec.user_preamble;
@@ -995,6 +1229,10 @@ std::string profile_manifest(const InternalProfileSpec &spec, const GeneratedPro
   }
   out << "]\n"
       << "  }";
+  if (spec.manifest_schema_version >= 4)
+    out << ",\n  \"engine\": \"" << engine_id(spec.engine) << "\"";
+  if (spec.manifest_schema_version >= 4 && spec.engine == STEMTEX_PROFILE_ENGINE_LUAHBTEX)
+    out << ",\n  \"outputDrivers\": {\"pdf\": \"dvipdfmx\", \"svg\": \"dvisvgm\"}";
   if (spec.manifest_schema_version >= 3) {
     out << ",\n  \"userPreamble\": \"" << json_escape(spec.user_preamble) << "\"";
   }
@@ -1015,9 +1253,13 @@ std::string unique_temp_name() {
   return name.str();
 }
 
-std::string package_plan_json(const ResolvedPackages &packages) {
+std::string package_plan_json(const ResolvedPackages &packages,
+                              StemTeXProfileEngine engine = STEMTEX_PROFILE_ENGINE_XETEX,
+                              bool engine_aware = false) {
   std::ostringstream json;
-  json << "{\"schemaVersion\":1,\"packages\":[";
+  json << "{\"schemaVersion\":1,";
+  if (engine_aware) json << "\"engine\":\"" << engine_id(engine) << "\",";
+  json << "\"packages\":[";
   for (size_t index = 0; index < packages.ordered.size(); ++index) {
     const PackageRecipe &recipe = *packages.ordered[index];
     if (index) json << ',';
@@ -1129,6 +1371,110 @@ auto api_call(Function &&function, StemTeXProfileErrorCode *error_code, char **e
 }  // namespace
 
 extern "C" {
+
+STEMTEX_PROFILE_API char *stemtex_profile_font_catalog_for_engine_json(
+    const StemTeXProfileContext *context, StemTeXProfileEngine engine,
+    StemTeXProfileErrorCode *error_code, char **error_utf8) {
+  return api_call([&]() -> char * {
+    (void)engine_id(engine);
+    const fs::path texmf_root = require_texmf_root(context);
+    std::ostringstream json;
+    json << "{\"schemaVersion\":1,\"engine\":\"" << engine_id(engine) << "\",\"texmfRoot\":\""
+         << json_escape(path_utf8(texmf_root)) << "\",\"fonts\":[";
+    bool first = true;
+    for (const FontRecipe &recipe : recipes()) {
+      const auto missing = missing_requirements(engine_requirements(recipe, engine), texmf_root);
+      if (!first) json << ',';
+      first = false;
+      const char *description = engine == STEMTEX_PROFILE_ENGINE_LUAHBTEX && std::string(recipe.id) == "none"
+                                    ? "Do not load CJK support" : recipe.description;
+      json << "{\"id\":\"" << recipe.id << "\",\"role\":\"" << recipe.role
+           << "\",\"displayName\":\"" << json_escape(recipe.display_name)
+           << "\",\"source\":\"" << recipe.source << "\",\"description\":\"" << json_escape(description)
+           << "\",\"available\":" << (missing.empty() ? "true" : "false") << ",\"missing\":[";
+      for (size_t index = 0; index < missing.size(); ++index) {
+        if (index) json << ',';
+        json << '"' << json_escape(missing[index]) << '"';
+      }
+      json << "]}";
+    }
+    json << "]}";
+    char *result = copy_string(json.str());
+    if (!result) throw ProfileException(STEMTEX_PROFILE_ERROR_INTERNAL, "Cannot allocate engine font catalog");
+    return result;
+  }, error_code, error_utf8);
+}
+
+STEMTEX_PROFILE_API char *stemtex_profile_package_catalog_for_engine_json(
+    const StemTeXProfileContext *context, StemTeXProfileEngine engine,
+    StemTeXProfileErrorCode *error_code, char **error_utf8) {
+  return api_call([&]() -> char * {
+    (void)engine_id(engine);
+    const fs::path texmf_root = require_texmf_root(context);
+    std::ostringstream json;
+    json << "{\"schemaVersion\":1,\"engine\":\"" << engine_id(engine) << "\",\"texmfRoot\":\""
+         << json_escape(path_utf8(texmf_root)) << "\",\"packages\":[";
+    bool first = true;
+    for (const PackageRecipe &recipe : package_recipes()) {
+      std::set<std::string> missing_set, visited;
+      std::function<void(const PackageRecipe &)> collect = [&](const PackageRecipe &item) {
+        if (!visited.insert(item.id).second) return;
+        const auto missing = missing_requirements(engine_requirements(item, engine), texmf_root);
+        missing_set.insert(missing.begin(), missing.end());
+        for (const char *dependency : item.requires) collect(find_package_recipe(dependency));
+      };
+      collect(recipe);
+      if (!first) json << ',';
+      first = false;
+      json << "{\"id\":\"" << recipe.id << "\",\"displayName\":\""
+           << json_escape(recipe.display_name) << "\",\"category\":\"" << recipe.category
+           << "\",\"description\":\"" << json_escape(recipe.description)
+           << "\",\"relativePath\":\"" << json_escape(recipe.requirement.relative_path)
+           << "\",\"defaultEnabled\":" << (recipe.default_enabled ? "true" : "false")
+           << ",\"phase\":\"" << package_phase_id(recipe.phase) << "\",\"order\":" << recipe.order
+           << ",\"options\":\"" << json_escape(recipe.options ? recipe.options : "")
+           << "\",\"afterLoadTex\":\"" << json_escape(recipe.after_load_tex ? recipe.after_load_tex : "")
+           << "\",\"available\":" << (missing_set.empty() ? "true" : "false") << ",\"requires\":[";
+      for (size_t index = 0; index < recipe.requires.size(); ++index) {
+        if (index) json << ',';
+        json << '"' << json_escape(recipe.requires[index]) << '"';
+      }
+      json << "],\"after\":[";
+      for (size_t index = 0; index < recipe.after.size(); ++index) {
+        if (index) json << ',';
+        json << '"' << json_escape(recipe.after[index]) << '"';
+      }
+      json << "],\"missing\":[";
+      bool first_missing = true;
+      for (const std::string &missing : missing_set) {
+        if (!first_missing) json << ',';
+        first_missing = false;
+        json << '"' << json_escape(missing) << '"';
+      }
+      json << "]}";
+    }
+    json << "]}";
+    char *result = copy_string(json.str());
+    if (!result) throw ProfileException(STEMTEX_PROFILE_ERROR_INTERNAL, "Cannot allocate engine package catalog");
+    return result;
+  }, error_code, error_utf8);
+}
+
+STEMTEX_PROFILE_API char *stemtex_profile_package_plan_for_engine_json(
+    const StemTeXProfileContext *context, StemTeXProfileEngine engine,
+    const char *const *package_ids_utf8, size_t package_count,
+    StemTeXProfileErrorCode *error_code, char **error_utf8) {
+  return api_call([&]() -> char * {
+    (void)engine_id(engine);
+    const fs::path texmf_root = require_texmf_root(context);
+    validate_engine_requirements(engine_base_requirements(engine), texmf_root,
+                                 STEMTEX_PROFILE_ERROR_PACKAGE_UNAVAILABLE, engine_id(engine));
+    const auto packages = resolve_packages(texmf_root, package_ids_from_api(package_ids_utf8, package_count), engine, true);
+    char *result = copy_string(package_plan_json(packages, engine, true));
+    if (!result) throw ProfileException(STEMTEX_PROFILE_ERROR_INTERNAL, "Cannot allocate engine package plan");
+    return result;
+  }, error_code, error_utf8);
+}
 
 STEMTEX_PROFILE_API char *stemtex_profile_font_catalog_json(
     const StemTeXProfileContext *context, StemTeXProfileErrorCode *error_code, char **error_utf8) {
@@ -1249,6 +1595,17 @@ STEMTEX_PROFILE_API char *stemtex_profile_preamble_v3_utf8(
   }, error_code, error_utf8);
 }
 
+STEMTEX_PROFILE_API char *stemtex_profile_preamble_v4_utf8(
+    const StemTeXProfileContext *context, const StemTeXProfileSpecV4 *spec,
+    StemTeXProfileErrorCode *error_code, char **error_utf8) {
+  return api_call([&]() -> char * {
+    const GeneratedProfile generated = generate_profile(context, engine_spec(spec));
+    char *result = copy_string(generated.preamble);
+    if (!result) throw ProfileException(STEMTEX_PROFILE_ERROR_INTERNAL, "Cannot allocate generated preamble");
+    return result;
+  }, error_code, error_utf8);
+}
+
 STEMTEX_PROFILE_API int stemtex_profile_materialize(
     const StemTeXProfileContext *context, const StemTeXProfileSpec *spec,
     const char *profiles_root_utf8, char **result_json_utf8,
@@ -1276,6 +1633,16 @@ STEMTEX_PROFILE_API int stemtex_profile_materialize_v3(
   if (result_json_utf8) *result_json_utf8 = nullptr;
   return api_call([&]() -> int {
     return materialize_profile(context, user_preamble_spec(spec), profiles_root_utf8, result_json_utf8);
+  }, error_code, error_utf8);
+}
+
+STEMTEX_PROFILE_API int stemtex_profile_materialize_v4(
+    const StemTeXProfileContext *context, const StemTeXProfileSpecV4 *spec,
+    const char *profiles_root_utf8, char **result_json_utf8,
+    StemTeXProfileErrorCode *error_code, char **error_utf8) {
+  if (result_json_utf8) *result_json_utf8 = nullptr;
+  return api_call([&]() -> int {
+    return materialize_profile(context, engine_spec(spec), profiles_root_utf8, result_json_utf8);
   }, error_code, error_utf8);
 }
 

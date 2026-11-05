@@ -4,6 +4,22 @@
   <context>
     <name>ProfileCreator</name>
     <message>
+      <source>Engine</source>
+      <translation>引擎</translation>
+    </message>
+    <message>
+      <source>LuaHBTeX (experimental)</source>
+      <translation>LuaHBTeX（实验）</translation>
+    </message>
+    <message>
+      <source>The engine determines available font and package recipes. LuaHBTeX requires a full TeX Live tree.</source>
+      <translation>引擎决定可用的字体和宏包配方。LuaHBTeX 需要完整的 TeX Live 树。</translation>
+    </message>
+    <message>
+      <source>LuaHBTeX needs a full TeX Live tree with lualatex.ini. Choose TeX Live to continue.</source>
+      <translation>LuaHBTeX 需要包含 lualatex.ini 的完整 TeX Live 树。请选择 TeX Live 后继续。</translation>
+    </message>
+    <message>
       <source>Packages</source>
       <translation>宏包</translation>
     </message>
@@ -306,6 +322,10 @@ Renderer GUI 将把它作为普通 Profile 使用。</translation>
   </context>
   <context>
     <name>ProfileCatalog</name>
+    <message>
+      <source>Do not load CJK support</source>
+      <translation>不加载 CJK 支持</translation>
+    </message>
     <message>
       <source>AMS mathematics extensions and a stable pre-font math foundation</source>
       <translation>AMS 数学扩展，以及在字体之前加载的稳定数学基础</translation>

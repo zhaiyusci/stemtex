@@ -25,6 +25,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSet>
+#include <QSignalBlocker>
 #include <QStandardItem>
 #include <QStandardItemModel>
 #include <QStandardPaths>
@@ -60,6 +61,24 @@ QString defaultProfilesRoot() {
   return cleanAbsolutePath(QDir(data).filePath("StemTeX/profiles"));
 }
 
+bool hasLuaLatexTree(const QString &root) {
+  return QFileInfo::exists(QDir(root).filePath("texmf-dist/tex/latex/tex-ini-files/lualatex.ini")) &&
+         QFileInfo::exists(QDir(root).filePath("texmf-dist/web2c/texmf.cnf"));
+}
+
+QString findLuaTexmfRoot(const QString &preferred) {
+  if (hasLuaLatexTree(preferred)) return preferred;
+  QStringList candidates{qEnvironmentVariable("TEXMFROOT")};
+  const QString lualatex = QStandardPaths::findExecutable("lualatex.exe");
+  if (!lualatex.isEmpty()) candidates << QDir(QFileInfo(lualatex).absolutePath()).filePath("../..");
+  QDir texlive("C:/texlive");
+  for (const QFileInfo &entry : texlive.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name | QDir::Reversed))
+    candidates << entry.absoluteFilePath();
+  for (const QString &candidate : candidates)
+    if (!candidate.isEmpty() && hasLuaLatexTree(candidate)) return cleanAbsolutePath(candidate);
+  return preferred;
+}
+
 void configureSdkDllSearch(const QString &runtimeRoot) {
   QString appDir = QCoreApplication::applicationDirPath();
   QString sdkDir = QDir(runtimeRoot).filePath("bin/sdk");
@@ -89,9 +108,12 @@ class WaitCursor {
 
 class CreatorWindow : public QMainWindow {
  public:
-  CreatorWindow(QString texmfRoot, QString profilesRoot)
+  CreatorWindow(QString texmfRoot, QString profilesRoot,
+                StemTeXProfileEngine engine = STEMTEX_PROFILE_ENGINE_XETEX, bool smokeMode = false)
       : texmf_root_(std::move(texmfRoot)),
-        profiles_root_(std::move(profilesRoot)) {
+        profiles_root_(std::move(profilesRoot)), engine_(engine), smoke_mode_(smokeMode) {
+    xetex_texmf_root_ = texmf_root_;
+    if (engine_ == STEMTEX_PROFILE_ENGINE_LUAHBTEX) texmf_root_ = findLuaTexmfRoot(texmf_root_);
     setWindowTitle(QCoreApplication::translate("ProfileCreator", "StemTeX Profile Creator"));
     resize(980, 720);
 
@@ -114,6 +136,12 @@ class CreatorWindow : public QMainWindow {
 
     auto *environmentBox = new QGroupBox(QCoreApplication::translate("ProfileCreator", "Environment"), central);
     auto *environmentForm = new QFormLayout(environmentBox);
+    engineCombo_ = new QComboBox(environmentBox);
+    engineCombo_->addItem(QStringLiteral("XeTeX"), STEMTEX_PROFILE_ENGINE_XETEX);
+    engineCombo_->addItem(QCoreApplication::translate("ProfileCreator", "LuaHBTeX (experimental)"), STEMTEX_PROFILE_ENGINE_LUAHBTEX);
+    engineCombo_->setCurrentIndex(engine_ == STEMTEX_PROFILE_ENGINE_LUAHBTEX ? 1 : 0);
+    engineCombo_->setToolTip(QCoreApplication::translate("ProfileCreator", "The engine determines available font and package recipes. LuaHBTeX requires a full TeX Live tree."));
+    environmentForm->addRow(QCoreApplication::translate("ProfileCreator", "Engine"), engineCombo_);
     auto *texmfRow = new QWidget(environmentBox);
     auto *texmfLayout = new QHBoxLayout(texmfRow);
     texmfLayout->setContentsMargins(0, 0, 0, 0);
@@ -236,13 +264,14 @@ class CreatorWindow : public QMainWindow {
     setCentralWidget(central);
 
     connect(chooseTexmf, &QPushButton::clicked, this, [this]() { chooseTexmfRoot(); });
+    connect(engineCombo_, &QComboBox::currentIndexChanged, this, [this](int) { switchEngine(); });
     connect(openProfiles, &QPushButton::clicked, this, [this]() {
       QDir().mkpath(profiles_root_);
       QDesktopServices::openUrl(QUrl::fromLocalFile(profiles_root_));
     });
     connect(nameEdit_, &QLineEdit::textEdited, this, [this](const QString &) { name_touched_ = true; });
     connect(nameEdit_, &QLineEdit::textChanged, this, [this](const QString &text) {
-      createButton_->setEnabled(selectionsValid() && !text.trimmed().isEmpty());
+      createButton_->setEnabled(selectionsValid() && preamble_valid_ && !text.trimmed().isEmpty());
     });
     for (QComboBox *combo : {textCombo_, mathCombo_, cjkCombo_}) {
       connect(combo, &QComboBox::currentIndexChanged, this, [this](int) { selectionChanged(); });
@@ -252,7 +281,27 @@ class CreatorWindow : public QMainWindow {
     connect(userPreambleEdit_, &QPlainTextEdit::textChanged, this, [this]() { selectionChanged(); });
     connect(createButton_, &QPushButton::clicked, this, [this]() { createProfile(); });
 
-    reloadCatalog("latin-modern", "latin-modern-math", "simsun");
+    reloadCatalog("latin-modern", "latin-modern-math",
+                  engine_ == STEMTEX_PROFILE_ENGINE_LUAHBTEX ? "none" : "simsun");
+  }
+
+  bool smokeCheck() const {
+    if (!selectionsValid() || !preamble_valid_) {
+      qCritical("Profile Creator smoke failed: selection or preamble generation is invalid");
+      return false;
+    }
+    const QString preamble = preambleEdit_->toPlainText();
+    const bool lua = engine_ == STEMTEX_PROFILE_ENGINE_LUAHBTEX;
+    const QString marker = lua ? "% StemTeX profile engine: luahbtex." : "% StemTeX profile engine: xetex.";
+    const QString guard = lua ? "\\RequireLuaHBTeX" : "\\RequireXeTeX";
+    if (!preamble.contains(marker) || !preamble.contains(guard) ||
+        !preamble.contains("\\documentclass") || !preamble.contains("unicode-math") ||
+        (lua && preamble.contains("xeCJK"))) {
+      qCritical("Profile Creator smoke failed: generated preamble does not match the selected engine");
+      return false;
+    }
+    qInfo().noquote() << "Profile Creator preamble smoke passed:" << (lua ? "luahbtex" : "xetex");
+    return true;
   }
 
  private:
@@ -264,11 +313,11 @@ class CreatorWindow : public QMainWindow {
     std::vector<QByteArray> packageIds;
     std::vector<const char *> packagePointers;
     QByteArray userPreamble;
-    StemTeXProfileSpecV3 spec{};
+    StemTeXProfileSpecV4 spec{};
 
     SpecStorage(const QString &profileName, const QString &textId,
                 const QString &mathId, const QString &cjkId, const QStringList &packages,
-                const QString &userPreambleText)
+                const QString &userPreambleText, StemTeXProfileEngine engine)
         : name(profileName.toUtf8()), text(textId.toUtf8()), math(mathId.toUtf8()), cjk(cjkId.toUtf8()),
           userPreamble(userPreambleText.toUtf8()) {
       packageIds.reserve(static_cast<size_t>(packages.size()));
@@ -282,6 +331,7 @@ class CreatorWindow : public QMainWindow {
       spec.package_ids_utf8 = packagePointers.empty() ? nullptr : packagePointers.data();
       spec.package_count = packagePointers.size();
       spec.user_preamble_utf8 = userPreamble.isEmpty() ? nullptr : userPreamble.constData();
+      spec.engine = engine;
     }
   };
 
@@ -292,6 +342,25 @@ class CreatorWindow : public QMainWindow {
   bool selectionsValid() const {
     return !selectedId(textCombo_).isEmpty() && !selectedId(mathCombo_).isEmpty() &&
            !selectedId(cjkCombo_).isEmpty() && package_plan_valid_;
+  }
+
+  void reportCritical(const QString &title, const QString &message) {
+    if (smoke_mode_) qCritical().noquote() << title << ':' << message;
+    else QMessageBox::critical(this, title, message);
+  }
+
+  void switchEngine() {
+    const QString text = selectedId(textCombo_);
+    const QString math = selectedId(mathCombo_);
+    const QString cjk = selectedId(cjkCombo_);
+    if (engine_ == STEMTEX_PROFILE_ENGINE_LUAHBTEX) lua_texmf_root_ = texmf_root_;
+    else xetex_texmf_root_ = texmf_root_;
+    engine_ = static_cast<StemTeXProfileEngine>(engineCombo_->currentData().toInt());
+    if (engine_ == STEMTEX_PROFILE_ENGINE_LUAHBTEX)
+      texmf_root_ = lua_texmf_root_.isEmpty() ? findLuaTexmfRoot(texmf_root_) : lua_texmf_root_;
+    else texmf_root_ = xetex_texmf_root_;
+    texmfEdit_->setText(texmf_root_);
+    reloadCatalog(text, math, cjk);
   }
 
   void chooseTexmfRoot() {
@@ -325,7 +394,10 @@ class CreatorWindow : public QMainWindow {
       if (!available) label += QCoreApplication::translate("ProfileCreator", "  (missing from current tree)");
       combo->addItem(label, id);
       int index = combo->count() - 1;
-      combo->setItemData(index, CreatorI18n::catalogText(font.value("description").toString()), Qt::ToolTipRole);
+      QString tooltip = CreatorI18n::catalogText(font.value("description").toString());
+      const QJsonArray missing = font.value("missing").toArray();
+      if (!missing.isEmpty()) tooltip += QCoreApplication::translate("ProfileCreator", "\nMissing: %1").arg(missing.first().toString());
+      combo->setItemData(index, tooltip, Qt::ToolTipRole);
       combo->setItemData(index, font, Qt::UserRole + 1);
       if (auto *model = qobject_cast<QStandardItemModel *>(combo->model())) {
         if (QStandardItem *item = model->item(index)) item->setEnabled(available);
@@ -370,14 +442,14 @@ class CreatorWindow : public QMainWindow {
     StemTeXProfileContext context{texmf.constData()};
     StemTeXProfileErrorCode code = STEMTEX_PROFILE_OK;
     char *error = nullptr;
-    char *json = stemtex_profile_package_catalog_json(&context, &code, &error);
+    char *json = stemtex_profile_package_catalog_for_engine_json(&context, engine_, &code, &error);
     if (!json) {
       QString message = profileErrorText(error);
       packageTree_->clear();
       packagePlanLabel_->setText(message);
       packageNoticeLabel_->hide();
       package_plan_valid_ = false;
-      QMessageBox::critical(this, QCoreApplication::translate("ProfileCreator", "Cannot read package allowlist"), message);
+      reportCritical(QCoreApplication::translate("ProfileCreator", "Cannot read package allowlist"), message);
       return false;
     }
     QJsonParseError parseError{};
@@ -389,7 +461,7 @@ class CreatorWindow : public QMainWindow {
       packagePlanLabel_->setText(parseError.errorString());
       packageNoticeLabel_->hide();
       package_plan_valid_ = false;
-      QMessageBox::critical(this, QCoreApplication::translate("ProfileCreator", "Package allowlist error"), parseError.errorString());
+      reportCritical(QCoreApplication::translate("ProfileCreator", "Package allowlist error"), parseError.errorString());
       return false;
     }
 
@@ -455,8 +527,8 @@ class CreatorWindow : public QMainWindow {
     StemTeXProfileContext context{texmf.constData()};
     StemTeXProfileErrorCode code = STEMTEX_PROFILE_OK;
     char *error = nullptr;
-    char *json = stemtex_profile_package_plan_json(
-        &context, pointers.empty() ? nullptr : pointers.data(), pointers.size(), &code, &error);
+    char *json = stemtex_profile_package_plan_for_engine_json(
+        &context, engine_, pointers.empty() ? nullptr : pointers.data(), pointers.size(), &code, &error);
     if (!json) {
       const QString message = profileErrorText(error);
       packagePlanLabel_->setText(QCoreApplication::translate("ProfileCreator", "Cannot resolve package order: %1").arg(message));
@@ -537,22 +609,39 @@ class CreatorWindow : public QMainWindow {
     selectionChanged();
   }
 
+  void clearCatalogs(const QString &message) {
+    for (QComboBox *combo : {textCombo_, mathCombo_, cjkCombo_}) {
+      QSignalBlocker blocker(combo);
+      combo->clear();
+    }
+    {
+      QSignalBlocker blocker(packageTree_);
+      packageTree_->clear();
+      package_items_.clear();
+      package_catalog_order_.clear();
+    }
+    packagePlanLabel_->setText(message);
+    packageNoticeLabel_->hide();
+    package_plan_valid_ = false;
+    selectionChanged();
+    selectionInfo_->setText(message);
+    statusBar()->showMessage(message);
+  }
+
   void reloadCatalog(const QString &wantedText, const QString &wantedMath, const QString &wantedCjk) {
+    if (engine_ == STEMTEX_PROFILE_ENGINE_LUAHBTEX && !hasLuaLatexTree(texmf_root_)) {
+      clearCatalogs(QCoreApplication::translate("ProfileCreator", "LuaHBTeX needs a full TeX Live tree with lualatex.ini. Choose TeX Live to continue."));
+      return;
+    }
     QByteArray texmf = texmf_root_.toUtf8();
     StemTeXProfileContext context{texmf.constData()};
     StemTeXProfileErrorCode code = STEMTEX_PROFILE_OK;
     char *error = nullptr;
-    char *json = stemtex_profile_font_catalog_json(&context, &code, &error);
+    char *json = stemtex_profile_font_catalog_for_engine_json(&context, engine_, &code, &error);
     if (!json) {
       QString message = profileErrorText(error);
-      statusBar()->showMessage(message);
-      QMessageBox::critical(this, QCoreApplication::translate("ProfileCreator", "Cannot read font catalog"), message);
-      for (QComboBox *combo : {textCombo_, mathCombo_, cjkCombo_}) combo->clear();
-      packageTree_->clear();
-      packagePlanLabel_->clear();
-      packageNoticeLabel_->hide();
-      package_plan_valid_ = false;
-      selectionChanged();
+      clearCatalogs(message);
+      reportCritical(QCoreApplication::translate("ProfileCreator", "Cannot read font catalog"), message);
       return;
     }
     QJsonParseError parseError{};
@@ -560,15 +649,16 @@ class CreatorWindow : public QMainWindow {
     stemtex_profile_free_string(json);
     stemtex_profile_free_string(error);
     if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
-      QMessageBox::critical(this, QCoreApplication::translate("ProfileCreator", "Font catalog error"), parseError.errorString());
+      clearCatalogs(parseError.errorString());
+      reportCritical(QCoreApplication::translate("ProfileCreator", "Font catalog error"), parseError.errorString());
       return;
     }
     QJsonArray fonts = document.object().value("fonts").toArray();
     addCatalogItems(textCombo_, fonts, "text", wantedText);
     addCatalogItems(mathCombo_, fonts, "math", wantedMath);
     addCatalogItems(cjkCombo_, fonts, "cjk", wantedCjk);
-    reloadPackageCatalog();
-    statusBar()->showMessage(QCoreApplication::translate("ProfileCreator", "Loaded the current TeX Live font and package catalogs"), 4000);
+    if (reloadPackageCatalog())
+      statusBar()->showMessage(QCoreApplication::translate("ProfileCreator", "Loaded the current TeX Live font and package catalogs"), 4000);
     selectionChanged();
   }
 
@@ -577,6 +667,7 @@ class CreatorWindow : public QMainWindow {
     ids.removeAll("none");
     QString base = ids.join('-');
     if (base.isEmpty()) base = QStringLiteral("font-profile");
+    if (engine_ == STEMTEX_PROFILE_ENGINE_LUAHBTEX) base.prepend("luahbtex-");
     QString candidate = base;
     int suffix = 2;
     while (QFileInfo::exists(QDir(profiles_root_).filePath(candidate))) {
@@ -592,15 +683,14 @@ class CreatorWindow : public QMainWindow {
       if (combo->currentIndex() >= 0) descriptions << combo->currentData(Qt::ToolTipRole).toString();
     }
     selectionInfo_->setText(descriptions.join(QStringLiteral(" · ")));
-    bool valid = selectionsValid();
-    createButton_->setEnabled(valid && !nameEdit_->text().trimmed().isEmpty());
     updatePreamble();
+    createButton_->setEnabled(selectionsValid() && preamble_valid_ && !nameEdit_->text().trimmed().isEmpty());
   }
 
   SpecStorage currentSpec(const QString &nameOverride = QString()) const {
     QString name = nameOverride.isEmpty() ? nameEdit_->text().trimmed() : nameOverride;
     return SpecStorage(name, selectedId(textCombo_), selectedId(mathCombo_), selectedId(cjkCombo_),
-                       explicitPackageIds(), userPreambleEdit_->toPlainText());
+                       explicitPackageIds(), userPreambleEdit_->toPlainText(), engine_);
   }
 
   bool generateTemporaryProfile(const QString &root, const SpecStorage &storage, QString *profilePath, QString *errorText) {
@@ -610,7 +700,7 @@ class CreatorWindow : public QMainWindow {
     StemTeXProfileErrorCode code = STEMTEX_PROFILE_OK;
     char *result = nullptr;
     char *error = nullptr;
-    int ok = stemtex_profile_materialize_v3(&context, &storage.spec, profiles.constData(), &result, &code, &error);
+    int ok = stemtex_profile_materialize_v4(&context, &storage.spec, profiles.constData(), &result, &code, &error);
     if (!ok) {
       if (errorText) *errorText = profileErrorText(error);
       stemtex_profile_free_string(result);
@@ -626,6 +716,7 @@ class CreatorWindow : public QMainWindow {
   }
 
   void updatePreamble() {
+    preamble_valid_ = false;
     if (!selectionsValid()) {
       preambleEdit_->clear();
       return;
@@ -635,7 +726,7 @@ class CreatorWindow : public QMainWindow {
     SpecStorage storage = currentSpec(QStringLiteral("preamble-preview"));
     StemTeXProfileErrorCode code = STEMTEX_PROFILE_OK;
     char *error = nullptr;
-    char *preamble = stemtex_profile_preamble_v3_utf8(&context, &storage.spec, &code, &error);
+    char *preamble = stemtex_profile_preamble_v4_utf8(&context, &storage.spec, &code, &error);
     if (!preamble) {
       QString message = profileErrorText(error);
       preambleEdit_->setPlainText(QCoreApplication::translate("ProfileCreator", "% Cannot generate preamble.tex\n% %1").arg(message));
@@ -643,6 +734,7 @@ class CreatorWindow : public QMainWindow {
       return;
     }
     preambleEdit_->setPlainText(QString::fromUtf8(preamble));
+    preamble_valid_ = true;
     stemtex_profile_free_string(preamble);
     stemtex_profile_free_string(error);
     preambleEdit_->moveCursor(QTextCursor::Start);
@@ -650,7 +742,7 @@ class CreatorWindow : public QMainWindow {
   }
 
   void createProfile() {
-    if (!selectionsValid()) return;
+    if (!selectionsValid() || !preamble_valid_) return;
     QString name = nameEdit_->text().trimmed();
     if (name.isEmpty()) return;
     WaitCursor wait;
@@ -671,6 +763,11 @@ class CreatorWindow : public QMainWindow {
 
   QString texmf_root_;
   QString profiles_root_;
+  QString xetex_texmf_root_;
+  QString lua_texmf_root_;
+  StemTeXProfileEngine engine_ = STEMTEX_PROFILE_ENGINE_XETEX;
+  bool smoke_mode_ = false;
+  QComboBox *engineCombo_ = nullptr;
   QLineEdit *texmfEdit_ = nullptr;
   QLineEdit *profilesEdit_ = nullptr;
   QLineEdit *nameEdit_ = nullptr;
@@ -691,6 +788,7 @@ class CreatorWindow : public QMainWindow {
   bool package_selection_initialized_ = false;
   bool updating_packages_ = false;
   bool package_plan_valid_ = false;
+  bool preamble_valid_ = false;
 };
 
 }  // namespace
@@ -704,6 +802,24 @@ int main(int argc, char **argv) {
   // Translators must outlive the window and be installed before creating widgets.
   CreatorI18n::Translations translations;
   if (!translations.initialize(args)) return 2;
+  QString engineName = QStringLiteral("xetex");
+  for (int i = 1; i < args.size(); ++i) {
+    if (args.at(i) == QStringLiteral("--engine")) {
+      if (++i >= args.size()) {
+        qCritical("Usage: --engine xetex|luahbtex|luatex");
+        return 2;
+      }
+      engineName = args.at(i).toLower();
+    } else if (args.at(i).startsWith(QStringLiteral("--engine="))) {
+      engineName = args.at(i).mid(9).toLower();
+    }
+  }
+  const bool lua = engineName == "luahbtex" || engineName == "luatex";
+  if (!lua && engineName != "xetex") {
+    qCritical("Usage: --engine xetex|luahbtex|luatex");
+    return 2;
+  }
+  const auto engine = lua ? STEMTEX_PROFILE_ENGINE_LUAHBTEX : STEMTEX_PROFILE_ENGINE_XETEX;
   if (args.contains("--smoke-i18n")) return translations.smokeCheck() ? 0 : 3;
   bool smoke = args.contains("--smoke");
   if (smoke && !translations.smokeCheck()) return 3;
@@ -711,8 +827,8 @@ int main(int argc, char **argv) {
   QString texmfRoot = argumentValue(args, "--texmf", runtimeRoot);
   QString profilesRoot = argumentValue(args, "--profiles", defaultProfilesRoot());
   configureSdkDllSearch(runtimeRoot);
-  CreatorWindow window(texmfRoot, profilesRoot);
-  if (smoke) return 0;
+  CreatorWindow window(texmfRoot, profilesRoot, engine, smoke);
+  if (smoke) return window.smokeCheck() ? 0 : 4;
   window.show();
   return app.exec();
 }

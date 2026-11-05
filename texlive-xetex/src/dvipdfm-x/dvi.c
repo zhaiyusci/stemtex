@@ -233,6 +233,7 @@ static double phantom_depth  = 0.0;
 static unsigned char* dvi_page_buffer;
 static unsigned int   dvi_page_buf_size;
 static unsigned int   dvi_page_buf_index;
+static int            buffered_page = -1;
 
 /* functions to read numbers from the dvi file and store them in dvi_page_buffer */
 static int get_and_buffer_unsigned_byte (FILE *file)
@@ -2349,6 +2350,11 @@ dvi_init (char *dvi_filename, double mag)
 {
   int32_t post_location;
 
+  /* The page cache belongs to this input document, not to the daemon.
+   * A previous document may have ended on the same page number. */
+  buffered_page = -1;
+  dvi_page_buf_index = 0;
+
   if (!dvi_filename) { /* no filename: reading from stdin, probably a pipe */
     int ch;
 #ifdef WIN32
@@ -2465,6 +2471,8 @@ dvi_close (void)
     dvi_page_buffer = NULL;
     dvi_page_buf_size = 0;
   }
+  buffered_page = -1;
+  dvi_page_buf_index = 0;
 }
 
 /* The following are need to implement virtual fonts
@@ -2776,7 +2784,6 @@ dvi_scan_specials (int page_no,
   FILE          *fp = dvi_file;
   int32_t        offset;
   unsigned char  opcode;
-  static int     buffered_page = -1;
   unsigned int len;
 
   if (page_no == buffered_page || num_pages == 0)

@@ -175,7 +175,24 @@ bool rendererProfileInfo(const QString &profileRoot, ProfileEntry *entry, QStrin
   return true;
 }
 
-QVector<ProfileEntry> profileRoots(const QString &, QString *errorText) {
+bool profileSupportsEngine(const QString &profileRoot, const QString &repoRoot, bool lua) {
+  QFile manifest(QDir(profileRoot).filePath("profile.json"));
+  if (manifest.exists()) {
+    if (!manifest.open(QIODevice::ReadOnly)) return false;
+    QJsonParseError error{};
+    const auto document = QJsonDocument::fromJson(manifest.readAll(), &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject()) return false;
+    const auto object = document.object();
+    if (object.contains("engine"))
+      return object.value("engine").toString() == (lua ? "luahbtex" : "xetex");
+  }
+  // Historical and hand-written profiles target XeTeX unless explicitly
+  // marked. The maintained minimal unicode-math profile works in both.
+  return !lua || QDir(profileRoot).absolutePath().compare(
+                     QDir(luaProfileRoot(repoRoot)).absolutePath(), Qt::CaseInsensitive) == 0;
+}
+
+QVector<ProfileEntry> profileRoots(const QString &repoRoot, QString *errorText, bool lua = false) {
   QVector<ProfileEntry> profiles;
   QDir appDir(QCoreApplication::applicationDirPath());
   QStringList roots{appDir.filePath("profiles"), userProfilesRoot()};
@@ -188,6 +205,7 @@ QVector<ProfileEntry> profileRoots(const QString &, QString *errorText) {
       ProfileEntry profile;
       QString candidateError;
       if (!rendererProfileInfo(candidate.absoluteFilePath(), &profile, &candidateError)) continue;
+      if (!profileSupportsEngine(profile.path, repoRoot, lua)) continue;
       bool duplicate = false;
       for (const ProfileEntry &existing : profiles) {
         if (QDir::cleanPath(existing.path).compare(QDir::cleanPath(profile.path), Qt::CaseInsensitive) == 0) {
@@ -549,7 +567,7 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
 class MainWindow : public QMainWindow {
  public:
   MainWindow(QString repoRoot, QString runtimeRoot, QString texmfRoot,
-             bool startWithLua = false, QString luaEnginePath = QString())
+             bool startWithLua = false, QString luaEnginePath = QString(), QString initialProfileRoot = QString())
       : repo_root_(std::move(repoRoot)),
         runtime_root_(normalizeRuntimeRoot(runtimeRoot)),
         texmf_root_(texmfRoot.isEmpty() ? defaultTexmfRoot(runtime_root_) : normalizeTexmfRoot(texmfRoot)),
@@ -611,6 +629,18 @@ class MainWindow : public QMainWindow {
     texmfButton_ = new QPushButton("TeXLive...", central);
     profileCombo_ = new QComboBox(central);
     reloadProfiles();
+    if (!initialProfileRoot.isEmpty()) {
+      ProfileEntry initial;
+      if (rendererProfileInfo(initialProfileRoot, &initial, nullptr) &&
+          profileSupportsEngine(initial.path, repo_root_, usingLua())) {
+        int index = profileCombo_->findData(initial.path);
+        if (index < 0) {
+          profileCombo_->addItem(initial.name, initial.path);
+          index = profileCombo_->count() - 1;
+        }
+        profileCombo_->setCurrentIndex(index);
+      }
+    }
     profileCreatorButton_ = new QPushButton(QStringLiteral("Profile..."), central);
     clearXdvButton_ = new QPushButton(QStringLiteral("清空 XDV"), central);
     clearXdvButton_->setToolTip(QStringLiteral("删除当前 Profile 的 XDV 与字体缓存并重新生成"));
@@ -984,11 +1014,11 @@ class MainWindow : public QMainWindow {
 
   void setUiReady(bool ready) {
     bool lua = usingLua();
-    bool hasProfile = lua || (profileCombo_ && profileCombo_->currentIndex() >= 0);
+    bool hasProfile = profileCombo_ && profileCombo_->currentIndex() >= 0;
     renderButton_->setEnabled(hasProfile);
     if (clearXdvButton_) clearXdvButton_->setEnabled(!lua && ready && hasProfile);
-    if (profileCombo_) profileCombo_->setEnabled(!lua && profileCombo_->count() > 0);
-    if (profileCreatorButton_) profileCreatorButton_->setEnabled(!lua && !profileCreatorProcess_);
+    if (profileCombo_) profileCombo_->setEnabled(profileCombo_->count() > 0);
+    if (profileCreatorButton_) profileCreatorButton_->setEnabled(!profileCreatorProcess_);
     if (encodingCombo_) {
       if (lua) encodingCombo_->setCurrentText("UTF-8");
       encodingCombo_->setEnabled(!lua);
@@ -1003,7 +1033,7 @@ class MainWindow : public QMainWindow {
 
   void scheduleAutoRender() {
     if (shuttingDown_.load() || !autoRenderTimer_) return;
-    if (!usingLua() && (!profileCombo_ || profileCombo_->currentIndex() < 0)) return;
+    if (!profileCombo_ || profileCombo_->currentIndex() < 0) return;
     if (!hasRenderer()) {
       pendingStartupRender_ = true;
       return;
@@ -1097,7 +1127,6 @@ class MainWindow : public QMainWindow {
   }
 
   QString selectedProfileRoot() const {
-    if (usingLua()) return luaProfileRoot(repo_root_);
     return profileCombo_ && profileCombo_->currentIndex() >= 0 ? profileCombo_->currentData().toString() : QString();
   }
 
@@ -1110,19 +1139,26 @@ class MainWindow : public QMainWindow {
     QString profileError;
     bool oldSignals = profileCombo_->blockSignals(true);
     profileCombo_->clear();
-    for (const ProfileEntry &profile : profileRoots(repo_root_, &profileError)) {
+    for (const ProfileEntry &profile : profileRoots(repo_root_, &profileError, usingLua())) {
       profileCombo_->addItem(profile.name, profile.path);
     }
-    int oldIndex = profileCombo_->findData(usingLua() ? luaProfileRoot(repo_root_) : oldProfile);
-    if (usingLua() && oldIndex < 0) {
-      profileCombo_->addItem("unicode-math (LuaHBTeX)", luaProfileRoot(repo_root_));
-      oldIndex = profileCombo_->count() - 1;
+    if (!oldProfile.isEmpty() && profileCombo_->findData(oldProfile) < 0 &&
+        profileSupportsEngine(oldProfile, repo_root_, usingLua())) {
+      ProfileEntry active;
+      if (rendererProfileInfo(oldProfile, &active, nullptr))
+        profileCombo_->addItem(active.name, active.path);
+    }
+    int oldIndex = profileCombo_->findData(oldProfile);
+    if (usingLua() && profileCombo_->findData(luaProfileRoot(repo_root_)) < 0 &&
+        profileSupportsEngine(luaProfileRoot(repo_root_), repo_root_, true) &&
+        QFileInfo::exists(QDir(luaProfileRoot(repo_root_)).filePath("preamble.tex"))) {
+      profileCombo_->insertItem(0, "unicode-math", luaProfileRoot(repo_root_));
+      if (oldIndex >= 0) ++oldIndex;
     }
     if (oldIndex >= 0) profileCombo_->setCurrentIndex(oldIndex);
     profileCombo_->blockSignals(oldSignals);
-    profileCombo_->setToolTip(usingLua()
-        ? QStringLiteral("LuaHBTeX 实验模式固定使用内置 unicode-math Profile")
-        : (profileCombo_->count() == 0 ? profileError : QString()));
+    profileCombo_->setToolTip(profileCombo_->count() == 0 ? profileError
+        : QStringLiteral("只显示与当前引擎兼容的 Profile"));
     QString shown = QFileInfo(texmf_root_).fileName();
     if (shown.isEmpty()) shown = texmf_root_;
     texmfLabel_->setText(shown);
@@ -1142,20 +1178,23 @@ class MainWindow : public QMainWindow {
     profileCreatorProcess_ = new QProcess(this);
     profileCreatorButton_->setEnabled(false);
     connect(profileCreatorProcess_, &QProcess::finished, this, [this](int, QProcess::ExitStatus) {
-      profileCreatorButton_->setEnabled(!usingLua());
+      const QString previousProfile = selectedProfileRoot();
       reloadProfiles();
-      updateEngineStatus(hasRenderer(), spareReady_, spareTarget_, QString("Profile list refreshed"));
       profileCreatorProcess_->deleteLater();
       profileCreatorProcess_ = nullptr;
+      setUiReady(hasRenderer());
+      if (previousProfile != selectedProfileRoot()) switchProfile();
+      else updateEngineStatus(hasRenderer(), spareReady_, spareTarget_, QString("Profile list refreshed"));
     });
     connect(profileCreatorProcess_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
-      profileCreatorButton_->setEnabled(!usingLua());
+      profileCreatorButton_->setEnabled(true);
       updateEngineStatus(hasRenderer(), spareReady_, spareTarget_,
                          QString("Cannot start Profile Creator: %1").arg(profileCreatorProcess_->errorString()));
     });
     profileCreatorProcess_->setProgram(executable);
     profileCreatorProcess_->setArguments({"--runtime", runtime_root_, "--texmf", texmf_root_,
-                                          "--profiles", userProfilesRoot()});
+                                          "--profiles", userProfilesRoot(),
+                                          "--engine", usingLua() ? "luahbtex" : "xetex"});
     profileCreatorProcess_->setWorkingDirectory(QCoreApplication::applicationDirPath());
     profileCreatorProcess_->start();
   }
@@ -1308,12 +1347,14 @@ class MainWindow : public QMainWindow {
       texmf_root_ = lua_texmf_root_.isEmpty() ? findLuaTexmfRoot(texmf_root_) : lua_texmf_root_;
     } else {
       lua_texmf_root_ = texmf_root_;
+      lua_profile_root_ = selectedProfileRoot();
       texmf_root_ = xetex_texmf_root_;
     }
     reloadProfiles();
-    if (!usingLua() && !xetex_profile_root_.isEmpty()) {
+    const QString wantedProfile = usingLua() ? lua_profile_root_ : xetex_profile_root_;
+    if (!wantedProfile.isEmpty()) {
       QSignalBlocker blocker(profileCombo_);
-      const int index = profileCombo_->findData(xetex_profile_root_);
+      const int index = profileCombo_->findData(wantedProfile);
       if (index >= 0) profileCombo_->setCurrentIndex(index);
     }
     setUiReady(false);
@@ -1329,7 +1370,7 @@ class MainWindow : public QMainWindow {
       setUiReady(true);
       return;
     }
-    initializeRenderer(false);
+    initializeRenderer(true);
   }
 
   void initializeRenderer(bool renderAfterInit) {
@@ -1423,6 +1464,11 @@ class MainWindow : public QMainWindow {
   }
 
   void initializeLuaRenderer(bool renderAfterInit) {
+    if (selectedProfileRoot().isEmpty()) {
+      updateEngineStatus(false, 0, 0, "choose a LuaHBTeX profile");
+      setUiReady(true);
+      return;
+    }
     setUiReady(false);
     beginStartupProgress();
     luaInstalled_.store(false);
@@ -1432,7 +1478,7 @@ class MainWindow : public QMainWindow {
     config.runtimeRoot = runtime_root_;
     config.texmfRoot = texmf_root_;
     config.enginePath = lua_engine_path_;
-    config.profileRoot = luaProfileRoot(repo_root_);
+    config.profileRoot = selectedProfileRoot();
     config.stateRoot = QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation))
                            .filePath("StemTeX/lua-gui");
     postBackground([this, config, generation, renderAfterInit]() {
@@ -1763,6 +1809,7 @@ class MainWindow : public QMainWindow {
   QString xetex_texmf_root_;
   QString lua_texmf_root_;
   QString xetex_profile_root_;
+  QString lua_profile_root_;
   QString lua_engine_path_;
   StemTeXRenderer *renderer_ = nullptr;
   std::shared_ptr<stemtex::LuaBackend> luaRenderer_;
@@ -1863,11 +1910,18 @@ int main(int argc, char **argv) {
   QString runtimeRoot = args.size() > 2 ? args.at(2) : defaultRuntimeRoot();
   configureRendererDllSearch(runtimeRoot);
   QString profileError;
-  QVector<ProfileEntry> profiles = profileRoots(repoRoot, &profileError);
+  QVector<ProfileEntry> profiles = profileRoots(repoRoot, &profileError, useLua);
   QString profileRoot = args.size() > 3 ? args.at(3) : (profiles.isEmpty() ? QString() : profiles.first().path);
   QString texmfRoot = args.size() > 4 ? args.at(4) : defaultTexmfRoot(runtimeRoot);
+  if (args.size() > 3 && !profileSupportsEngine(profileRoot, repoRoot, useLua)) {
+    const QString message = QString("Profile is not compatible with %1: %2")
+                                .arg(useLua ? "LuaHBTeX" : "XeTeX", profileRoot);
+    if (smoke) qCritical().noquote() << message;
+    else QMessageBox::critical(nullptr, "StemTeX", message);
+    return 2;
+  }
   if (smoke) return runSmoke(repoRoot, runtimeRoot, profileRoot, texmfRoot);
-  MainWindow w(repoRoot, runtimeRoot, texmfRoot, useLua, luaEnginePath);
+  MainWindow w(repoRoot, runtimeRoot, texmfRoot, useLua, luaEnginePath, profileRoot);
   w.show();
   return app.exec();
 }

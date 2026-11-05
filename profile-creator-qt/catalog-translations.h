@@ -62,6 +62,7 @@ namespace CreatorI18n {
     QT_TRANSLATE_NOOP("ProfileCatalog", "Times-compatible Unicode mathematics"),
     QT_TRANSLATE_NOOP("ProfileCatalog", "No CJK font"),
     QT_TRANSLATE_NOOP("ProfileCatalog", "Do not load xeCJK"),
+    QT_TRANSLATE_NOOP("ProfileCatalog", "Do not load CJK support"),
     QT_TRANSLATE_NOOP("ProfileCatalog", "Windows SimSun body with SimHei sans text"),
     QT_TRANSLATE_NOOP("ProfileCatalog", "Windows SimHei with deterministic synthetic shapes"),
     QT_TRANSLATE_NOOP("ProfileCatalog", "Windows Microsoft YaHei CJK text"),

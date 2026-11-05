@@ -144,12 +144,12 @@ DviSnapshot finalizeDvi(const QByteArray &data) {
   return {result, pages};
 }
 
-QByteArray workerSource(const QString &preamble) {
+QByteArray workerSource(bool svgDriver) {
   // The same preview/minipage layout used by the XeTeX GUI, with a Lua
   // stdout flush and no checkpoint special. halt-on-error makes failures
   // unambiguous; the host starts a fresh worker after an invalid fragment.
-  return QString::fromLatin1(R"TEX(\PassOptionsToPackage{xetex}{preview}
-\input{\detokenize{%1}}
+  return (svgDriver ? QByteArray("\\def\\StemTeXOutputSVG{}\n") : QByteArray()) + QByteArray(R"TEX(\PassOptionsToPackage{xetex}{preview}
+\input{profile-preamble.tex}
 \newcount\snippetcount
 \newdimen\stemtexfontsize
 \newdimen\stemtexbaselineskip
@@ -159,8 +159,11 @@ QByteArray workerSource(const QString &preamble) {
 % preview's DVI default is its dvips driver. Use its native DVI offsets
 % instead, then emit page dimensions explicitly: LuaTeX does not generate
 % XeTeX's papersize special from the pagewidth/pageheight registers.
+\ifdefined\StemTeXLuaPageSizeHook\else
+\global\let\StemTeXLuaPageSizeHook\empty
 \g@addto@macro\pr@ship@end{\setbox\pr@box\hbox{%
   \special{papersize=\the\pdfpagewidth,\the\pdfpageheight}\box\pr@box}}
+\fi
 \def\resetfragment{%
   \setcounter{page}{1}\setcounter{equation}{0}\setcounter{footnote}{0}%
   \setcounter{enumi}{0}\setcounter{enumii}{0}\setcounter{enumiii}{0}\setcounter{enumiv}{0}%
@@ -183,7 +186,20 @@ QByteArray workerSource(const QString &preamble) {
     \stemtexfontsize=\snippetfont
     \stemtexbaselineskip=1.2\stemtexfontsize
     \normalfont\fontsize{\the\stemtexfontsize}{\the\stemtexbaselineskip}\selectfont\normalcolor
-    \input{\snippetfile}\par
+    \edef\stemtexbeforeif{\number\currentiflevel}%
+    \edef\stemtexbeforegroup{\number\currentgrouplevel}%
+    \input{\snippetfile}%
+    % An unfinished true conditional can otherwise cross the input-file
+    % boundary with only a warning and contaminate the next request.
+    \edef\stemtexafterif{\number\currentiflevel}%
+    \edef\stemtexaftergroup{\number\currentgrouplevel}%
+    \ifnum\stemtexbeforeif=\stemtexafterif\relax\else
+      \errmessage{Unbalanced conditional at end of StemTeX snippet}%
+    \fi
+    \ifnum\stemtexbeforegroup=\stemtexaftergroup\relax\else
+      \errmessage{Unbalanced group at end of StemTeX snippet}%
+    \fi
+    \par
     % Even an empty minipage must retain the requested width. A zero-height
     % rule gives its vbox that width without ink or extra vertical space.
     \hrule width\hsize height0pt depth0pt
@@ -194,7 +210,7 @@ QByteArray workerSource(const QString &preamble) {
   \workerloop
 }
 \workerloop
-)TEX").arg(preamble).toUtf8();
+)TEX");
 }
 
 // The hot converter APIs use process-global kpathsea/fontconfig state. As with
@@ -379,22 +395,40 @@ struct LuaBackend::Impl {
   }
 
   ~Impl() {
-    stopWorker();
+    stopAllWorkers();
     if (job) CloseHandle(job);
   }
 
+  struct WorkerSlot {
+    std::unique_ptr<QProcess> process;
+    QString workRoot, lastSnapshotPath;
+    QByteArray pending, transcript;
+    int request = 0, pageCount = 0, generation = 0;
+    bool ready = false;
+  };
+
   LuaBackendConfig config;
   QProcessEnvironment environment;
-  std::unique_ptr<QProcess> worker;
+  WorkerSlot workers[2];
+  int activeWorker = 0;
+  bool outputSpecificWorkers = false;
   std::unique_ptr<HotConverters> converters;
   HANDLE job = nullptr;
   std::atomic<bool> cancelled{false};
   std::atomic<bool> isReady{false};
   std::atomic<qint64> pid{0};
-  QString sessionRoot, workRoot, formatFile, cacheRoot, lastSnapshotPath;
-  QByteArray pending, transcript;
-  int request = 0, pageCount = 0, workerGeneration = 0;
+  QString sessionRoot, formatFile, cacheRoot;
   bool initialized = false;
+
+  WorkerSlot &currentWorker() { return workers[activeWorker]; }
+
+  void activateWorker(bool svg) {
+    activeWorker = outputSpecificWorkers && svg ? 1 : 0;
+    auto &slot = currentWorker();
+    const bool running = slot.process && slot.process->state() != QProcess::NotRunning;
+    isReady.store(slot.ready && running);
+    pid.store(running ? slot.process->processId() : 0);
+  }
 
   void checkCancelled() const {
     if (cancelled.load()) fail("LuaHBTeX operation cancelled.");
@@ -453,64 +487,82 @@ struct LuaBackend::Impl {
     return output;
   }
 
-  void stopWorker() {
-    isReady.store(false);
-    pid.store(0);
-    if (worker) {
-      if (worker->state() != QProcess::NotRunning) {
-        worker->kill();
-        worker->waitForFinished(5000);
+  void stopWorker(WorkerSlot &slot) {
+    slot.ready = false;
+    if (&slot == &currentWorker()) {
+      isReady.store(false);
+      pid.store(0);
+    }
+    if (slot.process) {
+      if (slot.process->state() != QProcess::NotRunning) {
+        slot.process->kill();
+        slot.process->waitForFinished(5000);
       }
-      if (!workRoot.isEmpty()) {
-        QFile log(pathIn(workRoot, "host-transcript.log"));
-        if (log.open(QIODevice::WriteOnly)) log.write(transcript + worker->readAll());
+      if (!slot.workRoot.isEmpty()) {
+        QFile log(pathIn(slot.workRoot, "host-transcript.log"));
+        if (log.open(QIODevice::WriteOnly)) log.write(slot.transcript + slot.process->readAll());
       }
-      worker.reset();
+      slot.process.reset();
     }
   }
 
+  void stopWorker() { stopWorker(currentWorker()); }
+
+  void stopAllWorkers() {
+    for (auto &slot : workers) stopWorker(slot);
+  }
+
   void waitMarker(const QByteArray &marker) {
+    auto &slot = currentWorker();
     QElapsedTimer timer;
     timer.start();
     while (true) {
       checkCancelled();
-      const QByteArray available = worker->readAll();
-      pending += available;
-      transcript += available;
-      if (transcript.size() > 1024 * 1024) transcript = transcript.right(1024 * 1024);
+      const QByteArray available = slot.process->readAll();
+      slot.pending += available;
+      slot.transcript += available;
+      if (slot.transcript.size() > 1024 * 1024) slot.transcript = slot.transcript.right(1024 * 1024);
       qsizetype newline;
-      while ((newline = pending.indexOf('\n')) >= 0) {
-        const QByteArray line = pending.left(newline).trimmed();
-        pending.remove(0, newline + 1);
+      while ((newline = slot.pending.indexOf('\n')) >= 0) {
+        const QByteArray line = slot.pending.left(newline).trimmed();
+        slot.pending.remove(0, newline + 1);
         if (line == marker) return;
       }
-      if (pending.size() > 1024 * 1024) pending = pending.right(65536);
-      if (worker->state() == QProcess::NotRunning)
-        fail(QString("LuaHBTeX stopped before %1.\n%2").arg(QString::fromLatin1(marker), QString::fromUtf8(transcript.right(10000))));
+      if (slot.pending.size() > 1024 * 1024) slot.pending = slot.pending.right(65536);
+      if (slot.process->state() == QProcess::NotRunning)
+        fail(QString("LuaHBTeX stopped before %1.\n%2").arg(QString::fromLatin1(marker), QString::fromUtf8(slot.transcript.right(10000))));
       if (timer.elapsed() >= config.timeoutMs)
-        fail(QString("LuaHBTeX timed out waiting for %1.\n%2").arg(QString::fromLatin1(marker), QString::fromUtf8(transcript.right(6000))));
-      worker->waitForReadyRead(50);
+        fail(QString("LuaHBTeX timed out waiting for %1.\n%2").arg(QString::fromLatin1(marker), QString::fromUtf8(slot.transcript.right(6000))));
+      slot.process->waitForReadyRead(50);
     }
   }
 
   void startWorker() {
     stopWorker();
     checkCancelled();
-    workRoot = pathIn(sessionRoot, QString("worker-%1").arg(++workerGeneration));
-    if (!QDir().mkpath(workRoot)) fail("Cannot create the LuaHBTeX worker directory.");
-    writeFile(pathIn(workRoot, "worker.tex"), workerSource(pathIn(config.profileRoot, "preamble.tex")));
-    pending.clear();
-    transcript.clear();
-    request = pageCount = 0;
-    lastSnapshotPath.clear();
-    worker = std::make_unique<QProcess>();
-    setupProcess(*worker, workRoot);
-    start(*worker, config.enginePath,
+    auto &slot = currentWorker();
+    const QString directory = outputSpecificWorkers
+        ? QString("worker-%1-%2").arg(activeWorker == 1 ? "svg" : "pdf").arg(++slot.generation)
+        : QString("worker-%1").arg(++slot.generation);
+    slot.workRoot = pathIn(sessionRoot, directory);
+    if (!QDir().mkpath(slot.workRoot)) fail("Cannot create the LuaHBTeX worker directory.");
+    // Use a literal local filename: TeX tokenizes '%' and braces before
+    // detokenize can protect them in a user-selected profile directory.
+    writeFile(pathIn(slot.workRoot, "profile-preamble.tex"), readFile(pathIn(config.profileRoot, "preamble.tex")));
+    writeFile(pathIn(slot.workRoot, "worker.tex"), workerSource(outputSpecificWorkers && activeWorker == 1));
+    slot.pending.clear();
+    slot.transcript.clear();
+    slot.request = slot.pageCount = 0;
+    slot.lastSnapshotPath.clear();
+    slot.process = std::make_unique<QProcess>();
+    setupProcess(*slot.process, slot.workRoot);
+    start(*slot.process, config.enginePath,
           {"--fmt=" + formatFile, "--progname=lualatex", "--output-format=dvi", "--flush-output-on-shipout",
            "--interaction=errorstopmode", "--halt-on-error", "--no-shell-escape", "worker.tex"});
-    pid.store(worker->processId());
+    pid.store(slot.process->processId());
     waitMarker("STEMTEX_LUA_READY");
     waitMarker("STEMTEX_LUA_WAIT:1");
+    slot.ready = true;
     isReady.store(true);
   }
 
@@ -536,6 +588,16 @@ struct LuaBackend::Impl {
       if (!QFileInfo::exists(path)) fail("Resident converter is missing: " + path);
     }
     if (!QFileInfo::exists(pathIn(config.profileRoot, "preamble.tex"))) fail("The LuaHBTeX profile has no preamble.tex.");
+    outputSpecificWorkers = false;
+    const QString manifest = pathIn(config.profileRoot, "profile.json");
+    if (QFileInfo::exists(manifest)) {
+      QJsonParseError error{};
+      const auto document = QJsonDocument::fromJson(readFile(manifest), &error);
+      if (error.error != QJsonParseError::NoError || !document.isObject())
+        fail("The LuaHBTeX profile has invalid profile.json metadata.");
+      outputSpecificWorkers = document.object().value("outputDrivers").toObject()
+                                  .value("svg").toString() == "dvisvgm";
+    }
     if (config.stateRoot.isEmpty()) config.stateRoot = pathIn(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation), "StemTeX/lua-gui");
     sessionRoot = pathIn(config.stateRoot, "sessions/" + QUuid::createUuid().toString(QUuid::WithoutBraces));
     if (!QDir().mkpath(sessionRoot)) fail("Cannot create the LuaHBTeX session directory.");
@@ -581,6 +643,7 @@ struct LuaBackend::Impl {
     converters = std::make_unique<HotConverters>();
     converters->initialize(config, cacheRoot, sessionRoot);
     report("Loading the LuaHBTeX profile and waiting for the first request");
+    activateWorker(false);
     startWorker();
     initialized = true;
     report("LuaHBTeX ready (DVI streaming; errors restart the worker)");
@@ -595,7 +658,7 @@ bool LuaBackend::initialize(const std::function<void(const QString &)> &progress
     impl_->prepare(progress);
     return true;
   } catch (const std::exception &e) {
-    impl_->stopWorker();
+    impl_->stopAllWorkers();
     impl_->converters.reset();
     if (error) *error = QString::fromUtf8(e.what());
     return false;
@@ -608,45 +671,56 @@ LuaRenderResult LuaBackend::render(const QByteArray &snippet, double widthPt, do
   QElapsedTimer elapsed;
   elapsed.start();
   bool typesetting = true;
+  QString failureStage = "validation";
   try {
     impl_->checkCancelled();
     if (!impl_->initialized) fail("LuaHBTeX has not been initialized.");
     if (!std::isfinite(widthPt) || widthPt <= 0 || !std::isfinite(fontSizePt) || fontSizePt <= 0)
       fail("Width and font size must be positive finite numbers.");
+    // Managed profiles choose their graphics driver before loading packages.
+    // Keep a separate process for each branch; switching back reuses its DVI
+    // stream and TeX state. Older profiles keep their single-worker behavior.
+    impl_->activateWorker(svg);
+    auto &slot = impl_->currentWorker();
+    failureStage = "worker-start";
     // Parsing cumulative DVI is deliberately simple in this experimental
     // adapter. Rotate before it becomes expensive, and stay well below the
     // 16-bit page count and 31-bit file offsets of standard DVI.
-    if (!impl_->isReady.load() || impl_->pageCount >= 2000 ||
-        QFileInfo(pathIn(impl_->workRoot, "worker.dvi")).size() >= 32 * 1024 * 1024)
+    if (!impl_->isReady.load() || slot.pageCount >= 2000 ||
+        QFileInfo(pathIn(slot.workRoot, "worker.dvi")).size() >= 32 * 1024 * 1024)
       impl_->startWorker();
+    failureStage = "typeset";
+    slot.ready = false;
     impl_->isReady.store(false);
-    const int request = ++impl_->request;
+    const int request = ++slot.request;
     const QString stem = QString("request-%1").arg(request);
-    writeFile(pathIn(impl_->workRoot, stem + ".tex"), snippet + '\n');
+    writeFile(pathIn(slot.workRoot, stem + ".tex"), snippet + '\n');
     const QByteArray input = QByteArray::number(widthPt, 'f', 4) + "pt\n" +
                              QByteArray::number(fontSizePt, 'f', 4) + "pt\n" + stem.toUtf8() + ".tex\n";
-    if (impl_->worker->write(input) != input.size()) fail("Cannot send the snippet to LuaHBTeX.");
+    if (slot.process->write(input) != input.size()) fail("Cannot send the snippet to LuaHBTeX.");
     impl_->waitMarker("STEMTEX_LUA_DONE:" + QByteArray::number(request));
     impl_->waitMarker("STEMTEX_LUA_WAIT:" + QByteArray::number(request + 1));
     const qint64 typesetMs = elapsed.elapsed();
-    const DviSnapshot snapshot = finalizeDvi(readFile(pathIn(impl_->workRoot, "worker.dvi")));
-    if (snapshot.pages != impl_->pageCount + 1)
-      fail(QString("A GUI snippet must ship exactly one preview page; this request shipped %1.").arg(snapshot.pages - impl_->pageCount));
-    impl_->pageCount = snapshot.pages;
+    failureStage = "finalize-dvi";
+    const DviSnapshot snapshot = finalizeDvi(readFile(pathIn(slot.workRoot, "worker.dvi")));
+    if (snapshot.pages != slot.pageCount + 1)
+      fail(QString("A GUI snippet must ship exactly one preview page; this request shipped %1.").arg(snapshot.pages - slot.pageCount));
+    slot.pageCount = snapshot.pages;
     result.pageNumber = snapshot.pages;
     result.workerPid = impl_->pid.load();
-    const QString dvi = pathIn(impl_->workRoot, stem + ".dvi");
+    const QString dvi = pathIn(slot.workRoot, stem + ".dvi");
     writeFile(dvi, snapshot.finalized);
-    if (!impl_->lastSnapshotPath.isEmpty()) QFile::remove(impl_->lastSnapshotPath);
-    impl_->lastSnapshotPath = dvi;
+    if (!slot.lastSnapshotPath.isEmpty()) QFile::remove(slot.lastSnapshotPath);
+    slot.lastSnapshotPath = dvi;
     const qint64 convertStart = elapsed.elapsed();
     const qint64 finalizeDviMs = convertStart - typesetMs;
     typesetting = false;
-    result.outputPath = pathIn(impl_->workRoot, stem + (svg ? ".svg" : ".pdf"));
+    failureStage = "conversion";
+    result.outputPath = pathIn(slot.workRoot, stem + (svg ? ".svg" : ".pdf"));
     impl_->checkCancelled();
     ConverterModule::Result converted;
     {
-      const QMap<QString, QString> trace{{"STEMTEX_XDVIPDFMX_TRACE", pathIn(impl_->workRoot, stem + ".xdvipdfmx-trace.log")}};
+      const QMap<QString, QString> trace{{"STEMTEX_XDVIPDFMX_TRACE", pathIn(slot.workRoot, stem + ".xdvipdfmx-trace.log")}};
       ConverterEnvironment traceEnvironment(trace);
       converted = svg ? impl_->converters->svg.convert(dvi, result.outputPath, snapshot.pages)
                       : impl_->converters->pdf.convert(dvi, result.outputPath, snapshot.pages);
@@ -656,7 +730,7 @@ LuaRenderResult LuaBackend::render(const QByteArray &snippet, double widthPt, do
     impl_->checkCancelled();
     const qint64 endMs = elapsed.elapsed();
     const qint64 convertMs = endMs - convertStart;
-    writeFile(pathIn(impl_->workRoot, stem + ".converter.log"),
+    writeFile(pathIn(slot.workRoot, stem + ".converter.log"),
               QString("mode=daemon-dll\nreturnCode=%1\nissueFlags=%2\n%3\n")
                   .arg(converted.code).arg(converted.issueFlags).arg(converted.message).toUtf8());
     if (QFileInfo(result.outputPath).size() <= 0) fail("The DVI converter did not write a nonempty output file.");
@@ -665,6 +739,7 @@ LuaRenderResult LuaBackend::render(const QByteArray &snippet, double widthPt, do
     result.outcomeMessage = converted.message;
     if (result.recoverable && result.outcomeMessage.isEmpty())
       result.outcomeMessage = "The resident PDF converter produced output with a recoverable issue.";
+    slot.ready = true;
     impl_->isReady.store(true);
     const qint64 outputBytes = QFileInfo(result.outputPath).size();
     const QJsonObject summary{
@@ -687,27 +762,50 @@ LuaRenderResult LuaBackend::render(const QByteArray &snippet, double widthPt, do
     result.summary = QString::fromUtf8(QJsonDocument(summary).toJson(QJsonDocument::Compact));
     result.ok = true;
   } catch (const std::exception &e) {
+    const qint64 failureDetectedMs = elapsed.elapsed();
+    const qint64 failedWorkerPid = impl_->pid.load();
+    qint64 restartMs = 0;
+    bool workerRestarted = false;
     result.error = QString::fromUtf8(e.what());
-    if (typesetting || impl_->cancelled.load()) {
+    if (impl_->cancelled.load()) {
+      impl_->stopAllWorkers();
+    } else if (typesetting) {
+      QElapsedTimer restartTimer;
+      restartTimer.start();
       impl_->stopWorker();
-      if (impl_->initialized && !impl_->cancelled.load()) {
+      if (impl_->initialized) {
         try {
           impl_->startWorker();
+          workerRestarted = true;
           result.error += "\nLuaHBTeX restarted; the next valid snippet can be rendered.";
         } catch (const std::exception &restartError) {
-          impl_->stopWorker();
+          if (impl_->cancelled.load()) impl_->stopAllWorkers();
+          else impl_->stopWorker();
           result.error += "\nRestart failed: " + QString::fromUtf8(restartError.what());
         }
       }
+      restartMs = restartTimer.elapsed();
     } else {
-      impl_->isReady.store(impl_->worker && impl_->worker->state() != QProcess::NotRunning);
+      auto &slot = impl_->currentWorker();
+      slot.ready = slot.process && slot.process->state() != QProcess::NotRunning;
+      impl_->isReady.store(slot.ready);
     }
+    // A failed render returns only after synchronous worker recovery. Keep
+    // detection and restart timings separate so callers can measure that cost.
+    const QJsonObject summary{
+        {"engine", "LuaHBTeX"}, {"outputFormat", result.outputFormat}, {"ok", false},
+        {"failureStage", failureStage}, {"failureDetectedMs", failureDetectedMs},
+        {"restartMs", restartMs}, {"errorTotalMs", elapsed.elapsed()},
+        {"workerRestarted", workerRestarted}, {"failedWorkerPid", failedWorkerPid},
+        {"workerPid", impl_->pid.load()}, {"readyAfterError", ready()},
+        {"cancelled", impl_->cancelled.load()}, {"checkpoint", false}};
+    result.summary = QString::fromUtf8(QJsonDocument(summary).toJson(QJsonDocument::Compact));
   }
   return result;
 }
 
 void LuaBackend::cancel() { impl_->cancelled.store(true); impl_->isReady.store(false); }
-bool LuaBackend::ready() const { return impl_->isReady.load(); }
+bool LuaBackend::ready() const { return !impl_->cancelled.load() && impl_->isReady.load(); }
 qint64 LuaBackend::workerPid() const { return impl_->pid.load(); }
 
 }  // namespace stemtex

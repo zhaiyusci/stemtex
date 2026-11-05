@@ -35,6 +35,9 @@ struct LuaRenderResult {
 // background thread. Cancellation is terminal for this backend instance.
 // Only one active GUI backend may own the resident converter DLLs at a time;
 // serialize initialization/destruction with the XeTeX renderer lifecycle.
+// Profiles declaring outputDrivers.svg=dvisvgm use separate resident PDF/SVG
+// workers, with SVG started lazily. workerPid() reports the most recent output's
+// worker. Profiles without that metadata retain one shared worker.
 class LuaBackend {
  public:
   explicit LuaBackend(LuaBackendConfig config);

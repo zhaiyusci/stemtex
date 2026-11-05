@@ -1006,6 +1006,11 @@ tfm_close_all (void)
     }
     RELEASE(fms);
   }
+  /* The daemon can open another document in this process. Do not let
+   * tfm_open() search the metrics (or names) just released above. */
+  fms = NULL;
+  numfms = 0;
+  max_fms = 0;
 }
 
 #define CHECK_ID(n) do {\

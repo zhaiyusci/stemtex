@@ -73,6 +73,45 @@ typedef struct StemTeXProfileSpecV3 {
   const char *user_preamble_utf8;
 } StemTeXProfileSpecV3;
 
+typedef enum StemTeXProfileEngine {
+  STEMTEX_PROFILE_ENGINE_XETEX = 0,
+  STEMTEX_PROFILE_ENGINE_LUAHBTEX = 1
+} StemTeXProfileEngine;
+
+/* Engine-specific managed recipes. Earlier specification layouts and APIs
+ * remain XeTeX-only. The V4 user preamble is preserved byte-for-byte.
+ * Lua profiles default to the PDF/DVI driver; define \StemTeXOutputSVG before
+ * inputting preamble.tex to select SVG drivers. Each driver needs its own
+ * initialized TeX state. Lua manifests record this outputDrivers contract. */
+typedef struct StemTeXProfileSpecV4 {
+  const char *name_utf8;
+  const char *text_font_id_utf8;
+  const char *math_font_id_utf8;
+  const char *cjk_font_id_utf8;
+  const char *const *package_ids_utf8;
+  size_t package_count;
+  const char *user_preamble_utf8;
+  StemTeXProfileEngine engine;
+} StemTeXProfileSpecV4;
+
+STEMTEX_PROFILE_API char *stemtex_profile_font_catalog_for_engine_json(
+    const StemTeXProfileContext *context, StemTeXProfileEngine engine,
+    StemTeXProfileErrorCode *error_code, char **error_utf8);
+STEMTEX_PROFILE_API char *stemtex_profile_package_catalog_for_engine_json(
+    const StemTeXProfileContext *context, StemTeXProfileEngine engine,
+    StemTeXProfileErrorCode *error_code, char **error_utf8);
+STEMTEX_PROFILE_API char *stemtex_profile_package_plan_for_engine_json(
+    const StemTeXProfileContext *context, StemTeXProfileEngine engine,
+    const char *const *package_ids_utf8, size_t package_count,
+    StemTeXProfileErrorCode *error_code, char **error_utf8);
+STEMTEX_PROFILE_API char *stemtex_profile_preamble_v4_utf8(
+    const StemTeXProfileContext *context, const StemTeXProfileSpecV4 *spec,
+    StemTeXProfileErrorCode *error_code, char **error_utf8);
+STEMTEX_PROFILE_API int stemtex_profile_materialize_v4(
+    const StemTeXProfileContext *context, const StemTeXProfileSpecV4 *spec,
+    const char *profiles_root_utf8, char **result_json_utf8,
+    StemTeXProfileErrorCode *error_code, char **error_utf8);
+
 /* Catalog JSON contains text, math, and CJK recipes plus current availability. */
 STEMTEX_PROFILE_API char *stemtex_profile_font_catalog_json(
     const StemTeXProfileContext *context,

@@ -2,10 +2,12 @@
 #include "stemtex_renderer.h"
 
 #include <filesystem>
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <stdexcept>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -15,6 +17,169 @@ std::string read_text(const fs::path &path) {
   std::ostringstream text;
   text << stream.rdbuf();
   return text.str();
+}
+
+void engine_api_smoke(const StemTeXProfileContext &context) {
+  auto require = [](bool okay, const char *message) {
+    if (!okay) throw std::runtime_error(message);
+  };
+  const fs::path root = fs::temp_directory_path() /
+      ("stemtex-profile-v4-smoke-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  fs::create_directories(root);
+  struct Cleanup {
+    fs::path root;
+    ~Cleanup() { std::error_code ignored; fs::remove_all(root, ignored); }
+  } cleanup{root};
+  const std::string profiles_root = root.u8string();
+  StemTeXProfileErrorCode code = STEMTEX_PROFILE_OK;
+  char *error = nullptr;
+  auto take = [&](char *value) {
+    std::string result = value ? value : "";
+    std::string message = error ? error : "API returned no output";
+    stemtex_profile_free_string(value);
+    stemtex_profile_free_string(error);
+    error = nullptr;
+    if (!value) throw std::runtime_error(message);
+    return result;
+  };
+
+  const auto invalid = static_cast<StemTeXProfileEngine>(99);
+  char *value = stemtex_profile_font_catalog_for_engine_json(&context, invalid, &code, &error);
+  require(!value && code == STEMTEX_PROFILE_ERROR_INVALID_ARGUMENT, "Invalid engine accepted by font catalog");
+  stemtex_profile_free_string(error); error = nullptr;
+  value = stemtex_profile_package_catalog_for_engine_json(&context, invalid, &code, &error);
+  require(!value && code == STEMTEX_PROFILE_ERROR_INVALID_ARGUMENT, "Invalid engine accepted by package catalog");
+  stemtex_profile_free_string(error); error = nullptr;
+  value = stemtex_profile_package_plan_for_engine_json(&context, invalid, nullptr, 0, &code, &error);
+  require(!value && code == STEMTEX_PROFILE_ERROR_INVALID_ARGUMENT, "Invalid engine accepted by package plan");
+  stemtex_profile_free_string(error); error = nullptr;
+  StemTeXProfileSpecV4 spec{"engine-v4", "latin-modern", "latin-modern-math", "none", nullptr, 0, nullptr, invalid};
+  value = stemtex_profile_preamble_v4_utf8(&context, &spec, &code, &error);
+  require(!value && code == STEMTEX_PROFILE_ERROR_INVALID_ARGUMENT, "Invalid engine accepted by V4 preamble");
+  stemtex_profile_free_string(error); error = nullptr;
+  char *materialized = nullptr;
+  require(!stemtex_profile_materialize_v4(&context, &spec, profiles_root.c_str(), &materialized, &code, &error) &&
+          code == STEMTEX_PROFILE_ERROR_INVALID_ARGUMENT && !materialized && !fs::exists(root / "engine-v4"),
+          "Invalid engine materialized a profile");
+  stemtex_profile_free_string(error); error = nullptr;
+
+  // A tree can satisfy the root shape while lacking Lua packages. Even the
+  // no-CJK option must report those missing engine dependencies accurately.
+  const fs::path incomplete = root / "incomplete-tree";
+  fs::create_directories(incomplete / "texmf-dist" / "web2c");
+  const std::string incomplete_path = incomplete.u8string();
+  StemTeXProfileContext incomplete_context{incomplete_path.c_str()};
+  const std::string incomplete_catalog = take(stemtex_profile_font_catalog_for_engine_json(
+      &incomplete_context, STEMTEX_PROFILE_ENGINE_LUAHBTEX, &code, &error));
+  const size_t none = incomplete_catalog.find("\"id\":\"none\"");
+  require(none != std::string::npos && incomplete_catalog.find("luaotfload-main.lua", none) != std::string::npos &&
+          incomplete_catalog.find("\"available\":true") == std::string::npos,
+          "Lua no-CJK availability ignored missing Lua dependencies");
+  value = stemtex_profile_package_plan_for_engine_json(&incomplete_context, STEMTEX_PROFILE_ENGINE_LUAHBTEX,
+                                                      nullptr, 0, &code, &error);
+  require(!value && code == STEMTEX_PROFILE_ERROR_PACKAGE_UNAVAILABLE,
+          "Empty Lua package plan accepted a tree without Lua dependencies");
+  stemtex_profile_free_string(error); error = nullptr;
+
+  StemTeXProfileSpec old{"legacy", "latin-modern", "latin-modern-math", "none"};
+  const std::string old_preamble = take(stemtex_profile_preamble_utf8(&context, &old, &code, &error));
+  StemTeXProfileSpecV2 v2{old.name_utf8, old.text_font_id_utf8, old.math_font_id_utf8, old.cjk_font_id_utf8, nullptr, 0};
+  const std::string v2_preamble = take(stemtex_profile_preamble_v2_utf8(&context, &v2, &code, &error));
+  StemTeXProfileSpecV3 v3{old.name_utf8, old.text_font_id_utf8, old.math_font_id_utf8, old.cjk_font_id_utf8,
+                         nullptr, 0, nullptr};
+  const std::string v3_preamble = take(stemtex_profile_preamble_v3_utf8(&context, &v3, &code, &error));
+  require(old_preamble == v2_preamble && old_preamble == v3_preamble &&
+          old_preamble.find("RequireXeTeX") == std::string::npos &&
+          old_preamble.find("StemTeX profile engine") == std::string::npos,
+          "Legacy preamble output semantics changed");
+  require(stemtex_profile_materialize_v3(&context, &v3, profiles_root.c_str(), &materialized, &code, &error),
+          "Legacy V3 materialization failed");
+  (void)take(materialized); materialized = nullptr;
+  const std::string legacy_manifest = read_text(root / "legacy" / "profile.json");
+  require(legacy_manifest.find("\"schemaVersion\": 3") != std::string::npos &&
+          legacy_manifest.find("\"engine\"") == std::string::npos, "Legacy manifest schema changed");
+
+  const char *user = "% verbatim user section\r\n\\newcommand{\\MyProfileMacro}{OK}\r\n";
+  spec.engine = STEMTEX_PROFILE_ENGINE_XETEX;
+  spec.name_utf8 = "xetex-v4";
+  spec.user_preamble_utf8 = user;
+  const std::string xe = take(stemtex_profile_preamble_v4_utf8(&context, &spec, &code, &error));
+  require(xe.find("\\RequireXeTeX") != std::string::npos && xe.find(user) != std::string::npos &&
+          xe.find("\\outputmode") == std::string::npos, "XeTeX V4 guard or verbatim user section incorrect");
+  require(stemtex_profile_materialize_v4(&context, &spec, profiles_root.c_str(), &materialized, &code, &error),
+          "XeTeX V4 materialization failed");
+  const std::string xe_result = take(materialized); materialized = nullptr;
+  const std::string xe_manifest = read_text(root / "xetex-v4" / "profile.json");
+  require(xe_manifest.find("\"schemaVersion\": 4") != std::string::npos &&
+          xe_manifest.find("\"engine\": \"xetex\"") != std::string::npos &&
+          xe_manifest.find("outputDrivers") == std::string::npos,
+          "XeTeX V4 metadata missing");
+
+  spec.engine = STEMTEX_PROFILE_ENGINE_LUAHBTEX;
+  spec.name_utf8 = "luahbtex-v4";
+  value = stemtex_profile_preamble_v4_utf8(&context, &spec, &code, &error);
+  if (!value && code == STEMTEX_PROFILE_ERROR_FONT_UNAVAILABLE) {
+    std::cout << "skip=lua-v4-generation reason=" << (error ? error : "Lua packages unavailable") << '\n';
+    stemtex_profile_free_string(error); error = nullptr;
+    return;
+  }
+  const std::string lua = take(value);
+  require(lua.find("\\RequireLuaHBTeX") < lua.find("\\documentclass") &&
+          lua.find("\\RequirePackage[backend=dvipdfmx]{expl3}") < lua.find("\\documentclass") &&
+          lua.find("\\PassOptionsToPackage{dvipdfmx}{graphicx}") != std::string::npos &&
+          lua.find("\\PassOptionsToPackage{dvipdfmx}{graphics}") != std::string::npos &&
+          lua.find("\\PassOptionsToPackage{dvipdfmx}{xcolor}") != std::string::npos &&
+          lua.find("\\PassOptionsToPackage{dvipdfmx}{color}") != std::string::npos &&
+          lua.find("\\def\\pgfsysdriver{pgfsys-dvipdfmx.def}") != std::string::npos &&
+          lua.find("\\ifdefined\\StemTeXOutputSVG") != std::string::npos &&
+          lua.find("\\RequirePackage[backend=dvisvgm]{expl3}") != std::string::npos &&
+          lua.find("\\PassOptionsToPackage{dvisvgm}{graphicx}") != std::string::npos &&
+          lua.find("\\PassOptionsToPackage{dvisvgm}{graphics}") != std::string::npos &&
+          lua.find("\\PassOptionsToPackage{dvisvgm}{xcolor}") != std::string::npos &&
+          lua.find("\\PassOptionsToPackage{dvisvgm}{color}") != std::string::npos &&
+          lua.find("\\def\\pgfsysdriver{pgfsys-dvisvgm.def}") != std::string::npos &&
+          lua.find("papersize=") != std::string::npos && lua.find(user) != std::string::npos &&
+          lua.find("{xeCJK}") == std::string::npos, "Lua V4 guard/driver/verbatim branches incorrect");
+  require(stemtex_profile_materialize_v4(&context, &spec, profiles_root.c_str(), &materialized, &code, &error),
+          "Lua V4 materialization failed");
+  const std::string lua_result = take(materialized); materialized = nullptr;
+  const std::string lua_manifest = read_text(root / "luahbtex-v4" / "profile.json");
+  require(lua_manifest.find("\"schemaVersion\": 4") != std::string::npos &&
+          lua_manifest.find("\"engine\": \"luahbtex\"") != std::string::npos &&
+          lua_manifest.find("\"outputDrivers\": {\"pdf\": \"dvipdfmx\", \"svg\": \"dvisvgm\"}") != std::string::npos,
+          "Lua V4 metadata missing");
+  const auto fingerprint = [](const std::string &json) { return json.substr(json.find("\"fingerprint\"")); };
+  require(fingerprint(xe_result) != fingerprint(lua_result), "Engine selection did not alter profile fingerprint");
+  const std::string lua_catalog = take(stemtex_profile_font_catalog_for_engine_json(&context,
+      STEMTEX_PROFILE_ENGINE_LUAHBTEX, &code, &error));
+  require(lua_catalog.find("\"engine\":\"luahbtex\"") != std::string::npos &&
+          lua_catalog.find("xeCJK") == std::string::npos, "Lua font catalog retained XeTeX dependencies");
+  const char *packages[] = {"graphicx", "tikz"};
+  value = stemtex_profile_package_plan_for_engine_json(&context, STEMTEX_PROFILE_ENGINE_LUAHBTEX,
+                                                      packages, 2, &code, &error);
+  if (value) {
+    const std::string plan = take(value);
+    require(plan.find("\"engine\":\"luahbtex\"") != std::string::npos &&
+            plan.find("\"id\":\"xcolor\"") < plan.find("\"id\":\"tikz\""),
+            "Lua package dependency plan incorrect");
+  } else if (code == STEMTEX_PROFILE_ERROR_PACKAGE_UNAVAILABLE) {
+    stemtex_profile_free_string(error); error = nullptr;
+  } else (void)take(value);
+  spec.cjk_font_id_utf8 = "fandol-song";
+  value = stemtex_profile_preamble_v4_utf8(&context, &spec, &code, &error);
+  if (value) {
+    const std::string cjk = take(value);
+    require(cjk.find("\\usepackage{luatexko}") != std::string::npos &&
+            cjk.find("\\Schinese") != std::string::npos &&
+            cjk.find("\\setmainhangulfont{FandolSong-Regular.otf}") != std::string::npos &&
+            cjk.find("\\setmainhanjafont{FandolSong-Regular.otf}") != std::string::npos &&
+            cjk.find("{xeCJK}") == std::string::npos && cjk.find("{ctex}") == std::string::npos &&
+            cjk.find("{luatexja}") == std::string::npos,
+            "Lua CJK recipe did not use luatexko Chinese mode and explicit families");
+  } else if (code == STEMTEX_PROFILE_ERROR_FONT_UNAVAILABLE) {
+    stemtex_profile_free_string(error); error = nullptr;
+  } else (void)take(value);
+  std::cout << "engine-api=passed\n";
 }
 
 int main(int argc, char **argv) {
@@ -35,13 +200,20 @@ int main(int argc, char **argv) {
     std::cerr << "usage: stemtex-profile-smoke --texmf TEXLIVE_ROOT [--runtime STEMTEX_RUNTIME] [--case NAME]\n";
     return 2;
   }
-  if (std::string(stemtex_profile_abi_version()) != "3") {
+  if (std::string(stemtex_profile_abi_version()) != "4") {
     std::cerr << "unexpected profile ABI version\n";
     return 1;
   }
 
   StemTeXProfileContext context{};
   context.texmf_root_utf8 = texmf_root.c_str();
+  try {
+    engine_api_smoke(context);
+  } catch (const std::exception &failure) {
+    std::cerr << "engine API smoke failed: " << failure.what() << '\n';
+    return 1;
+  }
+  if (selected_case == "engine-api") return 0;
   StemTeXProfileErrorCode code = STEMTEX_PROFILE_OK;
   char *error = nullptr;
   char *catalog = stemtex_profile_font_catalog_json(&context, &code, &error);

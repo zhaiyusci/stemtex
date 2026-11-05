@@ -41,6 +41,39 @@ add_custom_target(stemtex-luatex-gui-smoke-copy-renderer
 )
 add_dependencies(stemtex-luatex-gui-smoke stemtex-luatex-gui-smoke-copy-renderer)
 
+add_executable(stemtex-luatex-profile-smoke EXCLUDE_FROM_ALL luatex_profile_smoke.cpp)
+target_compile_features(stemtex-luatex-profile-smoke PRIVATE cxx_std_17)
+target_link_libraries(stemtex-luatex-profile-smoke PRIVATE
+  stemtex-luatex-gui-backend stemtex-profile Qt6::Gui Qt6::Pdf Qt6::Svg)
+target_include_directories(stemtex-luatex-profile-smoke PRIVATE ../profile-creator)
+set_target_properties(stemtex-luatex-profile-smoke PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+if(MSVC)
+  target_compile_options(stemtex-luatex-profile-smoke PRIVATE /utf-8)
+endif()
+add_custom_target(stemtex-luatex-profile-smoke-copy-profile
+  COMMAND ${CMAKE_COMMAND} -E make_directory
+          $<TARGET_FILE_DIR:stemtex-luatex-profile-smoke>
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          $<TARGET_FILE:stemtex-profile>
+          $<TARGET_FILE_DIR:stemtex-luatex-profile-smoke>
+  DEPENDS stemtex-profile
+  VERBATIM
+)
+add_dependencies(stemtex-luatex-profile-smoke stemtex-luatex-profile-smoke-copy-profile)
+
+add_executable(stemtex-luatex-recovery-smoke EXCLUDE_FROM_ALL luatex_recovery_smoke.cpp)
+target_compile_features(stemtex-luatex-recovery-smoke PRIVATE cxx_std_17)
+target_link_libraries(stemtex-luatex-recovery-smoke PRIVATE
+  stemtex-luatex-gui-backend stemtex-profile Qt6::Gui Qt6::Pdf Qt6::Svg)
+target_include_directories(stemtex-luatex-recovery-smoke PRIVATE ../profile-creator)
+set_target_properties(stemtex-luatex-recovery-smoke PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+if(MSVC)
+  target_compile_options(stemtex-luatex-recovery-smoke PRIVATE /utf-8)
+endif()
+add_dependencies(stemtex-luatex-recovery-smoke stemtex-luatex-profile-smoke-copy-profile)
+
 set(QSCINTILLA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../third_party")
 set(QSCINTILLA_INCLUDE_DIR "${QSCINTILLA_ROOT}/qscintilla-src/src")
 set(QSCINTILLA_LIBRARY "${QSCINTILLA_ROOT}/qscintilla-build/release/qscintilla2_qt6.lib")

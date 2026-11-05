@@ -57,16 +57,23 @@ class Translations {
     // Test both a UI string and an API-originated dynamic description. Checking
     // exact catalog values also catches an accidentally mismatched TS context.
     const QString title = text("Create Profile");
+    const QString engine = text("Engine");
+    const QString luaEngine = text("LuaHBTeX (experimental)");
     const QString description = catalogText(QStringLiteral("Do not load xeCJK"));
+    const QString luaDescription = catalogText(QStringLiteral("Do not load CJK support"));
     // The stock catalog owns this string: do not extract it into our own TS.
     const char *stockCancelSource = "Cancel";
     const QString cancel = QCoreApplication::translate("QPlatformTheme", stockCancelSource);
     const bool valid = chinese_
         ? (!app_.isEmpty() && title == QString::fromUtf8("创建 Profile") &&
+           engine == QString::fromUtf8("引擎") && luaEngine == QString::fromUtf8("LuaHBTeX（实验）") &&
            description == QString::fromUtf8("不加载 xeCJK") &&
+           luaDescription == QString::fromUtf8("不加载 CJK 支持") &&
            !qt_.isEmpty() && cancel == QString::fromUtf8("取消"))
-        : (title == QStringLiteral("Create Profile") &&
-           description == QStringLiteral("Do not load xeCJK"));
+        : (title == QStringLiteral("Create Profile") && engine == QStringLiteral("Engine") &&
+           luaEngine == QStringLiteral("LuaHBTeX (experimental)") &&
+           description == QStringLiteral("Do not load xeCJK") &&
+           luaDescription == QStringLiteral("Do not load CJK support"));
     if (!valid) qCritical("Profile Creator translation smoke check failed");
     else qInfo().noquote() << "Profile Creator i18n smoke passed:" << (chinese_ ? "zh_CN" : "en");
     return valid;
