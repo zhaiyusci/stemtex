@@ -145,12 +145,13 @@ DviSnapshot finalizeDvi(const QByteArray &data) {
 }
 
 QByteArray workerSource(bool svgDriver) {
-  // The same preview/minipage layout used by the XeTeX GUI, with a Lua
-  // stdout flush and no checkpoint special. halt-on-error makes failures
-  // unambiguous; the host starts a fresh worker after an invalid fragment.
+  // Establish one post-warmup baseline, like the XeTeX worker. The patched
+  // engine restores TeX and Lua together; halt-on-error remains the fallback
+  // for failures outside that protected request boundary.
   return (svgDriver ? QByteArray("\\def\\StemTeXOutputSVG{}\n") : QByteArray()) + QByteArray(R"TEX(\PassOptionsToPackage{xetex}{preview}
-\input{profile-preamble.tex}
+\input{./profile-preamble.tex}
 \newcount\snippetcount
+\newif\ifstemtexcheckpointed
 \newdimen\stemtexfontsize
 \newdimen\stemtexbaselineskip
 \def\signal#1{\directlua{io.stdout:write(string.char(10).."#1"..string.char(10));io.stdout:flush()}}
@@ -207,6 +208,10 @@ QByteArray workerSource(bool svgDriver) {
   \end{minipage}%
   \end{preview}%
   \signal{STEMTEX_LUA_DONE:\the\snippetcount}%
+  \ifstemtexcheckpointed\else
+    \global\stemtexcheckpointedtrue
+    \special{stemtex:checkpoint}%
+  \fi
   \workerloop
 }
 \workerloop
@@ -403,7 +408,10 @@ struct LuaBackend::Impl {
     std::unique_ptr<QProcess> process;
     QString workRoot, lastSnapshotPath;
     QByteArray pending, transcript;
-    int request = 0, pageCount = 0, generation = 0;
+    int request = 0, pageCount = 0, generation = 0, artifactSequence = 0;
+    int baselinePageCount = 0;
+    qint64 failureDetectedMs = -1, restoreMs = 0;
+    bool checkpointRestored = false;
     bool ready = false;
   };
 
@@ -512,7 +520,7 @@ struct LuaBackend::Impl {
     for (auto &slot : workers) stopWorker(slot);
   }
 
-  void waitMarker(const QByteArray &marker) {
+  void waitMarker(const QByteArray &marker, QElapsedTimer *requestTimer = nullptr) {
     auto &slot = currentWorker();
     QElapsedTimer timer;
     timer.start();
@@ -526,11 +534,36 @@ struct LuaBackend::Impl {
       while ((newline = slot.pending.indexOf('\n')) >= 0) {
         const QByteArray line = slot.pending.left(newline).trimmed();
         slot.pending.remove(0, newline + 1);
+        if (line.contains("unrecognized option") && line.contains("stemtex-checkpoint"))
+          fail("This LuaHBTeX engine has no StemTeX checkpoint support. Rebuild it with scripts/build-luahbtex-mingw.ps1.");
+        if (requestTimer && line == "STEMTEX_LUA_ERROR" && slot.failureDetectedMs < 0)
+          slot.failureDetectedMs = requestTimer->elapsed();
+        if (requestTimer && line.startsWith("STEMTEX_LUA_RESTORED:")) {
+          bool valid = false;
+          const qint64 duration = line.mid(sizeof("STEMTEX_LUA_RESTORED:") - 1).toLongLong(&valid);
+          if (valid && duration >= 0) {
+            slot.checkpointRestored = true;
+            slot.restoreMs = duration;
+          }
+        }
+        if (requestTimer && slot.checkpointRestored && line.startsWith("STEMTEX_LUA_WAIT:")) {
+          bool valid = false;
+          const int next = line.mid(sizeof("STEMTEX_LUA_WAIT:") - 1).toInt(&valid);
+          if (!valid || next != 2) fail("LuaHBTeX did not return to the post-warmup request counter after checkpoint restore.");
+          slot.request = next - 1;
+          slot.pageCount = slot.baselinePageCount;
+          slot.ready = true;
+          isReady.store(true);
+          fail(QString("LuaHBTeX snippet failed; the worker restored its checkpoint.\n%1")
+                   .arg(QString::fromUtf8(slot.transcript.right(10000))));
+        }
         if (line == marker) return;
       }
       if (slot.pending.size() > 1024 * 1024) slot.pending = slot.pending.right(65536);
       if (slot.process->state() == QProcess::NotRunning)
-        fail(QString("LuaHBTeX stopped before %1.\n%2").arg(QString::fromLatin1(marker), QString::fromUtf8(slot.transcript.right(10000))));
+        fail(QString("LuaHBTeX stopped before %1 (exit 0x%2).\n%3")
+                 .arg(QString::fromLatin1(marker), QString::number(quint32(slot.process->exitCode()), 16),
+                      QString::fromUtf8(slot.transcript.right(10000))));
       if (timer.elapsed() >= config.timeoutMs)
         fail(QString("LuaHBTeX timed out waiting for %1.\n%2").arg(QString::fromLatin1(marker), QString::fromUtf8(slot.transcript.right(6000))));
       slot.process->waitForReadyRead(50);
@@ -553,15 +586,35 @@ struct LuaBackend::Impl {
     slot.pending.clear();
     slot.transcript.clear();
     slot.request = slot.pageCount = 0;
+    slot.artifactSequence = 0;
+    slot.baselinePageCount = 0;
+    slot.failureDetectedMs = -1;
+    slot.restoreMs = 0;
+    slot.checkpointRestored = false;
     slot.lastSnapshotPath.clear();
     slot.process = std::make_unique<QProcess>();
     setupProcess(*slot.process, slot.workRoot);
+    auto workerEnvironment = environment;
+    workerEnvironment.insert("STEMTEX_LUA_CHECKPOINT", "1");
+    slot.process->setProcessEnvironment(workerEnvironment);
     start(*slot.process, config.enginePath,
           {"--fmt=" + formatFile, "--progname=lualatex", "--output-format=dvi", "--flush-output-on-shipout",
-           "--interaction=errorstopmode", "--halt-on-error", "--no-shell-escape", "worker.tex"});
+           "--stemtex-checkpoint", "--interaction=errorstopmode", "--halt-on-error", "--no-shell-escape", "./worker.tex"});
     pid.store(slot.process->processId());
     waitMarker("STEMTEX_LUA_READY");
     waitMarker("STEMTEX_LUA_WAIT:1");
+    writeFile(pathIn(slot.workRoot, "stemtex-checkpoint-warmup.tex"),
+              "StemTeX warmup: ABC xyz 0123456789.\\par\n"
+              "\\textbf{bold} \\textit{italic} \\textsf{sans} \\texttt{mono}.\n"
+              "\\[E=mc^2 \\quad \\alpha+\\beta=\\gamma \\quad \\mathcal{L}_{p} \\quad \\mathbf{x}\\]\n");
+    const QByteArray warmup("320pt\n10pt\n./stemtex-checkpoint-warmup.tex\n");
+    if (slot.process->write(warmup) != warmup.size()) fail("Cannot send the LuaHBTeX checkpoint warmup.");
+    waitMarker("STEMTEX_LUA_DONE:1");
+    waitMarker("STEMTEX_LUA_BASELINE_READY");
+    waitMarker("STEMTEX_LUA_WAIT:2");
+    slot.request = 1;
+    slot.baselinePageCount = slot.pageCount = finalizeDvi(readFile(pathIn(slot.workRoot, "worker.dvi"))).pages;
+    if (slot.baselinePageCount != 1) fail("LuaHBTeX checkpoint warmup must ship exactly one page.");
     slot.ready = true;
     isReady.store(true);
   }
@@ -578,6 +631,8 @@ struct LuaBackend::Impl {
     config.runtimeRoot = QDir(config.runtimeRoot).absolutePath();
     if (!QFileInfo::exists(config.enginePath))
       fail(QString("Patched LuaHBTeX is missing: %1\nBuild it with scripts/build-luahbtex-mingw.ps1.").arg(config.enginePath));
+    if (!QFileInfo::exists(config.enginePath + ".stemtex-checkpoint"))
+      fail("The LuaHBTeX checkpoint ownership map is missing. Rebuild the engine and keep its .stemtex-checkpoint file beside it.");
     const QString bin = pathIn(config.texmfRoot, "bin/windows");
     for (const QString &relative : {QString("texmf-dist/web2c/texmf.cnf"),
                                     QString("texmf-dist/tex/latex/tex-ini-files/lualatex.ini")})
@@ -646,7 +701,7 @@ struct LuaBackend::Impl {
     activateWorker(false);
     startWorker();
     initialized = true;
-    report("LuaHBTeX ready (DVI streaming; errors restart the worker)");
+    report("LuaHBTeX ready (DVI streaming; in-process checkpoint recovery)");
   }
 };
 
@@ -671,6 +726,7 @@ LuaRenderResult LuaBackend::render(const QByteArray &snippet, double widthPt, do
   QElapsedTimer elapsed;
   elapsed.start();
   bool typesetting = true;
+  bool workerOperationStarted = false;
   QString failureStage = "validation";
   try {
     impl_->checkCancelled();
@@ -682,6 +738,10 @@ LuaRenderResult LuaBackend::render(const QByteArray &snippet, double widthPt, do
     // stream and TeX state. Older profiles keep their single-worker behavior.
     impl_->activateWorker(svg);
     auto &slot = impl_->currentWorker();
+    slot.checkpointRestored = false;
+    slot.failureDetectedMs = -1;
+    slot.restoreMs = 0;
+    workerOperationStarted = true;
     failureStage = "worker-start";
     // Parsing cumulative DVI is deliberately simple in this experimental
     // adapter. Rotate before it becomes expensive, and stay well below the
@@ -693,13 +753,15 @@ LuaRenderResult LuaBackend::render(const QByteArray &snippet, double widthPt, do
     slot.ready = false;
     impl_->isReady.store(false);
     const int request = ++slot.request;
-    const QString stem = QString("request-%1").arg(request);
+    // Checkpoint restore rewinds the TeX protocol counter, but published
+    // output paths must stay immutable while the GUI may still display them.
+    const QString stem = QString("request-%1").arg(++slot.artifactSequence);
     writeFile(pathIn(slot.workRoot, stem + ".tex"), snippet + '\n');
     const QByteArray input = QByteArray::number(widthPt, 'f', 4) + "pt\n" +
-                             QByteArray::number(fontSizePt, 'f', 4) + "pt\n" + stem.toUtf8() + ".tex\n";
+                             QByteArray::number(fontSizePt, 'f', 4) + "pt\n./" + stem.toUtf8() + ".tex\n";
     if (slot.process->write(input) != input.size()) fail("Cannot send the snippet to LuaHBTeX.");
-    impl_->waitMarker("STEMTEX_LUA_DONE:" + QByteArray::number(request));
-    impl_->waitMarker("STEMTEX_LUA_WAIT:" + QByteArray::number(request + 1));
+    impl_->waitMarker("STEMTEX_LUA_DONE:" + QByteArray::number(request), &elapsed);
+    impl_->waitMarker("STEMTEX_LUA_WAIT:" + QByteArray::number(request + 1), &elapsed);
     const qint64 typesetMs = elapsed.elapsed();
     failureStage = "finalize-dvi";
     const DviSnapshot snapshot = finalizeDvi(readFile(pathIn(slot.workRoot, "worker.dvi")));
@@ -751,7 +813,7 @@ LuaRenderResult LuaBackend::render(const QByteArray &snippet, double widthPt, do
         {"widthPt", widthPt}, {"fontSizePt", fontSizePt}, {"outputBytes", outputBytes},
         {"pdfBytes", svg ? 0 : outputBytes}, {"svgBytes", svg ? outputBytes : 0},
         {"workerPid", result.workerPid}, {"workerPage", snapshot.pages}, {"workerRequest", request},
-        {"spareReady", 0}, {"spareTarget", 0}, {"checkpoint", false},
+        {"spareReady", 0}, {"spareTarget", 0}, {"checkpoint", true},
         {"finalDviBytes", snapshot.finalized.size()}, {"outcomeCode", result.recoverable ? 1 : 0},
         {"issueFlags", result.issueFlags}, {"outcomeMessage", result.outcomeMessage},
         {"xdvipdfmxOptions", "-q -z 1 -C 64"}, {"xdvipdfmxMode", svg ? "" : "daemon-dll"},
@@ -762,13 +824,22 @@ LuaRenderResult LuaBackend::render(const QByteArray &snippet, double widthPt, do
     result.summary = QString::fromUtf8(QJsonDocument(summary).toJson(QJsonDocument::Compact));
     result.ok = true;
   } catch (const std::exception &e) {
-    const qint64 failureDetectedMs = elapsed.elapsed();
-    const qint64 failedWorkerPid = impl_->pid.load();
+    const auto &failedSlot = impl_->currentWorker();
+    const qint64 failureDetectedMs = workerOperationStarted && failedSlot.failureDetectedMs >= 0
+        ? failedSlot.failureDetectedMs : elapsed.elapsed();
+    const bool checkpointRestored = workerOperationStarted && failedSlot.checkpointRestored && failedSlot.ready && ready();
+    const qint64 restoreMs = checkpointRestored ? failedSlot.restoreMs : 0;
+    const qint64 failedWorkerPid = workerOperationStarted ? impl_->pid.load() : 0;
     qint64 restartMs = 0;
     bool workerRestarted = false;
     result.error = QString::fromUtf8(e.what());
     if (impl_->cancelled.load()) {
       impl_->stopAllWorkers();
+    } else if (!workerOperationStarted) {
+      // Invalid caller arguments never reached TeX. Keep its current state,
+      // and do not reuse recovery metadata from the preceding request.
+    } else if (checkpointRestored) {
+      result.error += "\nLuaHBTeX restored its checkpoint; the next valid snippet can be rendered.";
     } else if (typesetting) {
       QElapsedTimer restartTimer;
       restartTimer.start();
@@ -798,7 +869,9 @@ LuaRenderResult LuaBackend::render(const QByteArray &snippet, double widthPt, do
         {"restartMs", restartMs}, {"errorTotalMs", elapsed.elapsed()},
         {"workerRestarted", workerRestarted}, {"failedWorkerPid", failedWorkerPid},
         {"workerPid", impl_->pid.load()}, {"readyAfterError", ready()},
-        {"cancelled", impl_->cancelled.load()}, {"checkpoint", false}};
+        {"cancelled", impl_->cancelled.load()}, {"checkpoint", true},
+        {"checkpointRestored", checkpointRestored}, {"restoreMs", restoreMs},
+        {"recoveryMode", checkpointRestored ? "checkpoint" : workerRestarted ? "restart" : "none"}};
     result.summary = QString::fromUtf8(QJsonDocument(summary).toJson(QJsonDocument::Compact));
   }
   return result;

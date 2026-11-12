@@ -6,13 +6,14 @@
 
 - **一次预加载、同进程连续排版：可行，已做原版引擎实验。**
 - **运行中 DVI 截取、补尾并转 PDF/SVG：简单传统字体和 OpenType 数学场景已通过；第 8 节的实验引擎已实现逐页立即 flush，并通过真实请求测试。**
-- **出错后在原进程恢复：需要引擎级改造；当前尚未实现或证明。**
+- **出错后在原进程恢复：Windows 实验引擎已加入 TeX/Lua 联合 checkpoint，普通片段错误保持 PID，见第 10 节。**
 - **任意 LuaLaTeX 宏包 / Lua 代码的完整事务回滚：不能据此承诺。**
   TeX 内存、Lua VM、字体/节点引用和输出后端必须保持一致。
 - 推荐面向本机实际的 **LuaHBTeX / LuaLaTeX** 做原型，而不是只做不含
   OpenType 字体加载器的 plain LuaTeX 演示。
 
-前期研究使用原版引擎探针；后续逐页 DVI flush 实现见第 8 节，GUI 实验入口见第 9 节。
+前期研究使用原版引擎探针；后续逐页 DVI flush 实现见第 8 节，GUI 实验入口见第 9 节，
+后续实现的就地恢复见第 10 节。前面探针中“未实现 checkpoint”的表述仅描述当时阶段。
 正式 renderer API 和 GUI 默认仍使用现有 XeTeX 后端；GUI 可显式选择 LuaHBTeX 实验后端。
 
 ## 1. 先准确界定现有 XeTeX 能力
@@ -467,8 +468,8 @@ GUI 的编辑、宽度、字号、PDF/SVG 预览和图像复制/保存复用已�
 Lua 配方还补齐了 luaotfload 对 leader 和嵌套 discretionary 节点的字体映射，覆盖化学反应箭头。
 生成的清单记录目标引擎和输出驱动，
 GUI 按引擎筛选；没有引擎标记的旧 Profile 仍按 XeTeX 处理，内置共享 Profile 除外。
-渲染器公共 C ABI 暂未扩展。TeX 错误通过重建 worker 恢复，
-因此错误后的 PID 会变化，不属于 checkpoint 恢复。
+渲染器公共 C ABI 暂未扩展。最初 GUI 版本通过重建 worker 恢复 TeX 错误，
+错误后的 PID 会变化；下面保留该版本的测量，后续 checkpoint 实现见第 10 节。
 
 GUI 的耗时摘要与 XeTeX 使用同一格式，分别显示排版、转换和输出完成总时间。
 Lua 指标单独记录 DVI 读取/补尾/写入的时间，排版计时不包含这段工作；原始 JSON
@@ -504,3 +505,81 @@ Profile，分别测试 PDF/SVG：未定义命令、宏参数缺右括号、未�
 复用旧文档页缓存的问题。完整结果保存在 `build/luatex-recovery-tests/` 下的
 `matrix-results.json`、`conditional-results.json`、`default-timeout-results.json`；
 复现命令见构建文档中的 `stemtex-luatex-recovery-smoke`。
+
+## 10. Windows LuaHBTeX 就地恢复实现
+
+在固定的 LuaHBTeX 1.26.2 / revision 7748 MinGW 构建上，
+`patches/luatex-inplace-recovery.patch` 接入引擎错误和主控制循环；
+`patches/luatex-checkpoint/` 提供进程内的内存及文件状态快照。
+宿主同时设置 `STEMTEX_LUA_CHECKPOINT=1` 和 `--stemtex-checkpoint`，普通独立命令行运行
+保持未启用状态。旧引擎或缺失/不匹配的状态清单会被明确拒绝。
+
+与 XeTeX 一样，预热后只保存一次固定基线，成功请求不会成为新的错误恢复基线。
+host 内部先排版一个预热页，然后执行 `stemtex:checkpoint`；引擎在最外层
+`main_control()` 的命令返回后、Lua protected call 和 local control 均已退出时拍摄。
+拍摄前先完成一次 Lua GC，清理字体/宏包预热留下的不可达对象。
+
+实现按链接后的实际对象划分状态所有权，而不是逐个猜测 Lua/TeX 全局变量：
+
+- 从 GNU link map 生成引擎和静态依赖的代码/可写数据范围，包含 TeX、Lua、字体加载器、
+  HarfBuzz、kpathsea 等；CRT、工具链运行库、恢复控制块和快照自身不进入回滚。
+  清单使用整个 EXE 的大小和校验值绑定实际二进制，并随 EXE 一起部署。
+- 包装分配/释放函数及 MinGW 直接 import slots，从进程开始跟踪内存。
+  基线内存块在 free/realloc 后保留原地址；恢复时还原其字节，释放请求期间新增的引擎内存。
+  这样 TeX 节点编号、Lua GC/闭包/upvalue/registry 及字体、节点交叉引用同步恢复。
+- Lua 活跃时的 TeX 错误先通过 Lua protected calls 向外展开，再回到仍然有效的主循环
+  landing pad。MinGW Win64 顶层使用无 SEH 二次扫描的 `_setjmp(buffer, NULL)`；
+  避免 Windows unwinder 对该 GCC 控制循环栈帧的错误扫描。
+  checkpoint 生效后拒绝 `tex.run()` 重入主循环，防止覆盖唯一的恢复落点；
+  即使用 Lua `pcall` 捕获该错误，当前请求仍会展开并恢复。
+- 基线输入 FILE 延迟关闭并恢复位置，请求新增 FILE 关闭。DVI 同时截断到预热页末尾，
+  恢复对应页号、字体和输出状态；宿主同步协议序号。发布文件使用独立、不回退的编号，
+  因此已经显示的 PDF/SVG 不会被后续恢复请求覆盖。
+
+宿主收到 `STEMTEX_LUA_ERROR` 后仍等待 `STEMTEX_LUA_RESTORED:<ms>` 及随后的 `WAIT`，
+才报告就地恢复完成。错误 JSON 新增 `checkpointRestored`、`restoreMs`、`recoveryMode`；
+PID 不变且 `recoveryMode=checkpoint` 与 `workerRestarted=true` 的重建兜底严格区分。
+转换器继续复用，另一个输出驱动的 worker 不受影响。
+
+HarfBuzz 采用无文件映射、无多线程配置，使其字体资源留在可跟踪的内存域。
+活跃请求发生已拦截的原生映射、VirtualAlloc/Free、动态库装卸、freopen 或未知的引擎
+free/realloc 时，会使当前 checkpoint 失效，后续错误改走重建。超时和取消仍终止进程。
+这不是任意 Lua/OS 副作用的事务：外部文件内容、raw fd、socket、CRT 随机数状态等
+不因内存恢复而回退，任意第三方原生扩展也不在已验证范围内。
+
+`stemtex-luatex-recovery-smoke` 的普通错误要求同 PID；额外污染用例在 preamble 建立
+fixture，先用成功请求修改它并确认修改生效，再制造错误并检查恢复后的原值和引用关系。
+这包含仅有一个引用的对象被 GC 回收后恢复、共享 upvalue、Lua 函数注册表、callback、
+node properties、字体指标、TeX 宏和寄存器；不允许在验证阶段重建缺失的 fixture。
+
+2026-11-05 的普通错误矩阵 84 次全部同 PID 恢复，没有重建 worker。
+另有 46 次状态污染、6 次未闭合条件、24 次嵌套调用（含 `tex.run`）及 120 次连续
+压力错误通过，共 280 次错误保持原 PID；每次错误后均验证有效输入继续输出。
+同机此前重建方式的结果见第 9 节；本次计时方法相同，但两次独立运行并非严格受控的
+性能对照。单位为毫秒，错误恢复一列包含发现错误至后端重新可用的整个调用：
+
+| Profile | 原重建恢复，中位数 | 就地恢复，中位数 | 就地恢复 P95 | 其中快照还原，中位数 | 恢复后首个有效输出，中位数 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 内置 | 1923 | 148 | 238 | 138 | 286 |
+| Creator Latin | 1911 | 149 | 211 | 132 | 296 |
+| Creator 中文/数学/绘图 | 3217 | 287 | 492 | 274 | 580 |
+
+本次错误恢复阶段约缩短到此前的 1/11–1/13；恢复后首个有效输出未显示加速。
+额外快照数据约为内置/Latin 每 worker 209 MiB，复杂中文每 worker 426 MiB，
+包括基线堆副本和约 5.1 MiB 全局数据。这里不是进程总 RSS，也不包括管理元数据和
+原本的活跃堆；同时启动 PDF/SVG 两个 worker 会分别承担这份开销。
+
+取消回归在 619 ms 内返回；生产默认 90 秒超时测试在 90061 ms 发现无限循环，
+2303 ms 重建 worker，总计 92365 ms 返回，后续有效输出 217 ms。
+这两种情况继续使用进程终止/重建兜底。
+
+完整 Profile Creator 回归覆盖 5 个 Profile、21 个可选宏包和 27 次输出，检查了
+中文、颜色、几何、TFM/VF 和旧输出保留；XeTeX → LuaTeX → LuaTeX 重建 → XeTeX
+切换及常驻转换器回归通过。原生模块的 13 个独立场景也通过，包含十轮内存/文件恢复
+以及原生资源改变后拒绝恢复。错误二进制清单的负面测试确认初始化会明确失败并退出。
+
+完整 JSON 记录位于 `build/luatex-checkpoint-tests/`，包括 `matrix-results.json`、
+`pollution-results.json`、`conditional-results.json`、`nested-results.json`、
+`stress-builtin-*-results.json`、`default-timeout-results.json`、
+`profile-smoke-results.json` 和 `smoke-results.json`。压力结果仅指三个实际执行并通过的
+过滤项：`directlua-error`、`nested-runtoks-error`、`lua-global-table`。

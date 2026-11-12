@@ -4,6 +4,7 @@ param(
   [string]$MingwRoot = 'C:/Qt/Tools/mingw1310_64',
   [string]$Bash = 'C:/Program Files/Git/bin/bash.exe',
   [string]$MakeShell = 'C:/PROGRA~1/Git/usr/bin/sh.exe',
+  [string]$Python = 'python',
   [ValidateSet('Prepare', 'Configure', 'Build')]
   [string]$Stage = 'Build',
   [int]$Jobs = 8
@@ -19,6 +20,9 @@ $work = Join-Path $BuildRoot 'work'
 $bin = Join-Path $BuildRoot 'bin'
 $make = Join-Path $repo '.build-tools/make/bin/make.exe'
 $patch = Join-Path $repo 'patches/luatex-dvi-flush-on-shipout.patch'
+$checkpointPatch = Join-Path $repo 'patches/luatex-inplace-recovery.patch'
+$harfbuzzPatch = Join-Path $repo 'patches/luatex-checkpoint-harfbuzz.patch'
+$checkpointSource = Join-Path $repo 'patches/luatex-checkpoint'
 $originPath = Join-Path $BuildRoot 'source-origin.json'
 $configureIdentityPath = Join-Path $BuildRoot 'configure-inputs.json'
 foreach ($required in @($Bash, $MakeShell, (Join-Path $MingwRoot 'bin/gcc.exe'), $make)) {
@@ -51,7 +55,9 @@ if (Test-Path -LiteralPath (Join-Path $source 'configure')) {
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 Write-Host "Source: $source"
 if ($Stage -eq 'Prepare') { exit 0 }
-if (-not (Test-Path -LiteralPath $patch)) { throw "Required engine patch is missing: $patch" }
+foreach ($requiredPatch in @($patch, $checkpointPatch, $harfbuzzPatch)) {
+  if (-not (Test-Path -LiteralPath $requiredPatch)) { throw "Required engine patch is missing: $requiredPatch" }
+}
 $versionSource = Get-Content -Raw -LiteralPath (Join-Path $source 'texk/web2c/luatexdir/luatex.c')
 $revisionSource = Get-Content -Raw -LiteralPath (Join-Path $source 'texk/web2c/luatexdir/luatex_svnversion.h')
 if ($versionSource -notmatch 'luatex_version_string\s*=\s*"1\.26\.2"' -or
@@ -94,18 +100,20 @@ export CC=gcc CXX=g++ AR=ar RANLIB=ranlib STRIP=strip
 export CONFIG_SHELL=/usr/bin/bash SHELL=/usr/bin/bash
 export MAKE="$make_path"
 cd "$build_root/source"
-patch_file="$repo/patches/luatex-dvi-flush-on-shipout.patch"
-if [[ ! -f "$patch_file" ]]; then
-  echo "Required engine patch is missing: $patch_file" >&2
-  exit 1
-else
+for patch_name in luatex-dvi-flush-on-shipout.patch luatex-inplace-recovery.patch luatex-checkpoint-harfbuzz.patch; do
+  patch_file="$repo/patches/$patch_name"
+  if [[ ! -f "$patch_file" ]]; then
+    echo "Required engine patch is missing: $patch_file" >&2
+    exit 1
+  fi
   if git apply --check "$patch_file" >/dev/null 2>&1; then
     git apply "$patch_file"
   elif ! git apply --reverse --check "$patch_file" >/dev/null 2>&1; then
     echo "Patch does not match the copied LuaTeX sources: $patch_file" >&2
     exit 1
   fi
-fi
+done
+cp "$repo/patches/luatex-checkpoint/stemtex_checkpoint.h" texk/web2c/luatexdir/stemtex_checkpoint.h
 cd "$build_root/work"
 if [[ ! -f .configure-complete ]]; then
   ../source/configure -C \
@@ -149,10 +157,25 @@ if [[ "$stage" == Build ]]; then
     "$make_path" -C texk/kpathsea -j "$jobs" SHELL="$make_shell"
     "$make_path" -C libs -j "$jobs" SHELL="$make_shell"
     configure_package texk/web2c
+    gcc -O2 -std=c11 -I"$repo/patches/luatex-checkpoint" \
+      -c "$repo/patches/luatex-checkpoint/stemtex_checkpoint.c" \
+      -o texk/web2c/stemtex-checkpoint.o
+    checkpoint_flags='-export-dynamic -Wl,-Map,luahbtex.map'
+    while IFS= read -r wrapped_symbol || [[ -n "$wrapped_symbol" ]]; do
+      wrapped_symbol="${wrapped_symbol%$'\r'}"
+      [[ -z "$wrapped_symbol" ]] && continue
+      if [[ ! "$wrapped_symbol" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        echo "Invalid checkpoint wrapper symbol: $wrapped_symbol" >&2
+        exit 1
+      fi
+      checkpoint_flags+=" -Wl,--wrap=$wrapped_symbol"
+    done < "$repo/patches/luatex-checkpoint/wrapped-symbols.txt"
     # The engine target avoids unrelated WEB programs. Upstream's explicit
     # luahbtex_DEPENDENCIES omits some archives that 'all' normally builds.
     "$make_path" -C texk/web2c -j "$jobs" SHELL="$make_shell" \
-      'EXTRA_luahbtex_DEPENDENCIES=libff.a libluamisc.a libluasocket.a libluaffi.a libmplibcore.a libunilib.a' \
+      'EXTRA_luahbtex_DEPENDENCIES=libff.a libluamisc.a libluasocket.a libluaffi.a libmplibcore.a libunilib.a stemtex-checkpoint.o' \
+      'luahbtex_OBJECTS=$(nodist_luahbtex_OBJECTS) stemtex-checkpoint.o' \
+      "luahbtex_LDFLAGS=$checkpoint_flags" \
       luahbtex.exe
   } >build.log 2>&1
 fi
@@ -169,6 +192,9 @@ if ($Stage -eq 'Build') {
   if (-not (Test-Path -LiteralPath $engine)) { throw "Build did not produce $engine" }
   New-Item -ItemType Directory -Force -Path $bin | Out-Null
   Copy-Item -LiteralPath $engine -Destination (Join-Path $bin 'luahbtex.exe') -Force
+  & $Python (Join-Path $repo 'scripts/generate-luatex-checkpoint-ranges.py') `
+    --exe (Join-Path $bin 'luahbtex.exe') --map (Join-Path $work 'texk/web2c/luahbtex.map') --work-root $work
+  if ($LASTEXITCODE -ne 0) { throw 'Cannot generate the engine checkpoint ownership map' }
   $pending = [Collections.Generic.Queue[string]]::new()
   $pending.Enqueue($engine)
   $copied = @{}
@@ -202,7 +228,13 @@ if ($Stage -eq 'Build') {
     copied_source = $source
     patched_source_sha256 = $inputs
     patch_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $patch).Hash
+    checkpoint_patch_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $checkpointPatch).Hash
+    checkpoint_allocator_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $checkpointSource 'stemtex_checkpoint.c')).Hash
+    checkpoint_header_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $checkpointSource 'stemtex_checkpoint.h')).Hash
+    checkpoint_wrappers_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $checkpointSource 'wrapped-symbols.txt')).Hash
+    harfbuzz_checkpoint_patch_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $harfbuzzPatch).Hash
     binary_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $bin 'luahbtex.exe')).Hash
+    checkpoint_ranges_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $bin 'luahbtex.exe.stemtex-checkpoint')).Hash
     mingw_root = $MingwRoot
     compiler_version = @(& (Join-Path $MingwRoot 'bin/gcc.exe') --version)
     make_shell = $MakeShell

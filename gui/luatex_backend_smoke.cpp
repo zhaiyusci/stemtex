@@ -39,6 +39,12 @@ void require(bool condition, const QString &message) {
   if (!condition) throw std::runtime_error(message.toUtf8().constData());
 }
 
+QByteArray readOutput(const QString &path) {
+  QFile file(path);
+  require(file.open(QIODevice::ReadOnly), QStringLiteral("Cannot read output: ") + path);
+  return file.readAll();
+}
+
 bool hasInk(const QImage &source) {
   const QImage image = source.convertToFormat(QImage::Format_ARGB32);
   for (int y = 0; y < image.height(); ++y) {
@@ -146,6 +152,8 @@ QJsonObject inspectMetrics(const stemtex::LuaRenderResult &result, bool svg,
   require(metrics.value("workerPid").toDouble() == result.workerPid &&
               metrics.value("workerPage").toInt() == result.pageNumber,
           QStringLiteral("Summary worker identity differs from the render result"));
+  require(metrics.value("checkpoint").toBool(),
+          QStringLiteral("The initialized worker did not report its checkpoint"));
   require(metrics.value("issueFlags").isDouble() && metrics.value("issueFlags").toInt() == result.issueFlags &&
               metrics.value("outcomeMessage").toString() == result.outcomeMessage &&
               metrics.value(svg ? "dvisvgmReturnCode" : "xdvipdfmxReturnCode").isDouble(),
@@ -286,7 +294,7 @@ int main(int argc, char **argv) {
               QStringLiteral("Resident converter DLLs were unloaded during a live backend lifetime"));
     };
     requireResidentConverters();
-    int previousPage = 0;
+    int previousPage = 1;  // Internal warmup is the checkpoint baseline page.
 
     auto render = [&](const char *label, const QByteArray &snippet, double width, double fontSize,
                       bool svg, const QString &marker = {}, const QString &previousMarker = {},
@@ -328,8 +336,9 @@ int main(int argc, char **argv) {
     const auto first = render("first-pdf", "PDFALPHA. Inline math $E=mc^2$.\\par\n"
                               "\\[\\int_0^1 x^2\\,dx=\\frac{1}{3}\\]\n",
                               220.25, 10.0, false, QStringLiteral("PDFALPHA"));
-    require(first.workerPid == initialPid && first.pageNumber > previousPage,
-            QStringLiteral("First request did not use the initialized worker"));
+    require(first.workerPid == initialPid && first.pageNumber == previousPage + 1,
+            QStringLiteral("First request did not follow the initialized worker's warmup page"));
+    const QByteArray firstPdfBytes = readOutput(first.outputPath);
     previousPage = first.pageNumber;
 
     const auto second = render("second-svg", "SVGSECOND.\\par\\rule{37pt}{9pt}\\par\n"
@@ -409,23 +418,51 @@ int main(int argc, char **argv) {
     failureTimer.start();
     const auto invalid = backend->render("\\StemTeXDeliberatelyUndefinedCommand\n", 300.0, 10.0, false);
     require(!invalid.ok && !invalid.error.isEmpty(), QStringLiteral("Invalid TeX was not reported as an error"));
+    QJsonParseError failureParseError;
+    const auto failureDocument = QJsonDocument::fromJson(invalid.summary.toUtf8(), &failureParseError);
+    require(failureParseError.error == QJsonParseError::NoError && failureDocument.isObject(),
+            QStringLiteral("Invalid TeX did not return structured recovery metrics"));
+    const auto failureMetrics = failureDocument.object();
+    require(failureMetrics.value("checkpoint").toBool() && failureMetrics.value("checkpointRestored").toBool() &&
+                !failureMetrics.value("workerRestarted").toBool() &&
+                failureMetrics.value("recoveryMode").toString() == "checkpoint" &&
+                failureMetrics.value("readyAfterError").toBool() && backend->ready() &&
+                failureMetrics.value("failedWorkerPid").toDouble() == initialPid &&
+                failureMetrics.value("workerPid").toDouble() == initialPid && backend->workerPid() == initialPid,
+            QStringLiteral("Invalid TeX did not restore the checkpoint in the same ready worker"));
     requireResidentConverters();
-    report.insert("texError", QJsonObject{{"elapsedMs", failureTimer.elapsed()}, {"message", invalid.error}});
-    out << "invalid-tex: correctly failed\n";
+    report.insert("texError", QJsonObject{{"elapsedMs", failureTimer.elapsed()}, {"message", invalid.error},
+                                         {"summary", failureMetrics}});
+    out << "invalid-tex: checkpoint restored in the same PID\n";
     out.flush();
+
+    const auto invalidSize = backend->render("not sent to TeX", -1.0, 10.0, false);
+    const auto validationMetrics = QJsonDocument::fromJson(invalidSize.summary.toUtf8()).object();
+    require(!invalidSize.ok && backend->ready() && backend->workerPid() == initialPid &&
+                validationMetrics.value("failureStage").toString() == "validation" &&
+                validationMetrics.value("recoveryMode").toString() == "none" &&
+                !validationMetrics.value("checkpointRestored").toBool() &&
+                !validationMetrics.value("workerRestarted").toBool() &&
+                validationMetrics.value("failedWorkerPid").toInteger() == 0 &&
+                validationMetrics.value("restoreMs").toInteger(-1) == 0,
+            QStringLiteral("Invalid dimensions reused old recovery metrics or disrupted the worker"));
+    report.insert("argumentValidationPreservesWorker", true);
 
     const auto recovered = render("recovered-pdf", "PDFRECOVERED.\\par\n"
                                   "\\[\\frac{x+1}{x-1}\\]\n",
                                   280.0, 11.0, false, QStringLiteral("PDFRECOVERED"), QStringLiteral("PDFOMEGA"));
-    require(recovered.workerPid != initialPid, QStringLiteral("TeX error recovery did not replace the worker"));
-    workers.track(recovered.workerPid);
-    report.insert("recoveredWithNewWorker", true);
+    require(recovered.workerPid == initialPid && recovered.pageNumber == 2,
+            QStringLiteral("TeX error recovery did not resume after the baseline in the same worker"));
+    require(recovered.outputPath != first.outputPath && readOutput(first.outputPath) == firstPdfBytes,
+            QStringLiteral("Checkpoint recovery overwrote a previously published PDF"));
+    report.insert("recoveredWithSameWorker", true);
+    report.insert("publishedPdfPreserved", true);
     const auto recoveredSvg = render("recovered-svg", "SVGRECOVERED.\\par\\rule{23pt}{14pt}\\par\n"
                                       "\\[\\frac{1}{1+x^2}\\]\n",
                                       260.0, 13.0, true, {}, {}, QSizeF(23.0, 14.0));
     require(recoveredSvg.workerPid == recovered.workerPid && recoveredSvg.pageNumber == recovered.pageNumber + 1,
-            QStringLiteral("Recovered SVG did not use the replacement TeX worker"));
-    report.insert("residentConvertersSurvivedWorkerRestart", true);
+            QStringLiteral("Recovered SVG did not advance in the restored TeX worker"));
+    report.insert("residentConvertersSurvivedCheckpointRestore", true);
 
     QElapsedTimer cancelTimer;
     cancelTimer.start();
@@ -442,6 +479,8 @@ int main(int argc, char **argv) {
     }
     canceller.join();
     require(!cancelled.ok, QStringLiteral("Cancelled infinite TeX loop unexpectedly succeeded"));
+    require(!backend->ready() && backend->workerPid() == 0,
+            QStringLiteral("Terminal cancellation retained a ready or running worker"));
     require(cancelTimer.elapsed() < 5000,
             QStringLiteral("Cancellation took %1 ms, expected less than 5000 ms").arg(cancelTimer.elapsed()));
     report.insert("cancel", QJsonObject{{"elapsedMs", cancelTimer.elapsed()}, {"message", cancelled.error}});
@@ -467,6 +506,8 @@ int main(int argc, char **argv) {
     const auto reinitializedPdf = render("reinitialized-pdf", "PDFREINITIALIZED.\\par\\[a+b=c\\]\n",
                                          310.0, 10.5, false, QStringLiteral("PDFREINITIALIZED"),
                                          QStringLiteral("PDFRECOVERED"));
+    require(reinitializedPdf.pageNumber == 2,
+            QStringLiteral("Reinitialized backend did not render after its own warmup baseline"));
     const auto reinitializedSvg = render("reinitialized-svg", "SVGREINITIALIZED.\\par\\rule{41pt}{7pt}\\par\n"
                                          "\\[\\sqrt{x+y}\\]\n",
                                          290.0, 15.0, true, {}, {}, QSizeF(41.0, 7.0));

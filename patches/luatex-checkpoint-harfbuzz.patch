@@ -1,0 +1,15 @@
+--- a/libs/harfbuzz/harfbuzz-src/src/hb-config.hh
++++ b/libs/harfbuzz/harfbuzz-src/src/hb-config.hh
+@@ -26,6 +26,12 @@
+ #ifndef HB_CONFIG_HH
+ #define HB_CONFIG_HH
+ 
++/* StemTeX keeps font blobs in the tracked allocator domain. A Windows file
++ * mapping cannot be resurrected by restoring Lua/HarfBuzz heap objects. */
++#ifndef HB_NO_MMAP
++#define HB_NO_MMAP
++#endif
++
+ #if 0 /* Make test happy. */
+ #include "hb.hh"
+ #endif

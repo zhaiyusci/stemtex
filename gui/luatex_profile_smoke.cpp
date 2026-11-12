@@ -378,7 +378,9 @@ int main(int argc, char **argv) {
       processes.track(pids[0]);
       QJsonArray outputs;
       QStringList workerRoots;
-      int pages[2]{0, 0};
+      int pages[2]{1, 1};  // Each driver worker starts with one internal warmup page.
+      QString firstPaths[2];
+      QByteArray firstBytes[2];
       int index = 0;
       const double widths[]{320.0, 280.0, 300.0, 260.0, 320.0};
       const double fontSizes[]{10.0, 14.0, 12.0, 11.0, 10.0};
@@ -399,10 +401,15 @@ int main(int argc, char **argv) {
         if (!workerRoots.contains(workerRoot)) workerRoots.append(workerRoot);
         const auto summary = parseJson(result.summary.toUtf8(), "render summary");
         require(summary.value("converterMode").toString() == "daemon-dll", "Expected resident conversion");
+        require(summary.value("checkpoint").toBool(), "Generated-profile worker did not report its checkpoint");
         require(result.issueFlags == 0 && !result.recoverable,
                 test.name + " converter reported an issue: " + result.outcomeMessage);
         outputs.append(QJsonObject{{"path", result.outputPath}, {"summary", summary},
                                     {"inspection", inspectOutput(result, test, width, svg)}});
+        if (firstPaths[format].isEmpty()) {
+          firstPaths[format] = result.outputPath;
+          firstBytes[format] = readFile(result.outputPath);
+        }
         out << "  " << (svg ? "SVG" : "PDF") << ": PID=" << result.workerPid
             << " page=" << result.pageNumber << '\n';
         out.flush();
@@ -412,6 +419,14 @@ int main(int argc, char **argv) {
         const qint64 originalSvgPid = pids[1];
         const auto invalid = backend->render("\\StemTeXProfileSmokeUndefinedCommand\n", 300.0, 10.0, true);
         require(!invalid.ok && !invalid.error.isEmpty(), "Malformed SVG request was not rejected");
+        const auto recovery = parseJson(invalid.summary.toUtf8(), "SVG recovery summary");
+        require(recovery.value("checkpointRestored").toBool() && recovery.value("checkpoint").toBool() &&
+                    !recovery.value("workerRestarted").toBool() &&
+                    recovery.value("recoveryMode").toString() == "checkpoint" &&
+                    recovery.value("readyAfterError").toBool() && backend->ready() &&
+                    recovery.value("failedWorkerPid").toDouble() == originalSvgPid &&
+                    recovery.value("workerPid").toDouble() == originalSvgPid && backend->workerPid() == originalSvgPid,
+                "Malformed SVG request did not restore the same ready worker");
         const auto retainedPdf = backend->render(test.body.toUtf8(), 280.0, 10.0, false);
         require(retainedPdf.ok, "PDF failed after an SVG error: " + retainedPdf.error);
         require(retainedPdf.workerPid == pids[0] && retainedPdf.pageNumber == pages[0] + 1,
@@ -422,11 +437,12 @@ int main(int argc, char **argv) {
                                     {"inspection", inspectOutput(retainedPdf, test, 280.0, false)}});
         const auto recoveredSvg = backend->render(test.body.toUtf8(), 300.0, 12.0, true);
         require(recoveredSvg.ok, "SVG recovery failed: " + recoveredSvg.error);
-        require(recoveredSvg.workerPid != originalSvgPid && recoveredSvg.pageNumber == 1,
-                "SVG recovery did not start a new independent worker");
-        pids[1] = recoveredSvg.workerPid;
+        require(recoveredSvg.workerPid == originalSvgPid && recoveredSvg.pageNumber == 2,
+                "SVG recovery did not resume after its baseline in the same worker");
         pages[1] = recoveredSvg.pageNumber;
-        processes.track(pids[1]);
+        require(recoveredSvg.outputPath != firstPaths[1] &&
+                    readFile(firstPaths[0]) == firstBytes[0] && readFile(firstPaths[1]) == firstBytes[1],
+                "Checkpoint recovery overwrote a previously published PDF or SVG");
         const QString recoveredRoot = QFileInfo(recoveredSvg.outputPath).absolutePath();
         if (!workerRoots.contains(recoveredRoot)) workerRoots.append(recoveredRoot);
         outputs.append(QJsonObject{{"case", "recovered-svg"}, {"path", recoveredSvg.outputPath},
@@ -434,7 +450,9 @@ int main(int argc, char **argv) {
                                     {"inspection", inspectOutput(recoveredSvg, test, 300.0, true)}});
         profile.insert("svgErrorPreservedPdfWorker", true);
         profile.insert("originalSvgWorkerPid", originalSvgPid);
-        out << "  SVG error recovery: PDF PID retained; SVG PID replaced\n";
+        profile.insert("svgCheckpointRecovery", recovery);
+        profile.insert("publishedOutputsPreserved", true);
+        out << "  SVG error recovery: both PIDs retained; SVG checkpoint restored\n";
         out.flush();
       }
       backend.reset();

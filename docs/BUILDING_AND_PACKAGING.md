@@ -75,7 +75,10 @@ cmake --build build/stemtex-ninja --target stage stemtex-luatex-gui-smoke
 
 The staging option defaults to OFF, so normal packages do not acquire an
 experimental engine implicitly. When enabled, it copies `luahbtex.exe` and its
-DLLs from `STEMTEX_LUAHBTEX_DIR` to `runtime/bin/luatex`. The launch script can
+DLLs and the matching `luahbtex.exe.stemtex-checkpoint` ownership map from
+`STEMTEX_LUAHBTEX_DIR` to `runtime/bin/luatex`. The map is generated from the
+linker's actual object layout and bound to the executable bytes; keep the pair
+together. The launch script can
 also find the local build without staging that engine. Use `-EnginePath` or
 `-StageRoot` to override those paths.
 
@@ -89,8 +92,11 @@ Successful edits reuse a LuaHBTeX process for the selected output driver. Each s
 finalizes a copy and converts the newest page to PDF or SVG. Both converter DLLs
 are initialized once and reused until the backend is closed; requests do not
 start converter processes. The GUI displays typesetting, conversion, and total
-time in the same format as XeTeX. Malformed TeX causes worker replacement;
-there is no Lua/TeX checkpoint recovery. Profile Creator's engine selector
+time in the same format as XeTeX. After an internal warmup page, the engine saves
+one joint TeX/Lua checkpoint. Ordinary malformed snippets restore that baseline
+and return to the request loop in the same PID. Timeouts, cancellation, and
+unsafe native-resource activity retain the worker-replacement fallback.
+Profile Creator's engine selector
 generates the appropriate CJK and DVI graphics configuration; the GUI lists
 profiles compatible with the selected engine. Generated Lua profiles use a
 separate lazy resident SVG worker because PGF's PDF and SVG drivers differ;
@@ -126,9 +132,10 @@ cmake --build build/stemtex-ninja --target stemtex-luatex-profile-smoke
 
 `stemtex-luatex-recovery-smoke` checks deliberately malformed snippets against
 the builtin, generated Latin, and generated Chinese/math/graphics profiles.
-It uses the GUI's 90-second timeout and records error detection, worker restart,
-and the next valid output separately. Normal test cases are repeated for both
-PDF and SVG, including state-leak and unaffected-worker checks:
+It uses the GUI's 90-second timeout and records error detection, checkpoint
+restore, fallback restart, and the next valid output separately. Ordinary cases
+require same-PID recovery in PDF and SVG, including state-leak, immutable
+published-output, and unaffected-worker checks:
 
 ```powershell
 cmake --build build/stemtex-ninja --target stemtex-luatex-recovery-smoke
@@ -139,11 +146,30 @@ cmake --build build/stemtex-ninja --target stemtex-luatex-recovery-smoke
 
 An optional last argument selects `builtin`, `latin`, `rich-cjk`, or
 `PROFILE/CASE`. `conditional` checks unfinished true conditionals;
+`pollution` mutates pre-checkpoint Lua tables, shared upvalues, function registry,
+callbacks, node properties, font metrics and TeX state before causing an error;
+`nested` checks Lua-to-TeX error propagation through protected calls;
 `default-timeout` deliberately waits the full 90 seconds for an infinite loop.
+For stress runs, set `STEMTEX_RECOVERY_REPEATS` to 1–1000, for example 20 with
+`builtin/directlua-error`; unset it afterwards to restore the normal matrix.
 Results are saved incrementally as `recovery-smoke-results.json`, with an
 additional copy under each unique run directory. Recovery timings start after
 profile initialization and output warmup; first-time font database creation is
-not included. Successful recovery is process replacement, not a checkpoint.
+not included. JSON distinguishes `recoveryMode=checkpoint` from `restart`, and
+records both the failed and resulting worker PID.
+
+The native allocator/file/resource checks can run without MSYS or a full engine
+build. They compile with MinGW warnings treated as errors and exercise repeated
+memory, Lua-style object, file-position and DVI rollback, plus refusal to restore
+after guarded native resource changes:
+
+```powershell
+& .\scripts\test-luatex-checkpoint-memory.ps1
+```
+
+The 13 scenarios use separate processes; the memory scenario restores ten times.
+The exact-binary ownership sidecar is required when deploying the engine; do not
+reuse one from a different build, even if the engine version string is identical.
 
 ## Create A Staging Tree
 

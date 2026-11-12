@@ -20,7 +20,7 @@ if (-not $EnginePath) {
     }
 }
 $EnginePath = [IO.Path]::GetFullPath($EnginePath)
-foreach ($file in @($gui, $EnginePath, (Join-Path $profile 'preamble.tex'),
+foreach ($file in @($gui, $EnginePath, ($EnginePath + '.stemtex-checkpoint'), (Join-Path $profile 'preamble.tex'),
                     (Join-Path $runtime 'bin/windows/dvipdfmxdaemon.dll'),
                     (Join-Path $runtime 'bin/windows/dvisvgmdaemon.dll'),
                     (Join-Path $TexLiveRoot 'texmf-dist/tex/latex/tex-ini-files/lualatex.ini'))) {

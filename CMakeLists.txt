@@ -46,11 +46,13 @@ install(FILES
 )
 install(FILES VERSION DESTINATION runtime)
 if(STEMTEX_INSTALL_EXPERIMENTAL_LUATEX)
-  if(NOT EXISTS "${STEMTEX_LUAHBTEX_DIR}/luahbtex.exe")
+  if(NOT EXISTS "${STEMTEX_LUAHBTEX_DIR}/luahbtex.exe" OR
+     NOT EXISTS "${STEMTEX_LUAHBTEX_DIR}/luahbtex.exe.stemtex-checkpoint")
     message(FATAL_ERROR "Build the patched LuaHBTeX first: scripts/build-luahbtex-mingw.ps1")
   endif()
   install(DIRECTORY "${STEMTEX_LUAHBTEX_DIR}/" DESTINATION runtime/bin/luatex
-    FILES_MATCHING PATTERN "luahbtex.exe" PATTERN "*.dll" PATTERN "build-manifest.json")
+    FILES_MATCHING PATTERN "luahbtex.exe" PATTERN "luahbtex.exe.stemtex-checkpoint"
+    PATTERN "*.dll" PATTERN "build-manifest.json")
 endif()
 install(FILES gui/assets/stemtex-renderer-gui.ico DESTINATION runtime RENAME StemTeX.ico)
 install(FILES
