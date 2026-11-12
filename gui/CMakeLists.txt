@@ -7,9 +7,8 @@ set(CMAKE_AUTOUIC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Pdf Svg LinguistTools)
 
-# The experimental Lua backend is local to the GUI; the public XeTeX C ABI is
-# unchanged. It uses patched LuaHBTeX and the same resident converter DLLs as
-# XeTeX, with packages and fonts from a full TeX Live tree.
+# The Lua GUI backend uses patched LuaHBTeX, its bundled profile data and the
+# same resident converter DLLs as XeTeX.
 add_library(stemtex-luatex-gui-backend STATIC luatex_backend.cpp luatex_backend.h)
 target_compile_features(stemtex-luatex-gui-backend PUBLIC cxx_std_17)
 target_link_libraries(stemtex-luatex-gui-backend PUBLIC Qt6::Core)

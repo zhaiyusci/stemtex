@@ -458,7 +458,9 @@ GUI 工具栏增加 `LuaHBTeX (experimental)`，也可用
 LuaHBTeX PID，从累计 DVI 解析完整页并为副本补尾，再用 StemTeX runtime 中的
 `dvipdfmxdaemon.dll` / `dvisvgmdaemon.dll` 转换最新页。两个转换器与 XeTeX 路径
 使用相同的热启动 ABI，在后端初始化时加载，连续请求复用，不再逐次启动转换进程。
-完整 TeX Live 提供 LuaLaTeX 包和字体；格式与字体缓存单独保存，不修改系统 TeX Live。
+早期原型从外部 TeX Live 读取宏包和字体。现在 LuaTeX 安装组件在
+`runtime/luatex` 自带默认 Latin Modern / `unicode-math` Profile 所需的精简树，
+首次启动在用户缓存中生成格式和字体索引。需要额外宏包的 Profile 可以选择外部树。
 GUI 的编辑、宽度、字号、PDF/SVG 预览和图像复制/保存复用已有界面。
 
 实验使用 UTF-8，支持内置 Latin Modern / `unicode-math` profile，以及 Profile Creator

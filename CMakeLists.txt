@@ -45,15 +45,12 @@ install(FILES
   DESTINATION runtime/sdk/include
 )
 install(FILES VERSION DESTINATION runtime)
-if(STEMTEX_INSTALL_EXPERIMENTAL_LUATEX)
-  if(NOT EXISTS "${STEMTEX_LUAHBTEX_DIR}/luahbtex.exe" OR
-     NOT EXISTS "${STEMTEX_LUAHBTEX_DIR}/luahbtex.exe.stemtex-checkpoint")
-    message(FATAL_ERROR "Build the patched LuaHBTeX first: scripts/build-luahbtex-mingw.ps1")
-  endif()
-  install(DIRECTORY "${STEMTEX_LUAHBTEX_DIR}/" DESTINATION runtime/bin/luatex
-    FILES_MATCHING PATTERN "luahbtex.exe" PATTERN "luahbtex.exe.stemtex-checkpoint"
-    PATTERN "*.dll" PATTERN "build-manifest.json")
+if(NOT STEMTEX_INSTALL_EXPERIMENTAL_LUATEX)
+  set(luahbtex_install_option EXCLUDE_FROM_ALL)
 endif()
+configure_file(cmake/install-luahbtex.cmake.in install-luahbtex.cmake @ONLY)
+install(SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/install-luahbtex.cmake"
+  COMPONENT LuaHBTeX ${luahbtex_install_option})
 install(FILES gui/assets/stemtex-renderer-gui.ico DESTINATION runtime RENAME StemTeX.ico)
 install(FILES
   "${STEMTEX_STANDALONE_DIR}/xetexdaemon.exe"
@@ -113,72 +110,14 @@ install(DIRECTORY gui/profiles/unicodemath/
     PATTERN "*.synctex.gz" EXCLUDE
 )
 
+include(cmake/install-trimmed-texmf.cmake)
+stemtex_install_texmf(runtime/luatex/texmf-dist LuaHBTeX COMPONENT LuaHBTeX ${luahbtex_install_option})
+configure_file(cmake/prepare-luatex-tree.cmake.in prepare-luatex-tree.cmake @ONLY)
+install(SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/prepare-luatex-tree.cmake"
+  COMPONENT LuaHBTeX ${luahbtex_install_option})
+
 if(STEMTEX_INSTALL_TEXMF)
-  set(STEMTEX_TEXMF_DIST "${STEMTEX_TEXLIVE_ROOT}/texmf-dist")
-
-  set(STEMTEX_TEXMF_FILES
-    dvipdfmx/dvipdfmx.cfg
-    fonts/misc/xetex/fontmapping/base/tex-text.tec
-    fonts/map/fontname/texfonts.map
-    fonts/opentype/public/lm/lmmono10-italic.otf
-    fonts/opentype/public/lm/lmmono10-regular.otf
-    fonts/opentype/public/lm/lmroman10-bold.otf
-    fonts/opentype/public/lm/lmroman10-bolditalic.otf
-    fonts/opentype/public/lm/lmroman10-italic.otf
-    fonts/opentype/public/lm/lmroman10-regular.otf
-    fonts/opentype/public/lm/lmsans10-bold.otf
-    fonts/opentype/public/lm/lmsans10-boldoblique.otf
-    fonts/opentype/public/lm/lmsans10-oblique.otf
-    fonts/opentype/public/lm/lmsans10-regular.otf
-    fonts/opentype/public/lm-math/latinmodern-math.otf
-    tex/generic/babel/hyphen.cfg
-    tex/generic/babel/xebabel.def
-    tex/generic/hyphen/dumyhyph.tex
-    tex/generic/hyphen/hyphen.tex
-    tex/generic/hyphen/zerohyph.tex
-    web2c/fmtutil.cnf
-    web2c/texmf.cnf
-  )
-  foreach(rel IN LISTS STEMTEX_TEXMF_FILES)
-    get_filename_component(rel_dir "${rel}" DIRECTORY)
-    install(FILES "${STEMTEX_TEXMF_DIST}/${rel}" DESTINATION "runtime/texmf-dist/${rel_dir}")
-  endforeach()
-
-  set(STEMTEX_TEXMF_DIRS
-    fonts/tfm/public/cm
-    fonts/tfm/public/amsfonts/cmextra
-    fonts/type1/public/amsfonts/cmextra
-    fonts/tfm/public/latex-fonts
-    tex/latex/amsmath
-    tex/latex/base
-    tex/latex/tex-ini-files
-    tex/latex/firstaid
-    tex/latex/fontspec
-    tex/generic/config
-    tex/generic/iftex
-    tex/generic/unicode-data
-    tex/latex/l3backend
-    tex/latex/l3kernel
-    tex/latex/l3packages/l3keys2e
-    tex/latex/l3packages/xparse
-    tex/latex/l3packages/xtemplate
-    tex/latex/preview
-    tex/latex/unicode-math
-    tex/latex/lm
-  )
-  foreach(rel IN LISTS STEMTEX_TEXMF_DIRS)
-    get_filename_component(rel_parent "${rel}" DIRECTORY)
-    install(DIRECTORY "${STEMTEX_TEXMF_DIST}/${rel}" DESTINATION "runtime/texmf-dist/${rel_parent}")
-  endforeach()
-
-  # Dynamic font-size requests can select the classic Computer Modern math
-  # families embedded in the daemon format. Keep their metrics and Type 1
-  # outlines, but omit the unused PFM companions and the rest of AMSFonts.
-  install(DIRECTORY "${STEMTEX_TEXMF_DIST}/fonts/type1/public/amsfonts/cm/"
-    DESTINATION "runtime/texmf-dist/fonts/type1/public/amsfonts/cm"
-    FILES_MATCHING PATTERN "*.pfb"
-  )
-
+  stemtex_install_texmf(runtime/texmf-dist XeTeX)
   install(CODE [=[
     set(runtime_root "${CMAKE_INSTALL_PREFIX}/runtime")
     set(cnf "${runtime_root}/texmf-dist/web2c/texmf.cnf")

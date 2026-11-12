@@ -1,0 +1,54 @@
+set(root "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/runtime/luatex")
+set(dist "${root}/texmf-dist")
+set(source "@STEMTEX_TEXLIVE_ROOT@/texmf-dist")
+
+# Resolve relative to the installed engine unless the caller supplies TEXMFROOT.
+# LuaBackend redirects writable state and the luaotfload index to the user cache.
+file(READ "${source}/web2c/texmf.cnf" original_cnf)
+file(WRITE "${dist}/web2c/texmf.cnf" [=[% StemTeX's relocatable LuaLaTeX tree.
+TEXMFROOT = $SELFAUTOPARENT/luatex
+TEXMFDIST = $TEXMFROOT/texmf-dist
+TEXMFMAIN = $TEXMFDIST
+TEXMFSYSVAR = $TEXMFROOT/texmf-var
+TEXMFSYSCONFIG = $TEXMFROOT/texmf-config
+TEXMFVAR = $TEXMFSYSVAR
+TEXMFCONFIG = $TEXMFSYSCONFIG
+TEXMFLOCAL = $TEXMFROOT/texmf-local
+TEXMFHOME = $TEXMFROOT/texmf-home
+TEXMF = {$TEXMFVAR,$TEXMFCONFIG,$TEXMFDIST}
+TEXMFDBS = {$TEXMFVAR,$TEXMFCONFIG,$TEXMFDIST}
+SYSTEXMF = $TEXMFSYSVAR;$TEXMFLOCAL;$TEXMFDIST
+TEXMFCACHE = $TEXMFVAR
+VARTEXFONTS = $TEXMFVAR/fonts
+OSFONTDIR = C:/Windows/Fonts
+
+]=] "${original_cnf}")
+
+file(WRITE "${dist}/tex/generic/config/language.dat"
+  "english hyphen.tex\n=usenglish\n=USenglish\n=american\ndumylang dumyhyph.tex\nnohyphenation zerohyph.tex\n")
+file(READ "${source}/tex/generic/config/language.us.lua" english_patterns)
+file(WRITE "${dist}/tex/generic/config/language.dat.lua" "${english_patterns}\n}\n")
+
+# The upstream configuration loads maps for a full installation. Only the
+# Computer Modern and LaTeX symbol outlines are bundled with this profile.
+file(READ "${source}/dvipdfmx/dvipdfmx.cfg" dvi_config)
+string(REGEX REPLACE "(\n)[ \t]*f[ \t]+(kanjix|ckx)\\.map[^\n]*" "\\1" dvi_config "${dvi_config}")
+file(WRITE "${dist}/dvipdfmx/dvipdfmx.cfg" "${dvi_config}")
+file(MAKE_DIRECTORY "${dist}/fonts/map/pdftex/stemtex")
+set(font_map "")
+foreach(name cm cmextra latxfont)
+  file(READ "${source}/fonts/map/dvips/amsfonts/${name}.map" entries)
+  string(APPEND font_map "${entries}\n")
+endforeach()
+file(WRITE "${dist}/fonts/map/pdftex/stemtex/pdftex.map" "${font_map}")
+
+# Relative names make identical packages share an ID across staging directories.
+file(GLOB_RECURSE files LIST_DIRECTORIES false RELATIVE "${dist}" "${dist}/*")
+list(SORT files)
+set(content_hashes "")
+foreach(relative IN LISTS files)
+  file(SHA256 "${dist}/${relative}" hash)
+  string(APPEND content_hashes "${hash} ${relative}\n")
+endforeach()
+string(SHA256 tree_id "${content_hashes}")
+file(WRITE "${root}/tree-id.txt" "${tree_id}\n")

@@ -16,6 +16,7 @@ struct LuaBackendConfig {
   QString profileRoot;
   QString stateRoot;
   int timeoutMs = 90000;
+  bool recordInputs = false;
 };
 
 struct LuaRenderResult {

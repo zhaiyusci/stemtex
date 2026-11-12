@@ -12,12 +12,12 @@
       <translation>LuaHBTeX（实验）</translation>
     </message>
     <message>
-      <source>The engine determines available font and package recipes. LuaHBTeX requires a full TeX Live tree.</source>
-      <translation>引擎决定可用的字体和宏包配方。LuaHBTeX 需要完整的 TeX Live 树。</translation>
+      <source>The engine determines available font and package recipes.</source>
+      <translation>引擎决定可用的字体和宏包配方。</translation>
     </message>
     <message>
-      <source>LuaHBTeX needs a full TeX Live tree with lualatex.ini. Choose TeX Live to continue.</source>
-      <translation>LuaHBTeX 需要包含 lualatex.ini 的完整 TeX Live 树。请选择 TeX Live 后继续。</translation>
+      <source>The selected tree is missing LuaLaTeX packages. Choose a TeX Live tree containing LuaLaTeX and luaotfload.</source>
+      <translation>所选目录缺少 LuaLaTeX 宏包。请选择包含 LuaLaTeX 和 luaotfload 的 TeX Live 目录。</translation>
     </message>
     <message>
       <source>Packages</source>

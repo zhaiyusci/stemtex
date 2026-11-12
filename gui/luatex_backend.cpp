@@ -1,4 +1,5 @@
 #include "luatex_backend.h"
+#include "installed_engines.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -13,6 +14,7 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QSaveFile>
+#include <QSet>
 #include <QStandardPaths>
 #include <QUuid>
 
@@ -242,8 +244,10 @@ class ConverterEnvironment {
         }
         entries_.push_back(std::move(entry));
         const std::wstring value = it.value().toStdWString();
+        const wchar_t *windowsValue = it.value().isNull() ? nullptr : value.c_str();
         if (_wputenv_s(entries_.back().name.c_str(), value.c_str()) != 0 ||
-            !SetEnvironmentVariableW(entries_.back().name.c_str(), value.c_str()))
+            (!SetEnvironmentVariableW(entries_.back().name.c_str(), windowsValue) &&
+             !(windowsValue == nullptr && GetLastError() == ERROR_ENVVAR_NOT_FOUND)))
           fail("Cannot configure the resident converter environment: " + it.key());
       }
     } catch (...) {
@@ -342,6 +346,44 @@ class ConverterModule {
   bool svg_ = false, initAttempted_ = false;
 };
 
+// A shell configured for another TeX distribution may export file-format
+// search paths, including program-specific VAR.progname / VAR_progname.
+// In bundled mode let both LuaTeX and the converters read those defaults from
+// the shipped texmf.cnf. Leave unrelated application variables intact.
+QMap<QString, QString> bundledTreeEnvironment(const LuaBackendConfig &config, const QString &cacheRoot) {
+  if (QDir(config.texmfRoot) != QDir(bundledLuaTexmfRoot(config.runtimeRoot))) return {};
+  const QString dist = pathIn(config.texmfRoot, "texmf-dist");
+  QSet<QString> variables{"TEXFONTS", "LUA_PATH", "LUA_CPATH", "FONTCONFIG_FILE", "FONTCONFIG_PATH"};
+  const auto lines = readFile(pathIn(dist, "web2c/texmf.cnf")).split('\n');
+  for (const QByteArray &line : lines) {
+    const qsizetype equal = line.indexOf('=');
+    if (equal < 0) continue;
+    const QByteArray key = line.left(equal).trimmed();
+    if (!key.isEmpty() && key[0] != '%' && key[0] != '#')
+      variables.insert(QString::fromLatin1(key).section('.', 0, 0).toUpper());
+  }
+  QMap<QString, QString> values;
+  for (const QString &key : QProcessEnvironment::systemEnvironment().keys()) {
+    const QString name = key.toUpper();
+    if (variables.contains(name) || variables.contains(name.section('.', 0, 0)) ||
+        variables.contains(name.section('_', 0, 0)) || name.startsWith("LUA_PATH_") || name.startsWith("LUA_CPATH_"))
+      values.insert(name, QString());
+  }
+  const QString cacheVar = pathIn(cacheRoot, "texmf-var");
+  values.insert("TEXMFROOT", config.texmfRoot);
+  values.insert("TEXMFDIST", dist);
+  values.insert("TEXMFHOME", pathIn(config.texmfRoot, "texmf-home"));
+  values.insert("TEXMFLOCAL", pathIn(config.texmfRoot, "texmf-local"));
+  values.insert("TEXMFVAR", cacheVar);
+  values.insert("TEXMFCONFIG", pathIn(cacheRoot, "texmf-config"));
+  values.insert("TEXMFSYSVAR", pathIn(config.texmfRoot, "texmf-var"));
+  values.insert("TEXMFSYSCONFIG", pathIn(config.texmfRoot, "texmf-config"));
+  values.insert("TEXMFCACHE", cacheVar);
+  values.insert("TEXMF", "{$TEXMFCONFIG,$TEXMFVAR,$TEXMFSYSCONFIG,$TEXMFSYSVAR,$TEXMFDIST}");
+  values.insert("TEXMFDBS", "{$TEXMFVAR,$TEXMFSYSVAR,$TEXMFDIST}");
+  return values;
+}
+
 struct HotConverters {
   // Destruction order is significant: shutdown/unload both DLLs before
   // restoring the environment from which their persistent state was built.
@@ -349,7 +391,8 @@ struct HotConverters {
   ConverterModule pdf;
   ConverterModule svg;
 
-  void initialize(const LuaBackendConfig &config, const QString &cacheRoot, const QString &sessionRoot) {
+  void initialize(const LuaBackendConfig &config, const QString &cacheRoot, const QString &sessionRoot,
+                  QMap<QString, QString> overrides) {
     const QString conf = pathIn(sessionRoot, "fontconfig/conf");
     const QString fontCache = pathIn(cacheRoot, "fontconfig/cache");
     if (!QDir().mkpath(conf + "/conf.d") || !QDir().mkpath(fontCache))
@@ -370,7 +413,7 @@ struct HotConverters {
     const QString fontMaps = pathIn(treeVar, "fonts/map/pdftex/updmap") + ";" +
         pathIn(treeVar, "fonts/map/dvipdfmx/updmap") + ";" + pathIn(dist, "fonts/map/dvipdfmx") + ";" +
         pathIn(dist, "fonts/map") + "//";
-    QMap<QString, QString> overrides{
+    overrides.insert(QMap<QString, QString>{
         {"PATH", bin + ";" + pathIn(systemRoot, "System32")}, {"TEXMFROOT", config.texmfRoot},
         {"TEXMFCNF", pathIn(dist, "web2c")}, {"TEXFORMATS", cacheRoot + "//;"},
         {"XE_FONTCONFIG_PATH", conf}, {"FONTCONFIG_PATH", conf}, {"XE_FC_CACHEDIR", fontCache},
@@ -378,7 +421,7 @@ struct HotConverters {
         {"TEXMFSYSCONFIG", treeConfig}, {"TEXMFVAR", pathIn(cacheRoot, "texmf-var")},
         {"TEXMFCONFIG", pathIn(cacheRoot, "texmf-config")}, {"TEXFONTMAPS", fontMaps},
         {"WEB2C", pathIn(dist, "web2c")}, {"W32TEX", config.runtimeRoot}, {"command_line_encoding", ""},
-        {"STEMTEX_XDVIPDFMX_TRACE", pathIn(sessionRoot, "xdvipdfmx-init-trace.log")}};
+        {"STEMTEX_XDVIPDFMX_TRACE", pathIn(sessionRoot, "xdvipdfmx-init-trace.log")}});
     if (QDir(pathIn(bin, "icu-data")).exists()) overrides.insert("ICU_DATA", pathIn(bin, "icu-data"));
     environment = std::make_unique<ConverterEnvironment>(overrides);
     pdf.initialize(config.runtimeRoot, false);
@@ -595,11 +638,13 @@ struct LuaBackend::Impl {
     slot.process = std::make_unique<QProcess>();
     setupProcess(*slot.process, slot.workRoot);
     auto workerEnvironment = environment;
+    workerEnvironment.insert("TEXINPUTS", config.profileRoot + "//;");
     workerEnvironment.insert("STEMTEX_LUA_CHECKPOINT", "1");
     slot.process->setProcessEnvironment(workerEnvironment);
-    start(*slot.process, config.enginePath,
-          {"--fmt=" + formatFile, "--progname=lualatex", "--output-format=dvi", "--flush-output-on-shipout",
-           "--stemtex-checkpoint", "--interaction=errorstopmode", "--halt-on-error", "--no-shell-escape", "./worker.tex"});
+    QStringList arguments{"--fmt=" + formatFile, "--progname=lualatex", "--output-format=dvi", "--flush-output-on-shipout",
+                          "--stemtex-checkpoint", "--interaction=errorstopmode", "--halt-on-error", "--no-shell-escape", "./worker.tex"};
+    if (config.recordInputs) arguments.prepend("--recorder");
+    start(*slot.process, config.enginePath, arguments);
     pid.store(slot.process->processId());
     waitMarker("STEMTEX_LUA_READY");
     waitMarker("STEMTEX_LUA_WAIT:1");
@@ -621,23 +666,25 @@ struct LuaBackend::Impl {
 
   void prepare(const std::function<void(const QString &)> &progress) {
     auto report = [&](const QString &message) { checkCancelled(); if (progress) progress(message); };
-    report("Checking LuaHBTeX and the full TeX Live installation");
+    report("Checking LuaHBTeX and its package tree");
     if (!job) fail("Cannot create the LuaHBTeX child-process lifetime job.");
-    if (config.enginePath.isEmpty()) config.enginePath = pathIn(config.repoRoot, "build/luahbtex-mingw/bin/luahbtex.exe");
-    config.enginePath = QFileInfo(config.enginePath).absoluteFilePath();
-    config.texmfRoot = QDir(config.texmfRoot).absolutePath();
-    config.profileRoot = QDir(config.profileRoot).absolutePath();
     if (config.runtimeRoot.isEmpty()) config.runtimeRoot = pathIn(config.repoRoot, "staging/runtime");
     config.runtimeRoot = QDir(config.runtimeRoot).absolutePath();
+    if (config.enginePath.isEmpty()) {
+      config.enginePath = pathIn(config.runtimeRoot, "bin/luatex/luahbtex.exe");
+      if (!QFileInfo::exists(config.enginePath)) config.enginePath = pathIn(config.repoRoot, "build/luahbtex-mingw/bin/luahbtex.exe");
+    }
+    config.enginePath = QFileInfo(config.enginePath).absoluteFilePath();
+    config.texmfRoot = findLuaTexmfRoot(config.runtimeRoot, config.texmfRoot);
+    config.profileRoot = QDir(config.profileRoot).absolutePath();
     if (!QFileInfo::exists(config.enginePath))
       fail(QString("Patched LuaHBTeX is missing: %1\nBuild it with scripts/build-luahbtex-mingw.ps1.").arg(config.enginePath));
     if (!QFileInfo::exists(config.enginePath + ".stemtex-checkpoint"))
       fail("The LuaHBTeX checkpoint ownership map is missing. Rebuild the engine and keep its .stemtex-checkpoint file beside it.");
     const QString bin = pathIn(config.texmfRoot, "bin/windows");
-    for (const QString &relative : {QString("texmf-dist/web2c/texmf.cnf"),
-                                    QString("texmf-dist/tex/latex/tex-ini-files/lualatex.ini")})
+    for (const char *relative : luaLatexTreeFiles)
       if (!QFileInfo::exists(pathIn(config.texmfRoot, relative)))
-        fail(QString("LuaHBTeX needs a full TeX Live installation. Missing %1").arg(pathIn(config.texmfRoot, relative)));
+        fail(QString("The selected LuaLaTeX package tree is missing %1.").arg(pathIn(config.texmfRoot, relative)));
     for (const QString &name : {QString("dvipdfmxdaemon.dll"), QString("dvisvgmdaemon.dll")}) {
       const QString path = pathIn(config.runtimeRoot, "bin/windows/" + name);
       if (!QFileInfo::exists(path)) fail("Resident converter is missing: " + path);
@@ -659,6 +706,8 @@ struct LuaBackend::Impl {
     QCryptographicHash hash(QCryptographicHash::Sha256);
     hash.addData(readFile(config.enginePath));
     hash.addData(config.texmfRoot.toUtf8());
+    const QString treeId = pathIn(config.texmfRoot, "tree-id.txt");
+    if (QFileInfo(treeId).isFile()) hash.addData(readFile(treeId));
     for (const QString &relative : {QString("texmf-dist/tex/latex/base/latex.ltx"), QString("texmf-dist/tex/latex/tex-ini-files/lualatex.ini")}) {
       QFileInfo file(pathIn(config.texmfRoot, relative));
       hash.addData(QByteArray::number(file.size()));
@@ -668,14 +717,21 @@ struct LuaBackend::Impl {
     if (!QDir().mkpath(cacheRoot)) fail("Cannot create the LuaHBTeX format cache directory.");
     formatFile = pathIn(cacheRoot, "lualatex.fmt");
     environment = QProcessEnvironment::systemEnvironment();
+    const auto bundledOverrides = bundledTreeEnvironment(config, cacheRoot);
+    for (auto it = bundledOverrides.cbegin(); it != bundledOverrides.cend(); ++it) {
+      if (it.value().isNull()) environment.remove(it.key());
+      else environment.insert(it.key(), it.value());
+    }
     environment.insert("TEXMFROOT", config.texmfRoot);
     environment.insert("TEXMFCNF", pathIn(config.texmfRoot, "texmf-dist/web2c"));
     environment.insert("TEXMFVAR", pathIn(cacheRoot, "texmf-var"));
     environment.insert("TEXMFCACHE", pathIn(cacheRoot, "texmf-var"));
     QDir().mkpath(pathIn(cacheRoot, "texmf-var"));
     environment.insert("TEXFORMATS", cacheRoot + "//;");
-    environment.insert("TEXINPUTS", config.profileRoot + "//;");
-    environment.insert("PATH", bin + ";" + environment.value("PATH"));
+    if (bundledOverrides.isEmpty()) environment.insert("PATH", bin + ";" + environment.value("PATH"));
+    else environment.insert("PATH", QFileInfo(config.enginePath).absolutePath() + ";" +
+                                    pathIn(config.runtimeRoot, "bin/windows") + ";" +
+                                    pathIn(environment.value("SystemRoot", "C:/Windows"), "System32"));
     environment.insert("max_print_line", "1000");
     report("Preparing a format matched to the patched LuaHBTeX engine");
     QLockFile lock(pathIn(cacheRoot, "format.lock"));
@@ -687,16 +743,17 @@ struct LuaBackend::Impl {
       if (lockTimer.elapsed() > qMax(config.timeoutMs, 180000)) fail("Timed out waiting for another LuaHBTeX format build.");
     }
     if (!QFileInfo::exists(formatFile) || QFileInfo(formatFile).size() == 0) {
-      const QByteArray log = run(config.enginePath,
-          {"--ini", "--interaction=nonstopmode", "--halt-on-error", "--no-shell-escape", "--progname=lualatex",
-           "--jobname=lualatex", "--output-directory=" + sessionRoot, "lualatex.ini"}, sessionRoot, qMax(config.timeoutMs, 180000));
+      QStringList arguments{"--ini", "--interaction=nonstopmode", "--halt-on-error", "--no-shell-escape", "--progname=lualatex",
+                            "--jobname=lualatex", "--output-directory=" + sessionRoot, "lualatex.ini"};
+      if (config.recordInputs) arguments.prepend("--recorder");
+      const QByteArray log = run(config.enginePath, arguments, sessionRoot, qMax(config.timeoutMs, 180000));
       writeFile(pathIn(sessionRoot, "format-build.log"), log);
       writeFile(formatFile, readFile(pathIn(sessionRoot, "lualatex.fmt")));
     }
     lock.unlock();
     report("Starting the resident PDF and SVG converters");
     converters = std::make_unique<HotConverters>();
-    converters->initialize(config, cacheRoot, sessionRoot);
+    converters->initialize(config, cacheRoot, sessionRoot, bundledOverrides);
     report("Loading the LuaHBTeX profile and waiting for the first request");
     activateWorker(false);
     startWorker();

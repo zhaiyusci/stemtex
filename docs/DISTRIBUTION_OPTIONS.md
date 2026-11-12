@@ -31,6 +31,13 @@ StemTeX/
       dvisvgmdaemon.exe
       dvisvgmdaemon.dll
       icu-data/
+    bin/luatex/
+      luahbtex.exe
+      luahbtex.exe.stemtex-checkpoint
+      LuaHBTeX runtime DLLs and build manifest
+    luatex/
+      texmf-dist/
+      tree-id.txt
     bin/sdk/
       stemtex-renderer.dll
       stemtex-profile.dll
@@ -46,21 +53,29 @@ StemTeX/
     refresh-profile-cache.bat
 ```
 
-The Inno Setup package exposes three components:
+Choose XeTeX, LuaTeX (LuaHBTeX), or both on the installer's component page.
+XeTeX is selected by default along with the GUI and its small bundled TeX tree.
+The bundled data option installs XeTeX's tree under `runtime/texmf-dist`
+when XeTeX is selected and LuaTeX's tree under `runtime/luatex` when LuaTeX
+is selected. The LuaTeX tree is included in the LuaTeX and dual-engine presets.
+It supplies the files used to build the LuaLaTeX format, the Lua font loader,
+and the macro packages and fonts for the default Latin Modern profile.
+When both engines are installed the GUI starts with XeTeX, and the
+engine selector lets you switch to LuaTeX.
 
-- `runtime`: required daemon binaries, renderer, SDK, helpers, and optionally a
-  prebuilt format for faster first startup;
-- `gui`: optional GUI and profile source;
-- `texmf`: optional bundled package/font tree.
-
-The full installation selects all three. The compact installation contains the
-runtime only and therefore needs a host-provided profile and a compatible TeX
-Live package/font tree.
+| Installer component | Contents |
+| --- | --- |
+| `runtime` | Shared PDF/SVG converters, native libraries and SDK. |
+| `xetex` | XeTeX daemon and worker host, ICU data, format and cache helpers. |
+| `luatex` | Patched LuaHBTeX, matching checkpoint file and runtime DLLs. |
+| `gui` | Renderer GUI, Profile Creator and the bundled profile. |
+| `texmf` | Bundled macro and font data for each selected engine. Omit when supplying an external TeX tree. |
 
 ## Runtime Ownership
 
-StemTeX always runs the patched binaries from its own runtime. The GUI and
-third-party hosts both call the same `stemtex-renderer.dll`. The runtime does
+StemTeX runs the patched binaries from its own runtime. For XeTeX the GUI and
+third-party hosts both call the same `stemtex-renderer.dll`. LuaHBTeX rendering
+is available through the GUI. The XeTeX runtime does
 not search for or switch to a user's `xelatex.exe` or stock `xelatex.fmt`.
 
 A prebuilt `xelatexdaemon.fmt` in the runtime is an optional startup

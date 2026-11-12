@@ -1,5 +1,6 @@
 #include "stemtex_renderer.h"
 #include "luatex_backend.h"
+#include "installed_engines.h"
 
 #include <QApplication>
 #include <QByteArray>
@@ -103,23 +104,7 @@ QString defaultTexmfRoot(const QString &runtimeRoot) {
   return normalizeTexmfRoot(runtimeRoot);
 }
 
-bool hasLuaLatexTree(const QString &root) {
-  return QFileInfo::exists(QDir(root).filePath("texmf-dist/tex/latex/tex-ini-files/lualatex.ini")) &&
-         QFileInfo::exists(QDir(root).filePath("texmf-dist/web2c/texmf.cnf"));
-}
-
-QString findLuaTexmfRoot(const QString &preferred) {
-  if (hasLuaLatexTree(preferred)) return preferred;
-  QStringList candidates{qEnvironmentVariable("TEXMFROOT")};
-  const QString lualatex = QStandardPaths::findExecutable("lualatex.exe");
-  if (!lualatex.isEmpty()) candidates << QDir(QFileInfo(lualatex).absolutePath()).filePath("../..");
-  QDir texlive("C:/texlive");
-  for (const QFileInfo &entry : texlive.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name | QDir::Reversed))
-    candidates << entry.absoluteFilePath();
-  for (const QString &candidate : candidates)
-    if (!candidate.isEmpty() && hasLuaLatexTree(candidate)) return normalizeTexmfRoot(candidate);
-  return preferred;
-}
+using stemtex::findLuaTexmfRoot;
 
 QString findLuaEngine(const QString &repoRoot, const QString &runtimeRoot, const QString &explicitPath) {
   if (!explicitPath.isEmpty()) return QFileInfo(explicitPath).absoluteFilePath();
@@ -562,18 +547,48 @@ int runSmoke(const QString &repoRoot, const QString &runtimeRoot, const QString 
   return pdfError == QPdfDocument::Error::None && pages > 0 && !svgPreview.image.isNull() ? 0 : 1;
 }
 
+int runLuaSmoke(const stemtex::LuaBackendConfig &config) {
+  qInfo().noquote() << "LuaHBTeX texmfRoot =" << config.texmfRoot;
+  stemtex::LuaBackend backend(config);
+  QString error;
+  if (!backend.initialize({}, &error)) {
+    qCritical().noquote() << error;
+    return 1;
+  }
+  for (const bool svg : {false, true}) {
+    const auto result = backend.render(defaultSnippet().toUtf8(), 360.5, kDefaultFontSizePt, svg);
+    if (!result.ok) {
+      qCritical().noquote() << result.error;
+      return 1;
+    }
+    const auto preview = svg ? renderSvgPreview(result.outputPath, 300, 8.0)
+                             : renderPdfPreview(result.outputPath, 300, 8.0);
+    if (preview.image.isNull()) {
+      qCritical().noquote() << "Cannot preview" << result.outputPath;
+      return 1;
+    }
+    qInfo().noquote() << result.summary;
+  }
+  return 0;
+}
+
 }  // namespace
 
 class MainWindow : public QMainWindow {
  public:
-  MainWindow(QString repoRoot, QString runtimeRoot, QString texmfRoot,
-             bool startWithLua = false, QString luaEnginePath = QString(), QString initialProfileRoot = QString())
+  MainWindow(QString repoRoot, QString runtimeRoot, QString texmfRoot, stemtex::InstalledEngines engines,
+             bool startWithLua, QString luaEnginePath, QString initialProfileRoot)
       : repo_root_(std::move(repoRoot)),
         runtime_root_(normalizeRuntimeRoot(runtimeRoot)),
         texmf_root_(texmfRoot.isEmpty() ? defaultTexmfRoot(runtime_root_) : normalizeTexmfRoot(texmfRoot)),
-        lua_engine_path_(findLuaEngine(repo_root_, runtime_root_, luaEnginePath)) {
+        lua_engine_path_(std::move(luaEnginePath)) {
     xetex_texmf_root_ = texmf_root_;
-    if (startWithLua) texmf_root_ = findLuaTexmfRoot(texmf_root_);
+    if (engines.luahbtex) {
+      const bool useProvidedTree = startWithLua || stemtex::hasLuaLatexTree(texmfRoot);
+      lua_texmf_root_ = findLuaTexmfRoot(runtime_root_, useProvidedTree ? texmfRoot : QString());
+    }
+    if (QDir(xetex_texmf_root_) == QDir(stemtex::bundledLuaTexmfRoot(runtime_root_))) xetex_texmf_root_ = runtime_root_;
+    if (startWithLua) texmf_root_ = lua_texmf_root_;
     setWindowTitle("StemTeX Renderer GUI");
     resize(1180, 760);
 
@@ -591,10 +606,9 @@ class MainWindow : public QMainWindow {
     auto *actionRow = new QHBoxLayout();
     actionRow->setSpacing(8);
     engineCombo_ = new QComboBox(central);
-    engineCombo_->addItem("XeTeX", false);
-    engineCombo_->addItem(QStringLiteral("LuaHBTeX（实验）"), true);
-    engineCombo_->setCurrentIndex(startWithLua ? 1 : 0);
-    engineCombo_->setToolTip(QStringLiteral("LuaHBTeX 使用逐页 DVI 输出；TeX 错误后重启进程恢复。"));
+    if (engines.xetex) engineCombo_->addItem("XeTeX", false);
+    if (engines.luahbtex) engineCombo_->addItem(QStringLiteral("LuaHBTeX（实验）"), true);
+    engineCombo_->setCurrentIndex(engineCombo_->findData(startWithLua));
     auto *widthLabel = new QLabel("版心宽度", central);
     widthSlider_ = new QSlider(Qt::Horizontal, central);
     widthSlider_->setRange(widthToSliderValue(30.0), widthToSliderValue(450.0));
@@ -1344,7 +1358,7 @@ class MainWindow : public QMainWindow {
     if (usingLua()) {
       xetex_texmf_root_ = texmf_root_;
       xetex_profile_root_ = profileCombo_->currentData().toString();
-      texmf_root_ = lua_texmf_root_.isEmpty() ? findLuaTexmfRoot(texmf_root_) : lua_texmf_root_;
+      texmf_root_ = lua_texmf_root_;
     } else {
       lua_texmf_root_ = texmf_root_;
       lua_profile_root_ = selectedProfileRoot();
@@ -1516,7 +1530,7 @@ class MainWindow : public QMainWindow {
         if (!initialized) {
           pendingStartupRender_ = false;
           updateEngineStatus(false, 0, 0, QStringLiteral("LuaHBTeX 启动失败"));
-          details_->setPlainText(error + QStringLiteral("\n实验模式需要完整 TeX Live；可通过 TeXLive... 选择目录。"));
+          details_->setPlainText(error);
           return;
         }
         refreshEngineStatus();
@@ -1897,22 +1911,30 @@ int main(int argc, char **argv) {
     return value;
   };
   const QString engine = takeOption("--engine").toLower();
-  const QString luaEnginePath = takeOption("--luatex-engine");
-  const bool useLua = engine == "luatex" || engine == "luahbtex";
-  if (!engine.isEmpty() && engine != "xetex" && !useLua)
+  const QString explicitLuaPath = takeOption("--luatex-engine");
+  const QString repoRoot = args.size() > 1 ? args.at(1) : appResourceRoot();
+  const QString runtimeRoot = args.size() > 2 ? args.at(2) : defaultRuntimeRoot();
+  const QString luaEnginePath = findLuaEngine(repoRoot, runtimeRoot, explicitLuaPath);
+  const auto engines = stemtex::installedEngines(runtimeRoot, luaEnginePath);
+  const bool useLua = engine.isEmpty() ? !engines.xetex && engines.luahbtex
+                                       : engine == "luatex" || engine == "luahbtex";
+  if (!engine.isEmpty() && engine != "xetex" && !useLua) {
     optionError = "--engine expects xetex or luatex";
-  if (smoke && useLua) optionError = "--smoke exercises XeTeX. Use stemtex-luatex-gui-smoke for LuaHBTeX.";
+  } else if (optionError.isEmpty() && !(useLua ? engines.luahbtex : engines.xetex)) {
+    if (engine.isEmpty()) optionError = QString("No StemTeX engine installed in %1").arg(runtimeRoot);
+    else optionError = QString("Cannot find %1: %2").arg(useLua ? "LuaHBTeX" : "XeTeX",
+        useLua ? luaEnginePath : QDir(runtimeRoot).filePath("bin/windows/xetexdaemon.exe"));
+  }
   if (!optionError.isEmpty()) {
-    QMessageBox::critical(nullptr, "StemTeX", optionError);
+    if (smoke) qCritical().noquote() << optionError;
+    else QMessageBox::critical(nullptr, "StemTeX", optionError);
     return 2;
   }
-  QString repoRoot = args.size() > 1 ? args.at(1) : appResourceRoot();
-  QString runtimeRoot = args.size() > 2 ? args.at(2) : defaultRuntimeRoot();
   configureRendererDllSearch(runtimeRoot);
   QString profileError;
   QVector<ProfileEntry> profiles = profileRoots(repoRoot, &profileError, useLua);
   QString profileRoot = args.size() > 3 ? args.at(3) : (profiles.isEmpty() ? QString() : profiles.first().path);
-  QString texmfRoot = args.size() > 4 ? args.at(4) : defaultTexmfRoot(runtimeRoot);
+  const QString explicitTexmfRoot = args.size() > 4 ? args.at(4) : QString();
   if (args.size() > 3 && !profileSupportsEngine(profileRoot, repoRoot, useLua)) {
     const QString message = QString("Profile is not compatible with %1: %2")
                                 .arg(useLua ? "LuaHBTeX" : "XeTeX", profileRoot);
@@ -1920,8 +1942,20 @@ int main(int argc, char **argv) {
     else QMessageBox::critical(nullptr, "StemTeX", message);
     return 2;
   }
-  if (smoke) return runSmoke(repoRoot, runtimeRoot, profileRoot, texmfRoot);
-  MainWindow w(repoRoot, runtimeRoot, texmfRoot, useLua, luaEnginePath, profileRoot);
+  if (smoke && useLua) {
+    stemtex::LuaBackendConfig config;
+    config.repoRoot = repoRoot;
+    config.runtimeRoot = runtimeRoot;
+    config.texmfRoot = findLuaTexmfRoot(runtimeRoot, explicitTexmfRoot);
+    config.enginePath = luaEnginePath;
+    config.profileRoot = profileRoot;
+    config.stateRoot = qEnvironmentVariable("STEMTEX_LUA_SMOKE_STATE");
+    config.recordInputs = true;
+    return runLuaSmoke(config);
+  }
+  if (smoke) return runSmoke(repoRoot, runtimeRoot, profileRoot,
+                             explicitTexmfRoot.isEmpty() ? defaultTexmfRoot(runtimeRoot) : explicitTexmfRoot);
+  MainWindow w(repoRoot, runtimeRoot, explicitTexmfRoot, engines, useLua, luaEnginePath, profileRoot);
   w.show();
   return app.exec();
 }

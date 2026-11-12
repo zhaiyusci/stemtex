@@ -1,4 +1,5 @@
 #include "stemtex_profile.h"
+#include "../gui/installed_engines.h"
 #include "i18n.h"
 #include "catalog-translations.h"
 
@@ -61,23 +62,8 @@ QString defaultProfilesRoot() {
   return cleanAbsolutePath(QDir(data).filePath("StemTeX/profiles"));
 }
 
-bool hasLuaLatexTree(const QString &root) {
-  return QFileInfo::exists(QDir(root).filePath("texmf-dist/tex/latex/tex-ini-files/lualatex.ini")) &&
-         QFileInfo::exists(QDir(root).filePath("texmf-dist/web2c/texmf.cnf"));
-}
-
-QString findLuaTexmfRoot(const QString &preferred) {
-  if (hasLuaLatexTree(preferred)) return preferred;
-  QStringList candidates{qEnvironmentVariable("TEXMFROOT")};
-  const QString lualatex = QStandardPaths::findExecutable("lualatex.exe");
-  if (!lualatex.isEmpty()) candidates << QDir(QFileInfo(lualatex).absolutePath()).filePath("../..");
-  QDir texlive("C:/texlive");
-  for (const QFileInfo &entry : texlive.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name | QDir::Reversed))
-    candidates << entry.absoluteFilePath();
-  for (const QString &candidate : candidates)
-    if (!candidate.isEmpty() && hasLuaLatexTree(candidate)) return cleanAbsolutePath(candidate);
-  return preferred;
-}
+using stemtex::findLuaTexmfRoot;
+using stemtex::hasLuaLatexTree;
 
 void configureSdkDllSearch(const QString &runtimeRoot) {
   QString appDir = QCoreApplication::applicationDirPath();
@@ -108,12 +94,16 @@ class WaitCursor {
 
 class CreatorWindow : public QMainWindow {
  public:
-  CreatorWindow(QString texmfRoot, QString profilesRoot,
-                StemTeXProfileEngine engine = STEMTEX_PROFILE_ENGINE_XETEX, bool smokeMode = false)
-      : texmf_root_(std::move(texmfRoot)),
-        profiles_root_(std::move(profilesRoot)), engine_(engine), smoke_mode_(smokeMode) {
-    xetex_texmf_root_ = texmf_root_;
-    if (engine_ == STEMTEX_PROFILE_ENGINE_LUAHBTEX) texmf_root_ = findLuaTexmfRoot(texmf_root_);
+  CreatorWindow(QString runtimeRoot, QString texmfRoot, QString profilesRoot, stemtex::InstalledEngines engines,
+                StemTeXProfileEngine engine, bool smokeMode)
+      : profiles_root_(std::move(profilesRoot)), engine_(engine), smoke_mode_(smokeMode) {
+    xetex_texmf_root_ = texmfRoot.isEmpty() ? runtimeRoot : texmfRoot;
+    if (engines.luahbtex) {
+      const bool useProvidedTree = engine_ == STEMTEX_PROFILE_ENGINE_LUAHBTEX || hasLuaLatexTree(texmfRoot);
+      lua_texmf_root_ = findLuaTexmfRoot(runtimeRoot, useProvidedTree ? texmfRoot : QString());
+    }
+    if (QDir(xetex_texmf_root_) == QDir(stemtex::bundledLuaTexmfRoot(runtimeRoot))) xetex_texmf_root_ = runtimeRoot;
+    texmf_root_ = engine_ == STEMTEX_PROFILE_ENGINE_LUAHBTEX ? lua_texmf_root_ : xetex_texmf_root_;
     setWindowTitle(QCoreApplication::translate("ProfileCreator", "StemTeX Profile Creator"));
     resize(980, 720);
 
@@ -137,10 +127,10 @@ class CreatorWindow : public QMainWindow {
     auto *environmentBox = new QGroupBox(QCoreApplication::translate("ProfileCreator", "Environment"), central);
     auto *environmentForm = new QFormLayout(environmentBox);
     engineCombo_ = new QComboBox(environmentBox);
-    engineCombo_->addItem(QStringLiteral("XeTeX"), STEMTEX_PROFILE_ENGINE_XETEX);
-    engineCombo_->addItem(QCoreApplication::translate("ProfileCreator", "LuaHBTeX (experimental)"), STEMTEX_PROFILE_ENGINE_LUAHBTEX);
-    engineCombo_->setCurrentIndex(engine_ == STEMTEX_PROFILE_ENGINE_LUAHBTEX ? 1 : 0);
-    engineCombo_->setToolTip(QCoreApplication::translate("ProfileCreator", "The engine determines available font and package recipes. LuaHBTeX requires a full TeX Live tree."));
+    if (engines.xetex) engineCombo_->addItem(QStringLiteral("XeTeX"), STEMTEX_PROFILE_ENGINE_XETEX);
+    if (engines.luahbtex) engineCombo_->addItem(QCoreApplication::translate("ProfileCreator", "LuaHBTeX (experimental)"), STEMTEX_PROFILE_ENGINE_LUAHBTEX);
+    engineCombo_->setCurrentIndex(engineCombo_->findData(engine_));
+    engineCombo_->setToolTip(QCoreApplication::translate("ProfileCreator", "The engine determines available font and package recipes."));
     environmentForm->addRow(QCoreApplication::translate("ProfileCreator", "Engine"), engineCombo_);
     auto *texmfRow = new QWidget(environmentBox);
     auto *texmfLayout = new QHBoxLayout(texmfRow);
@@ -357,7 +347,7 @@ class CreatorWindow : public QMainWindow {
     else xetex_texmf_root_ = texmf_root_;
     engine_ = static_cast<StemTeXProfileEngine>(engineCombo_->currentData().toInt());
     if (engine_ == STEMTEX_PROFILE_ENGINE_LUAHBTEX)
-      texmf_root_ = lua_texmf_root_.isEmpty() ? findLuaTexmfRoot(texmf_root_) : lua_texmf_root_;
+      texmf_root_ = lua_texmf_root_;
     else texmf_root_ = xetex_texmf_root_;
     texmfEdit_->setText(texmf_root_);
     reloadCatalog(text, math, cjk);
@@ -630,7 +620,7 @@ class CreatorWindow : public QMainWindow {
 
   void reloadCatalog(const QString &wantedText, const QString &wantedMath, const QString &wantedCjk) {
     if (engine_ == STEMTEX_PROFILE_ENGINE_LUAHBTEX && !hasLuaLatexTree(texmf_root_)) {
-      clearCatalogs(QCoreApplication::translate("ProfileCreator", "LuaHBTeX needs a full TeX Live tree with lualatex.ini. Choose TeX Live to continue."));
+      clearCatalogs(QCoreApplication::translate("ProfileCreator", "The selected tree is missing LuaLaTeX packages. Choose a TeX Live tree containing LuaLaTeX and luaotfload."));
       return;
     }
     QByteArray texmf = texmf_root_.toUtf8();
@@ -802,7 +792,11 @@ int main(int argc, char **argv) {
   // Translators must outlive the window and be installed before creating widgets.
   CreatorI18n::Translations translations;
   if (!translations.initialize(args)) return 2;
-  QString engineName = QStringLiteral("xetex");
+  const QString runtimeRoot = argumentValue(args, "--runtime", defaultRuntimeRoot());
+  auto engines = stemtex::installedEngines(runtimeRoot);
+  // The standalone profile SDK can generate recipes without a rendering runtime.
+  if (!engines.xetex && !engines.luahbtex) engines = {true, true};
+  QString engineName = engines.xetex ? QStringLiteral("xetex") : QStringLiteral("luahbtex");
   for (int i = 1; i < args.size(); ++i) {
     if (args.at(i) == QStringLiteral("--engine")) {
       if (++i >= args.size()) {
@@ -820,14 +814,16 @@ int main(int argc, char **argv) {
     return 2;
   }
   const auto engine = lua ? STEMTEX_PROFILE_ENGINE_LUAHBTEX : STEMTEX_PROFILE_ENGINE_XETEX;
+  // An explicit target also permits preparing a profile for another installation.
+  if (lua) engines.luahbtex = true;
+  else engines.xetex = true;
   if (args.contains("--smoke-i18n")) return translations.smokeCheck() ? 0 : 3;
   bool smoke = args.contains("--smoke");
   if (smoke && !translations.smokeCheck()) return 3;
-  QString runtimeRoot = argumentValue(args, "--runtime", defaultRuntimeRoot());
-  QString texmfRoot = argumentValue(args, "--texmf", runtimeRoot);
+  const QString texmfRoot = argumentValue(args, "--texmf", {});
   QString profilesRoot = argumentValue(args, "--profiles", defaultProfilesRoot());
   configureSdkDllSearch(runtimeRoot);
-  CreatorWindow window(texmfRoot, profilesRoot, engine, smoke);
+  CreatorWindow window(runtimeRoot, texmfRoot, profilesRoot, engines, engine, smoke);
   if (smoke) return window.smokeCheck() ? 0 : 4;
   window.show();
   return app.exec();
