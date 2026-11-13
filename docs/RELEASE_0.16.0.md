@@ -1,4 +1,4 @@
-# StemTeX 1.0.0
+# StemTeX 0.16.0
 
 The Windows installer now offers XeTeX, LuaHBTeX, or both. The default preset
 continues to install XeTeX with the GUI and bundled macros and fonts.
